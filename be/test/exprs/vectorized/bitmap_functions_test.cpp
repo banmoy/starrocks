@@ -5,12 +5,10 @@
 #include <gtest/gtest.h>
 
 #include "column/array_column.h"
-<<<<<<< HEAD
-=======
 #include "column/column_helper.h"
 #include "column/column_viewer.h"
 #include "column/vectorized_fwd.h"
->>>>>>> 3eb7f4a0d ([Bugfix] Fix function signature error in array_to_bitmap (#7404))
+
 #include "exprs/base64.h"
 #include "types/bitmap_value.h"
 
