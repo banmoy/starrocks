@@ -6,6 +6,7 @@
 #include <memory>
 #include <unordered_set>
 
+#include <gutil/strings/substitute.h>
 #include "gen_cpp/AgentService_types.h"
 
 namespace starrocks {
@@ -42,6 +43,11 @@ struct BinlogConfig {
         binlog_config_pb->set_binlog_enable(binlog_enable);
         binlog_config_pb->set_binlog_ttl_second(binlog_ttl_second);
         binlog_config_pb->set_binlog_max_size(binlog_max_size);
+    }
+
+    std::string to_string() {
+        return strings::Substitute("BinlogConfig={version=$0, binlog_enable=$1, binlog_ttl_second=$2, binlog_max_size=$3}",
+                                   version, binlog_enable, binlog_ttl_second, binlog_max_size);
     }
 };
 

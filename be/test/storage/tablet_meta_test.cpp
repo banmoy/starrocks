@@ -233,8 +233,8 @@ TEST(TabletMetaTest, test_config_binlog) {
     ASSERT_EQ(984, binlog_config_ptr->binlog_max_size);
 
     // test lower version would not override the configuration
-    BinlogConfigPB binlog_config1;
-    binlog_config.update(2, true, 323, 475);
+    BinlogConfig binlog_config1;
+    binlog_config1.update(2, true, 323, 475);
     tablet_meta->set_binlog_config(binlog_config1);
     ASSERT_EQ(3, binlog_config_ptr->version);
     ASSERT_TRUE(binlog_config_ptr->binlog_enable);

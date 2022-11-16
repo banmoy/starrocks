@@ -183,7 +183,18 @@ public:
 
     std::shared_ptr<BinlogConfig> get_binlog_config() { return _binlog_config; }
 
-    void set_binlog_config(const BinlogConfig& binlog_config);
+    void set_binlog_config(const BinlogConfig& binlog_config) {
+        if (_binlog_config == nullptr) {
+            _binlog_config = std::make_shared<BinlogConfig>();
+        } else if (_binlog_config->version > binlog_config.version) {
+            LOG(WARNING) << "skip to update binlog config, "
+                         << "current version is " << _binlog_config->version << ", update version is "
+                         << binlog_config.version;
+            return;
+        }
+        _binlog_config->update(binlog_config);
+        LOG(INFO) << "Set binlog config to " << _binlog_config->to_string();
+    }
 
 private:
     int64_t _mem_usage() const { return sizeof(TabletMeta); }
@@ -323,18 +334,6 @@ inline const std::vector<RowsetMetaSharedPtr>& TabletMeta::all_inc_rs_metas() co
 
 inline const std::vector<RowsetMetaSharedPtr>& TabletMeta::all_stale_rs_metas() const {
     return _stale_rs_metas;
-}
-
-void TabletMeta::set_binlog_config(const BinlogConfig& binlog_config) {
-    if (_binlog_config == nullptr) {
-        _binlog_config = std::make_shared<BinlogConfig>();
-    } else if (_binlog_config->version > binlog_config.version) {
-        LOG(WARNING) << "skip to update binlog config, "
-                     << "current version is " << _binlog_config->version << ", update version is "
-                     << binlog_config.version;
-        return;
-    }
-    _binlog_config->update(binlog_config);
 }
 
 // Only for unit test now.
