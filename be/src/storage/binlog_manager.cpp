@@ -20,19 +20,6 @@
 
 namespace starrocks {
 
-Status BinlogManager::create_and_init(Tablet& tablet, std::shared_ptr<BinlogManager>* binlog_manager) {
-    *binlog_manager =
-            std::make_shared<BinlogManager>(tablet.schema_hash_path(), config::binlog_file_max_size,
-                                            config::binlog_page_max_size, tablet.tablet_schema().compression_type());
-    Status st = (*binlog_manager)->init(tablet);
-    if (st.ok()) {
-        LOG(INFO) << "Create and init binlog for tablet " << tablet.full_name();
-    } else {
-        LOG(WARNING) << "Failed to init binlog for tablet " << tablet.full_name() << ", " << st;
-    }
-    return st;
-}
-
 BinlogManager::BinlogManager(std::string path, int64_t max_file_size, int32_t max_page_size,
                              CompressionTypePB compression_type)
         : _path(std::move(path)),
@@ -48,11 +35,17 @@ BinlogManager::~BinlogManager() {
     }
 }
 
-Status BinlogManager::init(Tablet& tablet) {
+Status BinlogManager::init() {
     // TODO init binlog manager
-    // 1. restore binlog file meta
-    // 2. initialize metas about rowset
-    return Status::OK();
+    // 1. load meta
+    // 2. add _rowsets
+}
+
+void BinlogManager::load_rowset(const RowsetSharedPtr& rowset) {
+    std::unique_lock lock(_meta_lock);
+    if (is_rowset_used(rowset->rowset_id())) {
+        _rowsets.emplace(rowset->rowset_id(), rowset);
+    }
 }
 
 Status BinlogManager::add_insert_rowset(RowsetSharedPtr rowset) {
@@ -192,6 +185,7 @@ Status BinlogManager::add_insert_rowset(RowsetSharedPtr rowset) {
             }
             // reuse last writer
             _active_binlog_writer = pending_commit_writers.back();
+            delete_excess_binlog();
             // finish all of work
             return Status::OK();
         }
@@ -234,17 +228,25 @@ Status BinlogManager::add_insert_rowset(RowsetSharedPtr rowset) {
                                              rowset->rowset_id().to_string(), rowset->start_version()));
 }
 
-bool BinlogManager::is_rowset_used(const RowsetId& rowset_id) {
-    std::lock_guard lock(_meta_lock);
-    return _rowset_count_map.count(rowset_id) >= 1;
-}
-
 void BinlogManager::delete_expired_binlog() {
     // TODO remove expired binlog
     // 1. check expired binlog file and referenced rowset
     // 2. if binlog file and rowset is used by some readers, skip to delete
     // 3. delete binlog files
     // 4. if rowset use_count == 1, delete rowset, otherwise just remove from meta
+}
+
+void BinlogManager::delete_excess_binlog() {
+    // TODO delete some binlog oversized
+}
+
+void BinlogManager::delete_all_binlog() {
+    // TODO delete all of data
+}
+
+bool BinlogManager::is_rowset_used(const RowsetId& rowset_id) {
+    std::shared_lock lock(_meta_lock);
+    return _rowset_count_map.count(rowset_id) >= 1;
 }
 
 StatusOr<BinlogFileMetaPBSharedPtr> BinlogManager::find_binlog_file(int64_t version, int64_t seq_id) {
@@ -318,8 +320,7 @@ Status BinlogManager::_delete_binlog_files(std::vector<std::string>& file_paths)
 
 void BinlogManager::_update_metas_after_commit(RowsetSharedPtr new_rowset,
                                                std::vector<BinlogFileMetaPBSharedPtr> new_file_metas) {
-    std::shared_lock lock(_meta_lock);
-
+    std::unique_lock lock(_meta_lock);
     RowsetId reused_rowset_id;
     // remove the last file meta that is updated
     if (!_binlog_file_metas.empty()) {

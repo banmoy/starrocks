@@ -354,7 +354,7 @@ Status DataDir::load() {
             }
         } else if (rowset_meta->rowset_state() == RowsetStatePB::VISIBLE &&
                    rowset_meta->tablet_uid() == tablet->tablet_uid()) {
-            Status publish_status = tablet->add_rowset(rowset, false);
+            Status publish_status = tablet->load_rowset(rowset);
             if (!publish_status.ok() && !publish_status.is_already_exist()) {
                 LOG(WARNING) << "Fail to add visible rowset=" << rowset->rowset_id()
                              << " to tablet=" << rowset_meta->tablet_id() << " txn id=" << rowset_meta->txn_id()

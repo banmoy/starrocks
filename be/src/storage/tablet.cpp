@@ -138,7 +138,15 @@ Status Tablet::_init_once_action() {
         _inc_rs_version_map[version] = std::move(rowset);
     }
 
-    return BinlogManager::create_and_init(*this, &_binlog_manager);
+    _binlog_manager = std::make_shared<BinlogManager>(schema_hash_path(), config::binlog_file_max_size,
+                                                      config::binlog_page_max_size, tablet_schema().compression_type());
+    Status st = _binlog_manager->init();
+    if (st.ok()) {
+        LOG(INFO) << "Create and init binlog for tablet " << full_name();
+    } else {
+        LOG(WARNING) << "Failed to init binlog for tablet " << full_name() << ", " << st;
+    }
+    return st;
 }
 
 Status Tablet::init() {
@@ -202,13 +210,9 @@ Status Tablet::revise_tablet_meta(const std::vector<RowsetMetaSharedPtr>& rowset
         StorageEngine::instance()->add_unused_rowset(it->second);
         _rs_version_map.erase(it);
     }
-    for (auto& [v, rowset] : _inc_rs_version_map) {
-        StorageEngine::instance()->add_unused_rowset(rowset);
-    }
     for (auto& [v, rowset] : _stale_rs_version_map) {
         StorageEngine::instance()->add_unused_rowset(rowset);
     }
-    _inc_rs_version_map.clear();
     _stale_rs_version_map.clear();
 
     for (auto& rs_meta : rowsets_to_clone) {
@@ -233,6 +237,30 @@ Status Tablet::revise_tablet_meta(const std::vector<RowsetMetaSharedPtr>& rowset
     LOG(INFO) << "finish to clone data to tablet. status=" << st << ", "
               << "table=" << full_name() << ", "
               << "rowsets_to_clone=" << rowsets_to_clone.size();
+    return st;
+}
+
+Status Tablet::load_rowset(const RowsetSharedPtr& rowset) {
+    Status st = add_rowset(rowset, false);
+    std::unique_lock wrlock(_meta_lock);
+    // if binlog use this rowset, add it to the _inc_rs_version_map
+    if (_binlog_manager->is_rowset_used(rowset->rowset_id())) {
+        const auto& rs = _inc_rs_version_map.find(rowset->version());
+        if (rs != _inc_rs_version_map.end()) {
+            if (rowset->rowset_id() != rs->second->rowset_id()) {
+                // TODO this maybe should not happen, just ignore it currently. Binlog reader should return
+                // error if can't find the rowset
+                LOG(WARNING) << "Find two incremental rowsets with the same version but different rowset ids. "
+                             << "The version is " << rowset->version() << ". The rowset ids are " << rowset->rowset_id()
+                             << " and " << rs->second->rowset_id();
+            }
+        } else {
+            _tablet_meta->add_inc_rs_meta(rowset->rowset_meta());
+            _inc_rs_version_map[rowset->version()] = rowset;
+        }
+        _binlog_manager->load_rowset(rowset);
+    }
+
     return st;
 }
 
@@ -431,35 +459,75 @@ void Tablet::_delete_stale_rowset_by_version(const Version& version) {
 }
 
 void Tablet::delete_expired_inc_rowsets() {
+    // binlog only read data from incremental rowsets, we reuse the daemon to check
+    // binlog expiration. If some binlog is discarded, the related inc rowsets will
+    // not be used, and they can be deleted in the following steps
+    _binlog_manager->delete_expired_binlog();
     int64_t now = UnixSeconds();
     std::vector<Version> expired_versions;
-    std::unique_lock wrlock(_meta_lock);
-    for (auto& rs_meta : _tablet_meta->all_inc_rs_metas()) {
-        int64_t diff = now - rs_meta->creation_time();
-        if (diff >= config::inc_rowset_expired_sec) {
-            Version version(rs_meta->version());
-            expired_versions.emplace_back(version);
-            VLOG(3) << "find expire incremental rowset. tablet=" << full_name() << ", version=" << version
-                    << ", exist_sec=" << diff;
+    std::vector<RowsetSharedPtr> unused_rowsets;
+    int64_t delete_rowset_time = 0;
+    int64_t old_inc_rs_size = 0;
+    int64_t new_inc_rs_size = 0;
+    MonotonicStopWatch timer;
+    timer.start();
+    {
+        std::unique_lock wrlock(_meta_lock);
+        for (auto& rs_meta : _tablet_meta->all_inc_rs_metas()) {
+            int64_t diff = now - rs_meta->creation_time();
+            if (diff >= config::inc_rowset_expired_sec && !_binlog_manager->is_rowset_used(rs_meta->rowset_id())) {
+                Version version(rs_meta->version());
+                expired_versions.emplace_back(version);
+                VLOG(3) << "find expire incremental rowset. tablet=" << full_name() << ", version=" << version
+                        << ", exist_sec=" << diff;
+            }
         }
+        old_inc_rs_size = _inc_rs_version_map.size();
+
+        if (expired_versions.empty()) {
+            return;
+        }
+
+        for (auto& version : expired_versions) {
+            // if the rowset is not in _rs_version_map and _stale_rs_version_map, mark it unused
+            bool is_unused = false;
+            auto inc_it = _inc_rs_version_map.find(version);
+            if (inc_it != _inc_rs_version_map.end()) {
+                auto rs_it = _rs_version_map.find(version);
+                bool used_by_rs =
+                        rs_it != _rs_version_map.end() && rs_it->second->rowset_id() == inc_it->second->rowset_id();
+
+                auto stale_it = _stale_rs_version_map.find(version);
+                bool used_by_stale = stale_it != _stale_rs_version_map.end() &&
+                                     stale_it->second->rowset_id() == inc_it->second->rowset_id();
+
+                if (!used_by_rs && !used_by_stale) {
+                    unused_rowsets.emplace_back(inc_it->second);
+                    is_unused = true;
+                }
+            }
+
+            _delete_inc_rowset_by_version(version);
+            VLOG(3) << "delete expire incremental data. tablet=" << full_name() << ", version=" << version.first
+                    << ", is_unused=" << is_unused;
+        }
+
+        delete_rowset_time = timer.elapsed_time() / MICROS_PER_SEC;
+        new_inc_rs_size = _inc_rs_version_map.size();
+
+        save_meta();
     }
 
-    if (expired_versions.empty()) {
-        return;
+    for (auto& rowset : unused_rowsets) {
+        StorageEngine::instance()->add_unused_rowset(rowset);
     }
 
-    for (auto& version : expired_versions) {
-        _delete_inc_rowset_by_version(version);
-        VLOG(3) << "delete expire incremental data. tablet=" << full_name() << ", version=" << version.first;
-    }
-
-    save_meta();
+    LOG(INFO) << "delete expired inc rowsets tablet=" << full_name() << " current_size=" << new_inc_rs_size
+              << " old_size=" << old_inc_rs_size << " delete_rowset_time=" << delete_rowset_time
+              << " total_time=" << timer.elapsed_time() / MICROS_PER_SEC;
 }
 
 void Tablet::delete_expired_stale_rowset() {
-    // TODO(lipengfei) delete expired binlog
-    _binlog_manager->delete_expired_binlog();
-
     int64_t now = UnixSeconds();
     // Compute the end time to delete rowsets, when an expired rowset createtime older then this time, it will be deleted.
     int64_t expired_stale_sweep_endtime = now - config::tablet_rowset_stale_sweep_time_sec;
@@ -814,6 +882,9 @@ void Tablet::calculate_cumulative_point() {
 
 // NOTE: only used when create_table, so it is sure that there is no concurrent reader and writer.
 void Tablet::delete_all_files() {
+    if (_binlog_manager != nullptr) {
+        _binlog_manager->delete_all_binlog();
+    }
     // Release resources like memory and disk space.
     // we have to call list_versions first, or else error occurs when
     // removing hash_map item and iterating hash_map concurrently.

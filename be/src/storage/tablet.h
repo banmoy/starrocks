@@ -119,6 +119,22 @@ public:
     size_t next_unique_id() const;
     size_t field_index(const string& field_name) const;
 
+
+    // Loads single rowsets when loading tablet from persisted rowset metas. The persisted rowset
+    // metas in a tablet include two parts
+    // 1. persisted to rocksdb as part of TabletMetaPB (rs_metas, inc_rs_metas)
+    // 2. persisted to rocksdb as a single RowsetMetaPB
+    // Tablet#init is responsible for 1, and this method is responsible for 2. init() will be called
+    // first. When publishing a new rowset, it's meta will be persisted as a single RowsetMetaPB
+    // first (Tablet#add_inc_rowset), and then add it to the in-memory TabletMeta, but not persist it
+    // as the newest TabletMetaPB right now, and Tablet#do_tablet_meta_checkpoint will persist the
+    // TabletMeta periodically. We can treat Single RowsetMetaPBs as the "WAL" of in-memory TabletMeta,
+    // and RowsetMetaPB is a snapshot of TabletMeta, and after the snapshot, the "WAL" can be deleted.
+    // This can reduce the cost to persist TabletMetaPB which is larger than a single RowsetMetaPB,
+    // especillay when ingestion is highly frequent. As a result, we need to load both TabletMetaPB and
+    // single RowsetMetaPBs when loading tablet, and merge them. This method is called in DataDir#load.
+    Status load_rowset(const RowsetSharedPtr& rowset);
+
     // operation in rowsets
     Status add_rowset(const RowsetSharedPtr& rowset, bool need_persist = true);
     void modify_rowsets(const vector<RowsetSharedPtr>& to_add, const vector<RowsetSharedPtr>& to_delete);

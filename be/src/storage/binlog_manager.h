@@ -85,35 +85,44 @@ using BinlogReaderSharedPtr = std::shared_ptr<BinlogReader>;
 // manage these binlog files, including generating, reading, and deleting after expiration.
 class BinlogManager : public std::enable_shared_from_this<BinlogManager> {
 public:
-    static Status create_and_init(Tablet& tablet, std::shared_ptr<BinlogManager>* binlog_manager);
-
     BinlogManager(std::string path, int64_t max_file_size, int32_t max_page_size, CompressionTypePB compression_type);
 
     ~BinlogManager();
 
-    Status init(Tablet& tablet);
+    // Initialize the binlog.
+    Status init();
 
+    // Load single rowset. This method is corresponding to Tablet#laod_rowset
+    void load_rowset(const RowsetSharedPtr& rowset);
+
+    // Add a rowset only containing insert data (for duplicate key table)
     Status add_insert_rowset(RowsetSharedPtr rowset);
 
-    // Whether the rowset is used by the binlog. It will be called
-    // for path_gc to check whether a rowset is used.
-    bool is_rowset_used(const RowsetId& rowset_id);
-
+    // Delete expired binlog
     void delete_expired_binlog();
 
-    std::shared_ptr<BinlogReader> create_reader(BinlogReaderParams& reader_params) {
+    // Delete some data to keep the binlog not too large
+    void delete_excess_binlog();
+
+    // Delete all of binlog
+    void delete_all_binlog();
+
+    // Whether the rowset is used by the binlog.
+    bool is_rowset_used(const RowsetId& rowset_id);
+
+    RowsetSharedPtr get_rowset(const RowsetId& rowset_id) {
         std::shared_lock lock(_meta_lock);
-        int64_t reader_id = _next_reader_id++;
-        return std::make_shared<BinlogReader>(shared_from_this(), reader_id, reader_params);
+        return _rowsets.find(rowset_id)->second;
     }
 
     // Find the meta of binlog file which may contain a given <version, seq_id>.
     // Return Status::NotFound if there is no such file.
     StatusOr<BinlogFileMetaPBSharedPtr> find_binlog_file(int64_t version, int64_t seq_id);
 
-    RowsetSharedPtr get_rowset(const RowsetId& rowset_id) {
+    std::shared_ptr<BinlogReader> create_reader(BinlogReaderParams& reader_params) {
         std::shared_lock lock(_meta_lock);
-        return _rowsets.find(rowset_id)->second;
+        int64_t reader_id = _next_reader_id++;
+        return std::make_shared<BinlogReader>(shared_from_this(), reader_id, reader_params);
     }
 
     int32_t num_binlog_files() {
@@ -140,15 +149,11 @@ private:
         rowset_id->lo = rowset_id_pb.lo();
     }
 
-    // protect meta modify/read
-    // 1. publish/apply will generate new binlog, and modify metas
-    // 2. TTL and capacity control will delete binlog, and modify metas
-    // 3. when the basic table remove a rowset, modify shared rowsets information
-    // 4. binlog reader will read metas
-    std::shared_mutex _meta_lock;
 
-    // ensure binlog will not generate concurrently from multiple loads
+    // ensure no concurrent ingestion
     std::mutex _write_lock;
+    // protect meta read/write
+    std::shared_mutex _meta_lock;
 
     // binlog storage directory
     std::string _path;
@@ -159,17 +164,22 @@ private:
     // mapping from start LSN of a binlog file to the file meta. A binlog file
     // with a smaller start LSN also has a smaller file id. The file with the biggest
     // start LSN is the meta of _active_binlog_writer if it's not null.
+    // Guarded by _meta_lock
     std::map<int128_t, BinlogFileMetaPBSharedPtr> _binlog_file_metas;
     std::shared_ptr<BinlogFileWriter> _active_binlog_writer;
 
     // mapping from rowset id to the number of binlog files using it
+    // Guarded by _meta_lock
     std::unordered_map<RowsetId, int32_t, HashOfRowsetId> _rowset_count_map;
     // mapping from rowset id to the Rowset
+    // Guarded by _meta_lock
     std::unordered_map<RowsetId, RowsetSharedPtr, HashOfRowsetId> _rowsets;
 
     // Allocate an id for each binlog reader
+    // Guarded by _meta_lock
     int64_t _next_reader_id;
     // Mapping from the reader id to the readers.
+    // Guarded by _meta_lock
     std::unordered_map<int64_t, BinlogReaderSharedPtr> _binlog_readers;
 };
 
