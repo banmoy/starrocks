@@ -31,9 +31,9 @@ namespace pipeline {
 
 class StreamScanOperatorFactory final : public ConnectorScanOperatorFactory {
 public:
-   StreamConnectorScanOperatorFactory(int32_t id, ScanNode* scan_node, size_t dop, ChunkBufferLimiterPtr buffer_limiter);
+    StreamScanOperatorFactory(int32_t id, ScanNode* scan_node, size_t dop, ChunkBufferLimiterPtr buffer_limiter);
 
-    ~StreamConnectorScanOperatorFactory() override = default;
+    ~StreamScanOperatorFactory() override = default;
 
     OperatorPtr do_create(int32_t dop, int32_t driver_sequence) override;
 };
@@ -47,10 +47,10 @@ public:
     ChunkSourcePtr create_chunk_source(MorselPtr morsel, int32_t chunk_source_index) override;
 };
 
-class StreamChunkSource: public ConnectorChunkSource {
+class StreamChunkSource : public ConnectorChunkSource {
 public:
-    StreamChunkSource(int32_t scan_operator_id, RuntimeProfile* runtime_profile, MorselPtr&& morsel,
-                         ScanOperator* op, vectorized::ConnectorScanNode* scan_node, BalancedChunkBuffer& chunk_buffer);
+    StreamChunkSource(int32_t scan_operator_id, RuntimeProfile* runtime_profile, MorselPtr&& morsel, ScanOperator* op,
+                      vectorized::ConnectorScanNode* scan_node, BalancedChunkBuffer& chunk_buffer);
 };
 
 } // namespace pipeline
