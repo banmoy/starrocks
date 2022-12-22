@@ -18,6 +18,7 @@
 #include "column/type_traits.h"
 #include "column/vectorized_fwd.h"
 #include "connector/connector.h"
+#include "storage/tablet.h"
 
 namespace starrocks::connector {
 
@@ -65,12 +66,20 @@ public:
     int64_t cpu_time_spent() const override;
 
 private:
+    StatusOr<TabletSharedPtr> _get_tablet();
+
     const BinlogDataSourceProvider* _provider;
     const TBinlogScanRange _scan_range;
+    ObjectPool _obj_pool;
+    ObjectPool* _pool = &_obj_pool;
+    RuntimeState* _runtime_state = nullptr;
+    TabletSharedPtr _tablet;
 
     int64_t _rows_read_number = 0;
     int64_t _bytes_read = 0;
     int64_t _cpu_time_ns = 0;
+
+    std::atomic<int32_t> _chunk_num;
 };
 
 } // namespace starrocks::connector

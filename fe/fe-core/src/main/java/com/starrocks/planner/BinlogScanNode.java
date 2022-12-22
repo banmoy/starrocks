@@ -85,7 +85,12 @@ public class BinlogScanNode extends ScanNode {
     }
 
     protected TBinlogOffset getBinlogOffset(long tabletId) {
-        throw new NotImplementedException("TODO");
+        TBinlogOffset offset = new TBinlogOffset();
+        offset.setTablet_id(tabletId);
+        // TODO -1 indicates the oldest log
+        offset.setVersion(-1);
+        offset.setLsn(-1);
+        return offset;
     }
 
     @Override
@@ -148,7 +153,7 @@ public class BinlogScanNode extends ScanNode {
                 TBinlogOffset binlogOffset = getBinlogOffset(tabletId);
                 TBinlogScanRange binlogRange = new TBinlogScanRange();
                 binlogRange.setTablet_id(tabletId);
-                binlogRange.setOffset(getBinlogOffset(tabletId));
+                binlogRange.setOffset(binlogOffset);
                 binlogRange.setPartition_id(partitionId);
                 binlogRange.setTable_id(tableId);
                 binlogRange.setDb_name(dbName);

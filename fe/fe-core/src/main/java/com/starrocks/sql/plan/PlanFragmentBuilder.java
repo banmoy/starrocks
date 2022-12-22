@@ -2800,15 +2800,6 @@ public class PlanFragmentBuilder {
             BinlogScanNode binlogScanNode = new BinlogScanNode(context.getNextNodeId(), tupleDescriptor);
             binlogScanNode.computeStatistics(optExpr.getStatistics());
 
-            // Add OPS column of binlog
-            SlotDescriptor opsSlot = context.getDescTbl().addSlotDescriptor(tupleDescriptor);
-            opsSlot.setIsNullable(false);
-            opsSlot.setType(Type.TINYINT);
-            opsSlot.setLabel("ops");
-            ColumnRefOperator columnRef =
-                    new ColumnRefOperator(opsSlot.getId().asInt(), opsSlot.getType(), "ops", opsSlot.getIsNullable());
-            context.getColRefToExpr().put(columnRef, new SlotRef(opsSlot.getLabel(), opsSlot));
-
             // Add slots from table
             for (Map.Entry<ColumnRefOperator, Column> entry : node.getColRefToColumnMetaMap().entrySet()) {
                 SlotDescriptor slotDescriptor =
@@ -2818,6 +2809,11 @@ public class PlanFragmentBuilder {
                 slotDescriptor.setIsMaterialized(true);
                 context.getColRefToExpr().put(entry.getKey(), new SlotRef(entry.getKey().toString(), slotDescriptor));
             }
+
+            add_binlog_columns(context, tupleDescriptor, "_binlog_op", Type.TINYINT);
+            add_binlog_columns(context, tupleDescriptor, "_binlog_version", Type.BIGINT);
+            add_binlog_columns(context, tupleDescriptor, "_binlog_seq_id", Type.BIGINT);
+            add_binlog_columns(context, tupleDescriptor, "_binlog_timestamp", Type.BIGINT);
 
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
@@ -2834,6 +2830,17 @@ public class PlanFragmentBuilder {
             context.getFragments().add(fragment);
             return fragment;
         }
+
+    }
+
+    private static void add_binlog_columns(ExecPlan context, TupleDescriptor tupleDescriptor, String name, Type type) {
+        SlotDescriptor slot = context.getDescTbl().addSlotDescriptor(tupleDescriptor);
+        slot.setIsNullable(false);
+        slot.setType(type);
+        slot.setLabel(name);
+        ColumnRefOperator columnRef =
+                new ColumnRefOperator(slot.getId().asInt(), slot.getType(), name, slot.getIsNullable());
+        context.getColRefToExpr().put(columnRef, new SlotRef(slot.getLabel(), slot));
 
     }
 }

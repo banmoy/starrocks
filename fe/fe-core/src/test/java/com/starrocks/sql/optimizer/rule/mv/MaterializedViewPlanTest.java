@@ -71,14 +71,14 @@ public class MaterializedViewPlanTest extends PlanTestBase {
 
     @Test
     public void testSelectFromBinlog() throws Exception {
-        String createTableStmtStr = "CREATE TABLE test.binlog_test(k1 int, v1 int) " +
+        String createTableStmtStr = "CREATE TABLE test.binlog_test(k1 int, v1 int, v2 varchar(20)) " +
                 "duplicate key(k1) distributed by hash(k1) buckets 2 properties('replication_num' = '1', " +
                 "'binlog_enable' = 'false', 'binlog_ttl' = '100', 'binlog_max_size' = '100');";
         CreateTableStmt createTableStmt = (CreateTableStmt) UtFrameUtils.
                 parseStmtWithNewParser(createTableStmtStr, connectContext);
         GlobalStateMgr.getCurrentState().getMetadata().createTable(createTableStmt);
 
-        String sql = "select * from binlog_test binlog";
+        String sql = "select *, _binlog_version from binlog_test binlog";
         Pair<String, ExecPlan> pair = UtFrameUtils.getPlanAndFragment(connectContext, sql);
         //System.out.println(pair.first);
         System.out.println(pair.second.getExplainString(StatementBase.ExplainLevel.NORMAL));
