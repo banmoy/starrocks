@@ -2799,6 +2799,13 @@ public class PlanFragmentBuilder {
 
             BinlogScanNode binlogScanNode = new BinlogScanNode(context.getNextNodeId(), tupleDescriptor);
             binlogScanNode.computeStatistics(optExpr.getStatistics());
+            try {
+                binlogScanNode.computeScanRanges();
+            } catch (UserException e) {
+                throw new StarRocksPlannerException(
+                        "Failed to compute scan ranges for StreamScanNode, " + e.getMessage(),
+                        INTERNAL_ERROR);
+            }
 
             // Add slots from table
             for (Map.Entry<ColumnRefOperator, Column> entry : node.getColRefToColumnMetaMap().entrySet()) {
@@ -2809,11 +2816,6 @@ public class PlanFragmentBuilder {
                 slotDescriptor.setIsMaterialized(true);
                 context.getColRefToExpr().put(entry.getKey(), new SlotRef(entry.getKey().toString(), slotDescriptor));
             }
-
-            add_binlog_columns(context, tupleDescriptor, "_binlog_op", Type.TINYINT);
-            add_binlog_columns(context, tupleDescriptor, "_binlog_version", Type.BIGINT);
-            add_binlog_columns(context, tupleDescriptor, "_binlog_seq_id", Type.BIGINT);
-            add_binlog_columns(context, tupleDescriptor, "_binlog_timestamp", Type.BIGINT);
 
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
@@ -2830,17 +2832,6 @@ public class PlanFragmentBuilder {
             context.getFragments().add(fragment);
             return fragment;
         }
-
-    }
-
-    private static void add_binlog_columns(ExecPlan context, TupleDescriptor tupleDescriptor, String name, Type type) {
-        SlotDescriptor slot = context.getDescTbl().addSlotDescriptor(tupleDescriptor);
-        slot.setIsNullable(false);
-        slot.setType(type);
-        slot.setLabel(name);
-        ColumnRefOperator columnRef =
-                new ColumnRefOperator(slot.getId().asInt(), slot.getType(), name, slot.getIsNullable());
-        context.getColRefToExpr().put(columnRef, new SlotRef(slot.getLabel(), slot));
 
     }
 }

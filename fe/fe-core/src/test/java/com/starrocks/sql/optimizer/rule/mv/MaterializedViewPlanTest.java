@@ -78,7 +78,7 @@ public class MaterializedViewPlanTest extends PlanTestBase {
                 parseStmtWithNewParser(createTableStmtStr, connectContext);
         GlobalStateMgr.getCurrentState().getMetadata().createTable(createTableStmt);
 
-        String sql = "select *, _binlog_version from binlog_test binlog";
+        String sql = "select * from binlog_test [_BINLOG_] binlog";
         Pair<String, ExecPlan> pair = UtFrameUtils.getPlanAndFragment(connectContext, sql);
         //System.out.println(pair.first);
         System.out.println(pair.second.getExplainString(StatementBase.ExplainLevel.NORMAL));

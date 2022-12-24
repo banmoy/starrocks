@@ -291,6 +291,15 @@ public class QueryAnalyzer {
             }
         }
 
+        private List<Column> appendBinlogColumns(List<Column> schema) {
+            List<Column> columns = new ArrayList<>(schema);
+            columns.add(new Column("_binlog_op", Type.TINYINT));
+            columns.add(new Column("_binlog_version", Type.BIGINT));
+            columns.add(new Column("_binlog_seq_id", Type.BIGINT));
+            columns.add(new Column("_binlog_timestamp", Type.BIGINT));
+            return columns;
+        }
+
         @Override
         public Scope visitTable(TableRelation node, Scope outerScope) {
             TableName tableName = node.getResolveTableName();
@@ -299,9 +308,17 @@ public class QueryAnalyzer {
             ImmutableList.Builder<Field> fields = ImmutableList.builder();
             ImmutableMap.Builder<Field, Column> columns = ImmutableMap.builder();
 
-            for (Column column : table.getFullSchema()) {
+            List<Column> fullSchema = node.isQueryBinlog() ? appendBinlogColumns(table.getFullSchema()) : table.getFullSchema();
+            List<Column> baseSchema = node.isQueryBinlog() ? appendBinlogColumns(table.getBaseSchema()) : table.getBaseSchema();
+            if (node.isQueryBinlog()) {
+                System.out.println("query binlog");
+            } else {
+                System.out.println("not query binlog");
+            }
+
+            for (Column column : fullSchema) {
                 Field field;
-                if (table.getBaseSchema().contains(column)) {
+                if (baseSchema.contains(column)) {
                     field = new Field(column.getName(), column.getType(), tableName,
                             new SlotRef(tableName, column.getName(), column.getName()), true);
                 } else {

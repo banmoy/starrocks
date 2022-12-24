@@ -32,6 +32,8 @@ public class TableRelation extends Relation {
     private final List<Long> tabletIds;
     private boolean isMetaQuery;
 
+    private boolean isQueryBinlog;
+
     // optional temporal clause for external MySQL tables that support this syntax
     private String temporalClause;
 
@@ -106,6 +108,14 @@ public class TableRelation extends Relation {
 
     public void setMetaQuery(boolean metaQuery) {
         isMetaQuery = metaQuery;
+    }
+
+    public boolean isQueryBinlog() {
+        return isQueryBinlog;
+    }
+
+    public void setQueryBinlog(boolean queryBinlog) {
+        isQueryBinlog = queryBinlog;
     }
 
     @Override
