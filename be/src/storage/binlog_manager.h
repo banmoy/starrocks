@@ -119,6 +119,25 @@ public:
     // Return Status::NotFound if there is no such file.
     StatusOr<BinlogFileMetaPBSharedPtr> find_binlog_file(int64_t version, int64_t seq_id);
 
+
+    std::pair<int64_t, int64_t> lowest_offset() {
+        std::shared_lock lock(_meta_lock);
+        if (_binlog_file_metas.empty()) {
+            return std::make_pair(-1, -1);
+        }
+        auto meta = _binlog_file_metas.begin();
+        return std::make_pair(meta->second->start_version(), meta->second->start_seq_id());
+    }
+
+    std::pair<int64_t, int64_t> highest_offset() {
+        std::shared_lock lock(_meta_lock);
+        if (_binlog_file_metas.empty()) {
+            return std::make_pair(-1, -1);
+        }
+        auto meta = _binlog_file_metas.rbegin();
+        return std::make_pair(meta->second->end_version(), meta->second->end_seq_id());
+    }
+
     std::shared_ptr<BinlogReader> create_reader(BinlogReaderParams& reader_params) {
         std::shared_lock lock(_meta_lock);
         int64_t reader_id = _next_reader_id++;

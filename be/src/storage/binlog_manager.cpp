@@ -39,6 +39,7 @@ Status BinlogManager::init() {
     // TODO init binlog manager
     // 1. load meta
     // 2. add _rowsets
+    return Status::OK();
 }
 
 void BinlogManager::load_rowset(const RowsetSharedPtr& rowset) {

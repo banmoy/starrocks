@@ -403,27 +403,21 @@ Status Tablet::add_inc_rowset(const RowsetSharedPtr& rowset, int64_t version) {
 
     // warm-up this rowset
     st = rowset->load();
-    bool enable_binlog = _tablet_meta->get_binlog_config()->binlog_enable;
-    if (enable_binlog && !st.ok()) {
+    if (!st.ok()) {
         // binlog needs to get segment information such as the number of rows in a segment,
         // so binlog will fail if loading rowset failed
         LOG(WARNING) << "Fail to load rowset, tablet:" << tablet_id() << " rowset:" << rowset->rowset_id() << " " << st;
         return Status::InternalError("load rowset error " + rowset->rowset_id().to_string());
-    } else if (st.ok()) {
-        LOG(WARNING) << "ignore load rowset error tablet:" << tablet_id() << " rowset:" << rowset->rowset_id() << " "
-                     << st;
     }
 
     // generate binlog before add the rowset to _rs_version_map so that publish
     // can be retried if binlog builds failed, and _contains_version() will not
     // return Status::AlreadyExist
-    if (enable_binlog) {
-        st = _binlog_manager->add_insert_rowset(rowset);
-        if (!st.ok()) {
-            LOG(WARNING) << "Fail to generate binlog, tablet: " << tablet_id() << " rowset:" << rowset->rowset_id()
-                         << " " << st;
-            return Status::InternalError("Fail to generate binlog " + rowset->rowset_id().to_string());
-        }
+    st = _binlog_manager->add_insert_rowset(rowset);
+    if (!st.ok()) {
+        LOG(WARNING) << "Fail to generate binlog, tablet: " << tablet_id() << " rowset:" << rowset->rowset_id() << " "
+                     << st;
+        return Status::InternalError("Fail to generate binlog " + rowset->rowset_id().to_string());
     }
 
     RETURN_IF_ERROR(_tablet_meta->add_rs_meta(rowset->rowset_meta()));
