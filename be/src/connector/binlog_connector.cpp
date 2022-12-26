@@ -59,12 +59,13 @@ Status BinlogDataSource::open(RuntimeState* state) {
         pair = binlog_manager->highest_offset();
         _max_version = pair.first + 1;
     }
-    LOG(INFO) << "Tablet id " << _tablet->tablet_uid() <<  ", start_version " << _start_version
-              << ", start_seq_id " << _start_seq_id << ", max_version " << _max_version;
+    LOG(INFO) << "Tablet id " << _tablet->tablet_uid() << ", start_version " << _start_version << ", start_seq_id "
+              << _start_seq_id << ", max_version " << _max_version;
     BinlogReaderParams reader_params;
     reader_params.chunk_size = state->chunk_size();
     ASSIGN_OR_RETURN(reader_params.output_schema, _build_schema())
     _binlog_reader = binlog_manager->create_reader(reader_params);
+    RETURN_IF_ERROR(_binlog_reader->init());
     return Status::OK();
 }
 
@@ -87,7 +88,7 @@ Status BinlogDataSource::get_next(RuntimeState* state, vectorized::ChunkPtr* chu
 }
 
 StatusOr<vectorized::VectorizedSchema> BinlogDataSource::_build_schema() {
-    BinlogMetaFieldMap binlog_meta_map = build_binlog_meta_fields(_tablet->tablet_schema().num_columns());
+    BinlogMetaFieldMap binlog_meta_map = BinlogReader::build_binlog_meta_fields(_tablet->tablet_schema().num_columns());
     std::vector<uint32_t> data_columns;
     std::vector<uint32_t> meta_column_slot_index;
     vectorized::VectorizedFields meta_fields;
@@ -123,11 +124,14 @@ StatusOr<vectorized::VectorizedSchema> BinlogDataSource::_build_schema() {
     }
 
     const TabletSchema& tablet_schema = _tablet->tablet_schema();
-    vectorized::VectorizedSchema schema =
-            ChunkHelper::convert_schema_to_format_v2(tablet_schema, data_columns);
+    vectorized::VectorizedSchema schema = ChunkHelper::convert_schema_to_format_v2(tablet_schema, data_columns);
     for (int32_t i = 0; i < meta_column_slot_index.size(); i++) {
         uint32_t index = meta_column_slot_index[i];
-        schema.insert(index, meta_fields[i]);
+        if (index >= schema.num_fields()) {
+            schema.append(meta_fields[i]);
+        } else {
+            schema.insert(index, meta_fields[i]);
+        }
     }
 
     return schema;
@@ -149,6 +153,7 @@ Status BinlogDataSource::_mock_chunk(vectorized::Chunk* chunk) {
     chunk->get_column_by_index(5)->append_datum(Datum(seq_id));
     int64_t timestamp = num;
     chunk->get_column_by_index(6)->append_datum(Datum(timestamp));
+    return Status::OK();
 }
 
 int64_t BinlogDataSource::raw_rows_read() const {

@@ -287,4 +287,30 @@ void BinlogReader::close() {
     _reset();
 }
 
+BinlogMetaFieldMap BinlogReader::build_binlog_meta_fields(ColumnId start_cid) {
+    BinlogMetaFieldMap fields;
+    ColumnId cid = start_cid;
+    vectorized::VectorizedFieldPtr op_field = std::make_shared<vectorized::VectorizedField>(
+            cid, BINLOG_OP, get_type_info(TYPE_TINYINT), STORAGE_AGGREGATE_NONE, 1, false, false);
+    fields.emplace(BINLOG_OP, op_field);
+    cid += 1;
+
+    vectorized::VectorizedFieldPtr version_field = std::make_shared<vectorized::VectorizedField>(
+            cid, BINLOG_VERSION, get_type_info(TYPE_BIGINT), STORAGE_AGGREGATE_NONE, 8, false, false);
+    fields.emplace(BINLOG_VERSION, version_field);
+    cid += 1;
+
+    vectorized::VectorizedFieldPtr seq_id_field = std::make_shared<vectorized::VectorizedField>(
+            cid, BINLOG_SEQ_ID, get_type_info(TYPE_BIGINT), STORAGE_AGGREGATE_NONE, 8, false, false);
+    fields.emplace(BINLOG_SEQ_ID, seq_id_field);
+    cid += 1;
+
+    vectorized::VectorizedFieldPtr timestamp_field = std::make_shared<vectorized::VectorizedField>(
+            cid, BINLOG_TIMESTAMP, get_type_info(TYPE_BIGINT), STORAGE_AGGREGATE_NONE, 8, false, false);
+    fields.emplace(BINLOG_TIMESTAMP, timestamp_field);
+    cid += 1;
+
+    return fields;
+}
+
 } // namespace starrocks

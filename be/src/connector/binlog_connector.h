@@ -77,7 +77,7 @@ private:
     RuntimeState* _runtime_state = nullptr;
     TabletSharedPtr _tablet;
     BinlogReaderSharedPtr _binlog_reader;
-    atomic<bool> _seek_reader = false;
+    std::atomic<bool> _seek_reader = false;
     int64_t _start_version;
     int64_t _start_seq_id;
     int64_t _max_version;

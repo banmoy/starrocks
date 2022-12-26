@@ -320,7 +320,7 @@ Status BinlogManager::_delete_binlog_files(std::vector<std::string>& file_paths)
 }
 
 void BinlogManager::_update_metas_after_commit(RowsetSharedPtr new_rowset,
-                                               std::vector<BinlogFileMetaPBSharedPtr> new_file_metas) {
+                                               std::vector<BinlogFileMetaPBSharedPtr>& new_file_metas) {
     std::unique_lock lock(_meta_lock);
     RowsetId reused_rowset_id;
     // remove the last file meta that is updated
@@ -336,7 +336,7 @@ void BinlogManager::_update_metas_after_commit(RowsetSharedPtr new_rowset,
 
     for (BinlogFileMetaPBSharedPtr& file_meta : new_file_metas) {
         int128_t lsn = _get_lsn(file_meta->start_version(), file_meta->start_seq_id());
-        _binlog_file_metas.emplace(lsn, file_meta);
+        _binlog_file_metas[lsn] = file_meta;
         for (auto& rowset_id_pb : file_meta->rowsets()) {
             _convert_rowset_id_pb(rowset_id_pb, &reused_rowset_id);
             _rowset_count_map[reused_rowset_id]++;

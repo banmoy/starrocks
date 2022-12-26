@@ -119,7 +119,6 @@ public:
     // Return Status::NotFound if there is no such file.
     StatusOr<BinlogFileMetaPBSharedPtr> find_binlog_file(int64_t version, int64_t seq_id);
 
-
     std::pair<int64_t, int64_t> lowest_offset() {
         std::shared_lock lock(_meta_lock);
         if (_binlog_file_metas.empty()) {
@@ -160,14 +159,13 @@ private:
 
     Status _delete_binlog_files(std::vector<std::string>& file_names);
 
-    void _update_metas_after_commit(RowsetSharedPtr new_rowset, std::vector<BinlogFileMetaPBSharedPtr> new_file_metas);
+    void _update_metas_after_commit(RowsetSharedPtr new_rowset, std::vector<BinlogFileMetaPBSharedPtr>& new_file_metas);
 
     void _convert_rowset_id_pb(const RowsetIdPB& rowset_id_pb, RowsetId* rowset_id) {
         rowset_id->hi = rowset_id_pb.hi();
         rowset_id->mi = rowset_id_pb.mi();
         rowset_id->lo = rowset_id_pb.lo();
     }
-
 
     // ensure no concurrent ingestion
     std::mutex _write_lock;
