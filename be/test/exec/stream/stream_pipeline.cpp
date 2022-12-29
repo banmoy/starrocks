@@ -18,7 +18,6 @@
 
 #include <vector>
 
-#include "exec/pipeline/pipeline_builder.h"
 #include "exec/pipeline/pipeline_driver_executor.h"
 #include "exec/pipeline/stream_pipeline_driver.h"
 #include "exec/stream/stream_operators_test.h"
@@ -64,6 +63,7 @@ Status StreamPipelineTest::PreparePipeline() {
     _runtime_state->set_fragment_ctx(_fragment_ctx);
 
     _obj_pool = _runtime_state->obj_pool();
+    _pipeline_context = _obj_pool->add(new pipeline::PipelineBuilderContext(_fragment_ctx, _degree_of_parallelism));
 
     DCHECK(_pipeline_builder != nullptr);
     _pipelines.clear();
@@ -77,11 +77,11 @@ Status StreamPipelineTest::PreparePipeline() {
         const auto& pipeline = pipelines[n];
         pipeline->instantiate_drivers(_fragment_ctx->runtime_state());
         for (auto& driver : pipeline->drivers()) {
-            for (auto& op : driver->operators()) {
-                if (auto* stream_source_op = dynamic_cast<GeneratorStreamSourceOperator*>(op.get())) {
-                    _tablet_ids.push_back(stream_source_op->tablet_id());
-                }
-            }
+//            for (auto& op : driver->operators()) {
+//                if (auto* stream_source_op = dynamic_cast<GeneratorStreamSourceOperator*>(op.get())) {
+//                    _tablet_ids.push_back(stream_source_op->tablet_id());
+//                }
+//            }
         }
     }
     return Status::OK();
