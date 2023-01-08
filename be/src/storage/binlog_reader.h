@@ -38,10 +38,10 @@ struct BinlogReaderParams {
 };
 
 // Column names for metas
-const std::string BINLOG_OP = g_PlanNodes_constants.BINLOG_OP_COLUMN_NAME;
-const std::string BINLOG_VERSION = g_PlanNodes_constants.BINLOG_VERSION_COLUMN_NAME;
-const std::string BINLOG_SEQ_ID = g_PlanNodes_constants.BINLOG_SEQ_ID_COLUMN_NAME;
-const std::string BINLOG_TIMESTAMP = g_PlanNodes_constants.BINLOG_TIMESTAMP_COLUMN_NAME;
+const std::string BINLOG_OP = "_binlog_op";
+const std::string BINLOG_VERSION = "_binlog_version";
+const std::string BINLOG_SEQ_ID = "_binlog_seq_id";
+const std::string BINLOG_TIMESTAMP = "_binlog_timestamp";
 
 // Read binlog in a tablet. Binlog can be treated as a table with schema. The schema includes the
 // data columns of base table and meta columns of binlog. The name and SQL data type of meta columns

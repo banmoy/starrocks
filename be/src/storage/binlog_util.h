@@ -36,9 +36,7 @@ public:
     static int128_t get_lsn(int64_t version, int64_t seq_id) { return (((int128_t)version) << 64) | seq_id; }
 
     static void convert_pb_to_rowset_id(const RowsetIdPB& pb, RowsetId* rowset_id) {
-        rowset_id->hi = pb.hi();
-        rowset_id->mi = pb.mi();
-        rowset_id->lo = pb.lo();
+        rowset_id->init(pb.hi(), pb.mi(), pb.lo());
     }
 
     static void convert_rowset_id_to_pb(const RowsetId& rowset_id, RowsetIdPB* pb) {
