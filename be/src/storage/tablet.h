@@ -117,6 +117,22 @@ public:
     size_t next_unique_id() const;
     size_t field_index(const string& field_name) const;
 
+    // Loads single rowsets when loading tablet from persisted RowsetMetaPB. The persisted rowset
+    // metas in a tablet include two parts
+    // 1. persisted to rocksdb as part of TabletMetaPB (rs_metas, inc_rs_metas)
+    // 2. persisted to rocksdb as a single RowsetMetaPB
+    // Tablet#init is responsible for 1, and this method is responsible for 2. init() will be called
+    // first. When publishing a new rowset, it's meta will be persisted as a single RowsetMetaPB
+    // first in Tablet#add_inc_rowset), and then add it to the in-memory TabletMeta, but the updated
+    // TabletMeta does not persist right now, and Tablet#do_tablet_meta_checkpoint will persist the
+    // TabletMeta periodically. We can treat Single RowsetMetaPBs as the "WAL" of in-memory TabletMeta,
+    // and RowsetMetaPB is a snapshot of TabletMeta, and after the periodical snapshot, the "WAL" can
+    // be deleted. This can reduce the cost of persisting TabletMetaPB which is larger than a single
+    // RowsetMetaPB, especillay when ingestion is highly frequent. As a result, we need to load both
+    // TabletMetaPB and single RowsetMetaPBs when loading tablet, and merge them. This method is called
+    // in DataDir#load.
+    Status load_rowset(const RowsetSharedPtr& rowset);
+
     // operation in rowsets
     Status add_rowset(const RowsetSharedPtr& rowset, bool need_persist = true);
     void modify_rowsets(const vector<RowsetSharedPtr>& to_add, const vector<RowsetSharedPtr>& to_delete);
@@ -127,6 +143,19 @@ public:
     RowsetSharedPtr get_inc_rowset_by_version(const Version& version) const;
 
     RowsetSharedPtr rowset_with_max_version() const;
+
+    // The process to generate binlog when publishing a rowset. These methods are protected by _meta_lock
+    // prepare_binlog: persist the binlog file before saving the rowset meta in add_inc_rowset()
+    //              but the in-memory binlog meta in BinlogManager is not modified, so the binlog
+    //              is not visible
+    // publish_binlog: if successful to save rowset meta in add_inc_rowset(), make the newly binlog
+    //              file visible. publish_binlog is expected to be alway successful because it just
+    //              modifies the in-memory binlog meta
+    // abort_binlog: if failed to save rowset meta, clean up the binlog file generated in
+    //              prepare_binlog
+    Status prepare_binlog(const RowsetSharedPtr& rowset, int64_t version);
+    void publish_binlog(int64_t version);
+    void abort_binlog(int64_t version);
 
     Status add_inc_rowset(const RowsetSharedPtr& rowset, int64_t version);
     void delete_expired_inc_rowsets();
@@ -264,9 +293,13 @@ public:
         return _tablet_meta->set_enable_persistent_index(enable_persistent_index);
     }
 
-    void set_binlog_config(TBinlogConfig binlog_config) { _tablet_meta->set_binlog_config(binlog_config); }
-
     Status contains_version(const Version& version);
+
+    Status set_binlog_config(const TBinlogConfig& binlog_config);
+
+    bool need_init_binlog();
+
+    Status init_binlog();
 
 protected:
     void on_shutdown() override;
@@ -349,6 +382,8 @@ private:
     std::atomic<int64_t> _cumulative_point{0};
     std::atomic<int32_t> _newly_created_rowset_num{0};
     std::atomic<int64_t> _last_checkpoint_time{0};
+
+    std::shared_ptr<BinlogManager> _binlog_manager;
 };
 
 inline bool Tablet::init_succeeded() {

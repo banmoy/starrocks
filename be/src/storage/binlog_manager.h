@@ -16,7 +16,16 @@
 
 #include <gutil/strings/substitute.h>
 
+#include <cstdint>
+#include <memory>
+#include <unordered_set>
+
 #include "gen_cpp/AgentService_types.h"
+#include "gen_cpp/binlog.pb.h"
+#include "storage/binlog_file_writer.h"
+#include "storage/binlog_reader.h"
+#include "storage/binlog_util.h"
+#include "storage/rowset/rowset.h"
 
 namespace starrocks {
 
@@ -59,6 +68,151 @@ struct BinlogConfig {
                 "BinlogConfig={version=$0, binlog_enable=$1, binlog_ttl_second=$2, binlog_max_size=$3}", version,
                 binlog_enable, binlog_ttl_second, binlog_max_size);
     }
+};
+
+class Tablet;
+class BinlogBuildResult;
+class BinlogBuilder;
+
+using BinlogFileMetaPBSharedPtr = std::shared_ptr<BinlogFileMetaPB>;
+using BinlogReaderSharedPtr = std::shared_ptr<BinlogReader>;
+
+// Binlog records the change events when ingesting data to the table. The types of change events
+// include INSERT, UPDATE_BEFORE, UPDATE_AFTER, and DELETE. For duplicate key table, there is
+// only INSERT change event, and for primary key table, there are all types of change events.
+// Each tablet will maintain its own binlog, and each change event has a unique, int128_t LSN
+// (log sequence number). The LSN composites of an int64_t *version* and an int64_t *seq_id*.
+// The *version* indicates which ingestion generates the change event, and it's same as the
+// publish version for the ingestion. The *seq_id* is the sequence number of the change event in
+// this ingestion. The information of these change events will be written to binlog files, and
+// BinlogManager will manage these binlog files, including generating, reading, and deleting after
+// expiration.
+class BinlogManager : public std::enable_shared_from_this<BinlogManager> {
+public:
+    BinlogManager(std::string path, int64_t max_file_size, int32_t max_page_size, KeysType keys_type,
+                  CompressionTypePB compression_type, BinlogConfig* binlog_config);
+
+    ~BinlogManager();
+
+    Status init(RowsetVersionMap* rowset_version_map);
+
+    // The process to generate the binlog for an ingestion, and these methods will be protected
+    // by TabletMeta#_meta_lock outside. See Tablet#add_inc_rowset
+    // 1. begin: begin the process, and do some preparation. Go to next steps if return
+    //    Status::OK, otherwise the process is finished with failure
+    // 2. append_rowset: will be called if begin returns Status::OK, and generate binlog
+    //    for duplicate key table. The binlog data is guaranteed to be persisted if return
+    //    Status::OK. Note that the metas for the newly binlog are not applied to BinlogManager,
+    //    and it's not visible for readers. Should call abort() if returns an error status
+    // 3. publish: if append_rowset is successful, apply the metas for the newly binlog
+    //    to the BinlogManager, and they are visible to readers. publish can be guaranteed
+    //    to be successful because it only modifies in-memory structure (if there is no bugs).
+    //    After publish, the whose process is finished successfully
+    // 4. abort: stop the process. The cases to call abort()
+    //    4.1 append_rowset failed
+    //    4.2 append_rowset success, and before publish is called. In Tablet#add_inc_rowset,
+    //        will abort the process if the rowset meta fails to save
+    // Do not support to generate binlog for concurrent ingestion
+    Status begin(int64_t version);
+    Status append_rowset(const RowsetSharedPtr& rowset);
+    void abort(int64_t version);
+    void publish(int64_t version);
+
+    StatusOr<std::shared_ptr<BinlogFileWriter>> create_binlog_writer();
+
+    // Whether the rowset is used by the binlog.
+    bool is_rowset_used(const RowsetId& rowset_id);
+
+    // Delete expired binlog
+    void delete_expired_binlog();
+
+    // Delete some data to keep the binlog not too large
+    void delete_excess_binlog();
+
+    // Delete all of binlog
+    void delete_all_binlog();
+
+    Status delete_binlog_files(std::vector<int64_t>& file_ids);
+
+    RowsetSharedPtr get_rowset(const RowsetId& rowset_id) {
+        std::shared_lock lock(_meta_lock);
+        return _rowsets.find(rowset_id)->second;
+    }
+
+    StatusOr<std::shared_ptr<BinlogReader>> create_reader(BinlogReaderParams& reader_params);
+
+    void release_reader(int64_t reader_id) {
+        std::shared_lock lock(_meta_lock);
+        _binlog_readers.erase(reader_id);
+    }
+
+    // Find the meta of binlog file which may contain a given <version, seq_id>.
+    // Return Status::NotFound if there is no such file.
+    StatusOr<BinlogFileMetaPBSharedPtr> find_binlog_meta(int64_t version, int64_t seq_id);
+
+    int32_t num_binlog_files() {
+        std::shared_lock lock(_meta_lock);
+        return _binlog_file_metas.size();
+    }
+
+    // This will be protected by TabletMeta#_meta_lock outside
+    void update_config(BinlogConfig* binlog_config);
+
+    bool binlog_enable() {
+        std::shared_lock lock(_meta_lock);
+        return _binlog_enable;
+    }
+
+    std::string& storage_path() { return _path; }
+
+    int64_t max_file_size() { return _max_file_size; }
+
+private:
+    friend class BinlogReader;
+
+    void _apply_build_result(BinlogBuildResult* result);
+    void _clear_store();
+
+    // binlog storage directory
+    std::string _path;
+    int64_t _max_file_size;
+    int32_t _max_page_size;
+    KeysType _keys_type;
+    CompressionTypePB _compression_type;
+
+    // ensure no concurrent ingestion
+    std::mutex _ingestion_lock;
+    // builder for the current ingestion
+    std::unique_ptr<BinlogBuilder> _builder;
+
+    // protect following metas' read/write
+    std::shared_mutex _meta_lock;
+    int64_t _next_file_id;
+    bool _binlog_enable;
+    int64_t _binlog_ttl_second;
+    int64_t _binlog_max_size;
+
+    // mapping from start LSN of a binlog file to the file meta. A binlog file
+    // with a smaller start LSN also has a smaller file id. The file with the biggest
+    // start LSN is the meta of _active_binlog_writer if it's not null.
+    // Guarded by _meta_lock
+    std::map<int128_t, BinlogFileMetaPBSharedPtr> _binlog_file_metas;
+    // the binlog file writer that can append data
+    std::shared_ptr<BinlogFileWriter> _active_binlog_writer;
+
+    // mapping from rowset id to the number of binlog files using it
+    // Guarded by _meta_lock
+    std::unordered_map<RowsetId, int32_t, HashOfRowsetId> _rowset_count_map;
+    // mapping from rowset id to the Rowset
+    // Guarded by _meta_lock
+    std::unordered_map<RowsetId, RowsetSharedPtr, HashOfRowsetId> _rowsets;
+
+    // Allocate an id for each binlog reader
+    // Guarded by _meta_lock
+    int64_t _next_reader_id;
+    // Mapping from the reader id to the readers.
+    // Guarded by _meta_lock
+    std::unordered_map<int64_t, BinlogReaderSharedPtr> _binlog_readers;
 };
 
 } // namespace starrocks
