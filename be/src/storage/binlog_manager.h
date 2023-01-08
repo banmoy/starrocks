@@ -26,6 +26,7 @@
 #include "storage/binlog_reader.h"
 #include "storage/binlog_util.h"
 #include "storage/rowset/rowset.h"
+#include "util/blocking_queue.hpp"
 
 namespace starrocks {
 
@@ -123,16 +124,13 @@ public:
     // Whether the rowset is used by the binlog.
     bool is_rowset_used(const RowsetId& rowset_id);
 
-    // Delete expired binlog
-    void delete_expired_binlog();
-
-    // Delete some data to keep the binlog not too large
-    void delete_excess_binlog();
+    // Delete expired and excess binlog
+    void check_expiration_and_capacity();
 
     // Delete all of binlog
     void delete_all_binlog();
 
-    Status delete_binlog_files(std::vector<int64_t>& file_ids);
+    void delete_unused_binlog_files();
 
     RowsetSharedPtr get_rowset(const RowsetId& rowset_id) {
         std::shared_lock lock(_meta_lock);
@@ -170,7 +168,9 @@ public:
 private:
     friend class BinlogReader;
 
+    Status _check_enable_binlog();
     void _apply_build_result(BinlogBuildResult* result);
+    // need protection of _meta_lock outside
     void _clear_store();
 
     // binlog storage directory
@@ -186,11 +186,16 @@ private:
     std::unique_ptr<BinlogBuilder> _builder;
 
     // protect following metas' read/write
+    // TODO make lock fine-grained
     std::shared_mutex _meta_lock;
-    int64_t _next_file_id;
+    std::atomic<int64_t> _next_file_id;
     bool _binlog_enable;
     int64_t _binlog_ttl_second;
     int64_t _binlog_max_size;
+
+    // Whether error happens when enable binlog in update_config()
+    std::atomic<bool> _enable_binlog_error{false};
+    std::string _error_msg;
 
     // mapping from start LSN of a binlog file to the file meta. A binlog file
     // with a smaller start LSN also has a smaller file id. The file with the biggest
@@ -199,6 +204,8 @@ private:
     std::map<int128_t, BinlogFileMetaPBSharedPtr> _binlog_file_metas;
     // the binlog file writer that can append data
     std::shared_ptr<BinlogFileWriter> _active_binlog_writer;
+    // unused binlog files, and wait for deletion
+    BlockingQueue<int64_t> _unused_binlog_files;
 
     // mapping from rowset id to the number of binlog files using it
     // Guarded by _meta_lock
@@ -206,6 +213,9 @@ private:
     // mapping from rowset id to the Rowset
     // Guarded by _meta_lock
     std::unordered_map<RowsetId, RowsetSharedPtr, HashOfRowsetId> _rowsets;
+
+    int64_t _total_binlog_file_disk_size;
+    int64_t _total_rowset_disk_size;
 
     // Allocate an id for each binlog reader
     // Guarded by _meta_lock

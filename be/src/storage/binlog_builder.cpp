@@ -34,7 +34,7 @@ Status BinlogBuilder::append_rowset(const RowsetSharedPtr& rowset) {
                                                rowset->creation_time() * 1000000));
     } else {
         ASSIGN_OR_RETURN(_current_writer, _binlog_manager->create_binlog_writer());
-        _created_file_ids.push_back(_current_writer->file_id());
+        _new_files.push_back(_current_writer->file_path());
         RETURN_IF_ERROR(_current_writer->begin(rowset->start_version(), rowset->rowset_id(), 0,
                                                rowset->creation_time() * 1000000));
     }
@@ -50,7 +50,7 @@ Status BinlogBuilder::append_rowset(const RowsetSharedPtr& rowset) {
                 RETURN_IF_ERROR(_commit_current_writer(false, true));
             }
             ASSIGN_OR_RETURN(_current_writer, _binlog_manager->create_binlog_writer());
-            _created_file_ids.push_back(_current_writer->file_id());
+            _new_files.push_back(_current_writer->file_path());
             RETURN_IF_ERROR(_current_writer->begin(rowset->start_version(), rowset->rowset_id(), _next_seq_id,
                                                    rowset->creation_time() * 1000000));
         }
@@ -103,6 +103,7 @@ std::shared_ptr<BinlogBuildResult> BinlogBuilder::build() {
 
 std::shared_ptr<BinlogBuildResult> BinlogBuilder::abort() {
     std::shared_ptr<BinlogBuildResult> result = std::make_shared<BinlogBuildResult>();
+    // decide whether the _reused_file_writer can be appended
     if (_reused_file_writer != nullptr) {
         if (_reused_file_writer->closed()) {
             Status status =
@@ -128,15 +129,14 @@ std::shared_ptr<BinlogBuildResult> BinlogBuilder::abort() {
         }
     }
 
-    if (!_created_file_ids.empty()) {
+    if (!_new_files.empty()) {
         Status status = _current_writer->close(false);
         if (!status.ok()) {
             LOG(WARNING) << "Fail to close binlog writer when aborting committed " << _current_writer->file_path()
                          << ", " << status;
         }
 
-        status = _binlog_manager->delete_binlog_files(_created_file_ids);
-        LOG_IF(WARNING, !status.ok()) << "Fail to delete created binlog files when aborting, " << status;
+        _delete_new_files();
     }
 
     return result;
@@ -173,6 +173,29 @@ void BinlogBuilder::_abort_current_writer() {
         _current_writer->close(false);
         LOG(WARNING) << "Fail to abort binlog writer " << _current_writer->file_path() << ", " << status;
     }
+}
+
+void BinlogBuilder::_delete_new_files() {
+    StatusOr<std::shared_ptr<FileSystem>> status_or;
+    if (!status_or.ok()) {
+        return;
+    }
+    std::shared_ptr<FileSystem> fs = status_or.value();
+    int32_t total_num = 0;
+    int32_t fail_num = 0;
+    for (auto& path : _new_files) {
+        total_num += 1;
+        Status st = fs->delete_file(path);
+        if (st.ok()) {
+            VLOG(2) << "Delete binlog file " << path;
+        } else {
+            LOG(WARNING) << "Fail to delete binlog file " << path << ", " << st;
+            fail_num += 1;
+        }
+    }
+
+    LOG(INFO) << "Delete newly binlog files under " << _binlog_manager->storage_path()
+              << ", total files: " << total_num << ", failed to delete: " << fail_num;
 }
 
 } // namespace starrocks

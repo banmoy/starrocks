@@ -496,12 +496,6 @@ void Tablet::_delete_stale_rowset_by_version(const Version& version) {
 }
 
 void Tablet::delete_expired_inc_rowsets() {
-    // binlog only read data from incremental rowsets, we reuse the daemon to check
-    // binlog expiration. If some binlog is discarded, the related rowsets will
-    // not be used, and they can be deleted in the following steps
-    if (_binlog_manager != nullptr) {
-        _binlog_manager->delete_expired_binlog();
-    }
     int64_t now = UnixSeconds();
     std::vector<Version> expired_versions;
     std::vector<RowsetSharedPtr> unused_rowsets;
@@ -512,9 +506,14 @@ void Tablet::delete_expired_inc_rowsets() {
     timer.start();
     {
         std::unique_lock wrlock(_meta_lock);
+        bool binlog_enable = _binlog_manager != nullptr && _binlog_manager->binlog_enable();
+        if (binlog_enable) {
+            _binlog_manager->check_expiration_and_capacity();
+        }
+
         for (auto& rs_meta : _tablet_meta->all_inc_rs_metas()) {
             int64_t diff = now - rs_meta->creation_time();
-            if (diff >= config::inc_rowset_expired_sec && _binlog_manager != nullptr &&
+            if (diff >= config::inc_rowset_expired_sec && binlog_enable &&
                 !_binlog_manager->is_rowset_used(rs_meta->rowset_id())) {
                 Version version(rs_meta->version());
                 expired_versions.emplace_back(version);
@@ -556,6 +555,10 @@ void Tablet::delete_expired_inc_rowsets() {
         new_inc_rs_size = _inc_rs_version_map.size();
 
         save_meta();
+    }
+
+    if (_binlog_manager != nullptr) {
+        _binlog_manager->delete_unused_binlog_files();
     }
 
     for (auto& rowset : unused_rowsets) {

@@ -14,6 +14,7 @@
 
 #include "binlog_manager.h"
 
+#include "gutil/stl_util.h"
 #include "storage/binlog_builder.h"
 #include "storage/binlog_util.h"
 #include "storage/rowset/page_io.h"
@@ -28,7 +29,8 @@ BinlogManager::BinlogManager(std::string path, int64_t max_file_size, int32_t ma
           _max_file_size(max_file_size),
           _max_page_size(max_page_size),
           _keys_type(keys_type),
-          _compression_type(compression_type) {
+          _compression_type(compression_type),
+          _unused_binlog_files(UINT64_MAX) {
     if (binlog_config == nullptr) {
         _binlog_enable = false;
         _binlog_ttl_second = INT64_MAX;
@@ -59,7 +61,6 @@ Status BinlogManager::init(RowsetVersionMap* rowset_version_map) {
         LOG(ERROR) << "Failed to init binlog under " << _path << ", " << status;
         return status;
     }
-    _next_file_id = 0;
 
     BinlogFileLoadFilter filter(INT64_MAX, INT64_MAX, rowset_version_map);
     std::vector<int64_t> useless_file_ids;
@@ -83,10 +84,6 @@ Status BinlogManager::init(RowsetVersionMap* rowset_version_map) {
             BinlogUtil::convert_pb_to_rowset_id(rowset_id_pb, &rowset_id);
             _rowset_count_map[rowset_id] += 1;
         }
-
-        if (_next_file_id == 0) {
-            _next_file_id = file_id + 1;
-        }
     }
     for (auto& it : *rowset_version_map) {
         if (_rowset_count_map.count(it.second->rowset_id()) > 0) {
@@ -94,11 +91,19 @@ Status BinlogManager::init(RowsetVersionMap* rowset_version_map) {
         }
     }
 
-    status = delete_binlog_files(useless_file_ids);
-    LOG_IF(WARNING, !status.ok()) << "Fail to delete useless binlog files when initializing, " << status;
+    _next_file_id = binlog_file_ids.empty() ? 0 : (*binlog_file_ids.rbegin() + 1);
+    for (auto& meta : _binlog_file_metas) {
+        _total_binlog_file_disk_size += meta.second->file_size();
+    }
+    for (auto rowset : _rowsets) {
+        _total_rowset_disk_size += rowset.second->data_disk_size();
+    }
+
+    for (auto id : useless_file_ids) {
+        _unused_binlog_files.blocking_put(id);
+    }
 
     LOG(INFO) << "Init binlog manager successfully, load binlog files: " << _binlog_file_metas.size();
-
     return Status::OK();
 }
 
@@ -112,6 +117,7 @@ Status BinlogManager::begin(int64_t version) {
     }
 
     std::shared_lock meta_lock(_meta_lock);
+    RETURN_IF_ERROR(_check_enable_binlog());
     if (!_binlog_file_metas.empty()) {
         BinlogFileMetaPBSharedPtr file_meta = _binlog_file_metas.rbegin()->second;
         int64_t max_version = file_meta->end_version();
@@ -181,9 +187,11 @@ void BinlogManager::_apply_build_result(BinlogBuildResult* result) {
                 BinlogUtil::convert_pb_to_rowset_id(rowset_id_pb, &rowset_id);
                 _rowset_count_map[rowset_id]--;
             }
+            _total_binlog_file_disk_size -= old_file_meta->file_size();
         }
 
         _binlog_file_metas[lsn] = meta;
+        _total_binlog_file_disk_size += meta->file_size();
         for (auto& rowset_id_pb : meta->rowsets()) {
             BinlogUtil::convert_pb_to_rowset_id(rowset_id_pb, &rowset_id);
             _rowset_count_map[rowset_id] += 1;
@@ -191,7 +199,10 @@ void BinlogManager::_apply_build_result(BinlogBuildResult* result) {
     }
 
     for (auto& it : result->rowsets) {
-        _rowsets[it.first] = it.second;
+        auto pair = _rowsets.emplace(it.first, it.second);
+        if (pair.second) {
+            _total_rowset_disk_size += it.second->data_disk_size();
+        }
     }
 
     _active_binlog_writer = std::move(result->active_writer);
@@ -228,20 +239,69 @@ StatusOr<std::shared_ptr<BinlogFileWriter>> BinlogManager::create_binlog_writer(
 
 bool BinlogManager::is_rowset_used(const RowsetId& rowset_id) {
     std::shared_lock lock(_meta_lock);
+    if (!_binlog_enable) {
+        return false;
+    }
     return _rowset_count_map.count(rowset_id) >= 1;
 }
 
-void BinlogManager::delete_expired_binlog() {
-    // TODO delete expired binlog
-}
+void BinlogManager::check_expiration_and_capacity() {
+    std::vector<int64_t> removed_file_ids;
+    std::shared_ptr<BinlogFileWriter> close_writer;
+    {
+        std::unique_lock lock(_meta_lock);
+        if (!_binlog_enable) {
+            return;
+        }
 
-void BinlogManager::delete_excess_binlog() {
-    // TODO delete some binlog oversized
+        int64_t now = UnixSeconds();
+        int64_t expiration_time = now - _binlog_ttl_second;
+        for (auto it = _binlog_file_metas.begin(); it != _binlog_file_metas.end(); it++) {
+            auto& meta = it->second;
+            bool expired = meta->end_timestamp_in_us() / 1000000 < expiration_time;
+            bool overcapacity = _total_binlog_file_disk_size + _total_rowset_disk_size > _binlog_max_size;
+            if (!expired && !overcapacity) {
+                break;
+            }
+
+            removed_file_ids.push_back(meta->id());
+            _total_binlog_file_disk_size -= meta->file_size();
+            _binlog_file_metas.erase(it);
+            RowsetId rowset_id;
+            for (auto& pb : meta->rowsets()) {
+                BinlogUtil::convert_pb_to_rowset_id(pb, &rowset_id);
+                int32_t count = --_rowset_count_map[rowset_id];
+                if (count == 0) {
+                    _rowset_count_map.erase(rowset_id);
+                    _total_rowset_disk_size -= _rowsets[rowset_id]->data_disk_size();
+                    _rowsets.erase(rowset_id);
+                }
+            }
+        }
+
+        if (_binlog_file_metas.empty() && _active_binlog_writer != nullptr) {
+            close_writer = _active_binlog_writer;
+            _active_binlog_writer.reset();
+        }
+    }
+
+    if (close_writer != nullptr) {
+        Status st = close_writer->close(true);
+        LOG_IF(WARNING, !st.ok()) << "Failed to close file writer when checking expiration and excess binlog"
+                                  << ", file path" << close_writer->file_path() << ", " << st;
+    }
+
+    for (int64_t file_id : removed_file_ids) {
+        _unused_binlog_files.blocking_put(file_id);
+    }
 }
 
 void BinlogManager::delete_all_binlog() {
-    std::unique_lock lock(_meta_lock);
-    _clear_store();
+    {
+        std::unique_lock lock(_meta_lock);
+        _clear_store();
+    }
+    delete_unused_binlog_files();
 }
 
 StatusOr<BinlogFileMetaPBSharedPtr> BinlogManager::find_binlog_meta(int64_t version, int64_t seq_id) {
@@ -272,44 +332,64 @@ StatusOr<std::shared_ptr<BinlogReader>> BinlogManager::create_reader(BinlogReade
     return std::make_shared<BinlogReader>(shared_from_this(), reader_id, reader_params);
 }
 
-Status BinlogManager::delete_binlog_files(std::vector<std::int64_t>& file_ids) {
-    if (file_ids.empty()) {
-        return Status::OK();
+void BinlogManager::delete_unused_binlog_files() {
+    StatusOr<std::shared_ptr<FileSystem>> status_or;
+    if (!status_or.ok()) {
+        return;
     }
-
-    int delete_fail_num = 0;
-    std::shared_ptr<FileSystem> fs;
-    ASSIGN_OR_RETURN(fs, FileSystem::CreateSharedFromString(_path))
-    for (auto file_id : file_ids) {
+    std::shared_ptr<FileSystem> fs = status_or.value();
+    int64_t file_id;
+    int32_t total_num = 0;
+    int32_t fail_num = 0;
+    while (_unused_binlog_files.try_get(&file_id) == 1) {
+        total_num += 1;
         std::string file_path = BinlogUtil::binlog_file_path(_path, file_id);
         Status st = fs->delete_file(file_path);
         if (st.ok()) {
             VLOG(2) << "Delete binlog file " << file_path;
         } else {
             LOG(WARNING) << "Fail to delete binlog file " << file_path << ", " << st;
-            delete_fail_num += 1;
+            fail_num += 1;
         }
     }
 
-    if (delete_fail_num > 0) {
-        return Status::InternalError(
-                fmt::format("Fail to delete all files, total {}, failed {}", file_ids.size(), delete_fail_num));
-    }
-
-    return Status::OK();
+    LOG(INFO) << "Delete unused binlog files under path " << _path << ", total files: " << total_num
+              << ", failed to delete: " << fail_num;
 }
 
 void BinlogManager::update_config(BinlogConfig* binlog_config) {
     std::unique_lock lock(_meta_lock);
     if (_binlog_enable && !binlog_config->binlog_enable) {
+        // clear the store if disable the binlog
         _clear_store();
     } else if (!_binlog_enable && binlog_config->binlog_enable) {
-        // switch to open
+        // cleanup the storage when enable the binlog
+        std::set<int64_t> binlog_file_ids;
+        Status status = BinlogUtil::list_binlog_file_ids(_path, &binlog_file_ids);
+        if (!status.ok()) {
+            _enable_binlog_error.store(true);
+            _error_msg = status.get_error_msg();
+            LOG(ERROR) << "Failed to init binlog under " << _path << ", " << status;
+            return;
+        }
+        _next_file_id = binlog_file_ids.empty() ? 0 : (*binlog_file_ids.rbegin() + 1);
+        for (auto id : binlog_file_ids) {
+            _unused_binlog_files.blocking_put(id);
+        }
+        _enable_binlog_error = true;
+        _error_msg.clear();
     }
 
     _binlog_enable = binlog_config->binlog_enable;
     _binlog_ttl_second = binlog_config->binlog_ttl_second;
     _binlog_max_size = binlog_config->binlog_max_size;
+}
+
+Status BinlogManager::_check_enable_binlog() {
+    if (_enable_binlog_error.load()) {
+        return Status::InternalError("Fail to enable binlog, " + _error_msg);
+    }
+    return Status::OK();
 }
 
 void BinlogManager::_clear_store() {
@@ -319,18 +399,16 @@ void BinlogManager::_clear_store() {
                                   << _active_binlog_writer->file_path() << ", " << st;
         _active_binlog_writer.reset();
     }
-    std::vector<int64_t> file_ids;
     for (auto& it : _binlog_file_metas) {
-        file_ids.push_back(it.second->id());
+        _unused_binlog_files.blocking_put(it.second->id());
     }
-    Status st = delete_binlog_files(file_ids);
-    LOG_IF(WARNING, !st.ok()) << "Fail to delete binlog files when clearing store, binlog storage: " << _path << ", "
-                              << st;
 
-    _binlog_file_metas.clear();
-    _rowset_count_map.clear();
-    _rowsets.clear();
-    _binlog_readers.clear();
+    STLClearObject(&_binlog_file_metas);
+    STLClearObject(&_rowset_count_map);
+    STLClearObject(&_rowsets);
+    STLClearObject(&_binlog_readers);
+    _total_binlog_file_disk_size = 0;
+    _total_rowset_disk_size = 0;
 }
 
 } // namespace starrocks
