@@ -162,7 +162,7 @@ Status BinlogBuilder::_commit_current_writer(bool end_of_rowset, bool close_writ
         _current_writer.reset();
     }
     _new_metas.push_back(file_meta);
-    _next_seq_id = file_meta->end_seq_id();
+    _next_seq_id = file_meta->end_seq_id() + 1;
     return Status::OK();
 }
 
