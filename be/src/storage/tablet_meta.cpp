@@ -346,14 +346,12 @@ Version TabletMeta::max_version() const {
     return max_version;
 }
 
-Status TabletMeta::add_rs_meta(const RowsetMetaSharedPtr& rs_meta) {
-    // consistency is guarantee by tablet
+void TabletMeta::add_rs_meta(const RowsetMetaSharedPtr& rs_meta) {
+    // consistency is guaranteed by tablet
     _rs_metas.push_back(rs_meta);
     if (rs_meta->has_delete_predicate()) {
         add_delete_predicate(rs_meta->delete_predicate(), rs_meta->version().first);
     }
-
-    return Status::OK();
 }
 
 void TabletMeta::delete_rs_meta_by_version(const Version& version, std::vector<RowsetMetaSharedPtr>* deleted_rs_metas) {
@@ -404,10 +402,9 @@ void TabletMeta::revise_inc_rs_metas(std::vector<RowsetMetaSharedPtr> rs_metas) 
     _inc_rs_metas = std::move(rs_metas);
 }
 
-Status TabletMeta::add_inc_rs_meta(const RowsetMetaSharedPtr& rs_meta) {
-    // consistency is guarantee by tablet
+void TabletMeta::add_inc_rs_meta(const RowsetMetaSharedPtr& rs_meta) {
+    // consistency is guaranteed by tablet
     _inc_rs_metas.push_back(rs_meta);
-    return Status::OK();
 }
 
 void TabletMeta::delete_stale_rs_meta_by_version(const Version& version) {
@@ -520,6 +517,32 @@ void TabletMeta::create_inital_updates_meta() {
     _updatesPB->mutable_apply_version()->set_minor(edit_version_pb->minor());
     _updatesPB->set_next_log_id(0);
     _updatesPB->set_next_rowset_id(0);
+}
+
+void TabletMeta::set_binlog_config(const TBinlogConfig& binlog_config) {
+    if (_binlog_config == nullptr) {
+        _binlog_config = std::make_shared<BinlogConfig>();
+    } else if (_binlog_config->version >= binlog_config.version) {
+        LOG(WARNING) << "skip to update binlog config, "
+                     << "current version is " << _binlog_config->version << ", update version is "
+                     << binlog_config.version;
+        return;
+    }
+    _binlog_config->update(binlog_config);
+    LOG(INFO) << "Set binlog config to " << _binlog_config->to_string();
+}
+
+void TabletMeta::set_binlog_config(const BinlogConfig& binlog_config) {
+    if (_binlog_config == nullptr) {
+        _binlog_config = std::make_shared<BinlogConfig>();
+    } else if (_binlog_config->version >= binlog_config.version) {
+        LOG(WARNING) << "skip to update binlog config, "
+                     << "current version is " << _binlog_config->version << ", update version is "
+                     << binlog_config.version;
+        return;
+    }
+    _binlog_config->update(binlog_config);
+    LOG(INFO) << "Set binlog config to " << _binlog_config->to_string();
 }
 
 bool operator==(const TabletMeta& a, const TabletMeta& b) {

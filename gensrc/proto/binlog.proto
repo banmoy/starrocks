@@ -107,7 +107,7 @@ message BinlogFileMetaPB {
   optional int64 id = 1;
   // the version of the first change event in the file
   optional int64 start_version = 2;
-  // the sequence number for the first change event
+  // the sequence number for the first change event in the file
   optional int64 start_seq_id = 3;
   // timestamp for the first change evnet in the file
   optional int64 start_timestamp_in_us = 4;

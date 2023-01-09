@@ -49,6 +49,36 @@ struct PageContext {
     PageContentPB page_content;
 };
 
+// Used to filter useless data when loading binlog file
+class BinlogFileLoadFilter {
+public:
+    BinlogFileLoadFilter(int64_t max_version, int64_t max_seq_id, RowsetVersionMap* rowset_version_map) {
+        reset(max_version, max_seq_id, rowset_version_map);
+    }
+
+    bool is_valid_seq(int64_t version, int64_t seq_id) const {
+        return version < _max_version || (version == _max_version && seq_id < _max_seq_id);
+    }
+
+    // TODO we can use the version to indentify a rowset used by binlog files in duplicate
+    //  key table, but not for primary key table. We need to unify them.
+    bool is_valid_rowset(int64_t rowset_version) const {
+        return _rowset_version_map == nullptr ||
+               _rowset_version_map->count(Version(rowset_version, rowset_version)) > 0;
+    }
+
+    void reset(int64_t max_version, int64_t max_seq_id, RowsetVersionMap* rowset_version_map) {
+        _max_version = _max_version;
+        _max_seq_id = max_seq_id;
+        _rowset_version_map = rowset_version_map;
+    }
+
+private:
+    int64_t _max_version;
+    int64_t _max_seq_id;
+    RowsetVersionMap* _rowset_version_map;
+};
+
 // Read log entries in the binlog file.
 //
 // How to use
@@ -88,6 +118,14 @@ public:
 
     static Status parse_page_header(RandomAccessFile* read_file, int64_t file_size, int64_t file_pos,
                                     int64_t page_index, PageHeaderPB* page_header_pb, int64_t* read_file_size);
+
+    static Status scan_pages_to_load(int64_t file_id, RandomAccessFile* read_file, int64_t file_size,
+                                     BinlogFileMetaPB* file_meta, const BinlogFileLoadFilter& filter);
+
+    // Load the file meta for the given binlog file. The version and seq_id must be smaller than
+    // the given *max_version* and *max_seq_id*
+    static StatusOr<std::shared_ptr<BinlogFileMetaPB>> load(int64_t file_id, std::string& file_path,
+                                                            const BinlogFileLoadFilter& filter);
 
 private:
     Status _seek(int64_t version, int64_t seq_id);

@@ -699,10 +699,19 @@ void run_update_meta_info_task(const std::shared_ptr<UpdateTabletMetaInfoAgentTa
                 break;
             case TTabletMetaType::DISABLE_BINLOG:
                 break;
-            case TTabletMetaType::BINLOG_CONFIG:
-                tablet->set_binlog_config(tablet_meta_info.binlog_config);
-                LOG(INFO) << "update binlog config" << tablet_meta_info.binlog_config;
+            case TTabletMetaType::BINLOG_CONFIG: {
+                Status status = tablet->set_binlog_config(tablet_meta_info.binlog_config);
+                if (!status.ok()) {
+                    status_code = TStatusCode::INTERNAL_ERROR;
+                    error_msgs.push_back(status.get_error_msg());
+                    LOG(WARNING) << "Fail to update binlog config for tablet: " << tablet->full_name() << ", "
+                                 << status;
+                } else {
+                    LOG(INFO) << "Update binlog config for tablet: " << tablet->full_name()
+                              << ", config: " << tablet_meta_info.binlog_config;
+                }
                 break;
+            }
             case TTabletMetaType::ENABLE_PERSISTENT_INDEX:
                 LOG(INFO) << "update tablet:" << tablet->tablet_id()
                           << " enable_persistent_index:" << tablet_meta_info.enable_persistent_index;

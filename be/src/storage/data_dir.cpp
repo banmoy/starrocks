@@ -279,7 +279,8 @@ Status DataDir::load() {
     LOG(INFO) << "begin loading tablet from meta";
     std::set<int64_t> tablet_ids;
     std::set<int64_t> failed_tablet_ids;
-    auto load_tablet_func = [this, &tablet_ids, &failed_tablet_ids](int64_t tablet_id, int32_t schema_hash,
+    std::set<int64_t> binlog_tablet_ids;
+    auto load_tablet_func = [this, &tablet_ids, &failed_tablet_ids, &binlog_tablet_ids](int64_t tablet_id, int32_t schema_hash,
                                                                     std::string_view value) -> bool {
         Status st =
                 _tablet_manager->load_tablet_from_meta(this, tablet_id, schema_hash, value, false, false, false, false);
@@ -295,6 +296,10 @@ Status DataDir::load() {
             failed_tablet_ids.insert(tablet_id);
         } else {
             tablet_ids.insert(tablet_id);
+            TabletSharedPtr tablet = _tablet_manager->get_tablet(tablet_id, false);
+            if (tablet->need_init_binlog()) {
+                binlog_tablet_ids.insert(tablet_id);
+            }
         }
         return true;
     };
@@ -354,12 +359,15 @@ Status DataDir::load() {
             }
         } else if (rowset_meta->rowset_state() == RowsetStatePB::VISIBLE &&
                    rowset_meta->tablet_uid() == tablet->tablet_uid()) {
-            Status publish_status = tablet->add_rowset(rowset, false);
+            Status publish_status = tablet->load_rowset(rowset);
             if (!publish_status.ok() && !publish_status.is_already_exist()) {
                 LOG(WARNING) << "Fail to add visible rowset=" << rowset->rowset_id()
                              << " to tablet=" << rowset_meta->tablet_id() << " txn id=" << rowset_meta->txn_id()
                              << " start version=" << rowset_meta->version().first
                              << " end version=" << rowset_meta->version().second;
+            }
+            if (tablet->need_init_binlog()) {
+                binlog_tablet_ids.insert(rowset_meta->tablet_id());
             }
         } else {
             LOG(WARNING) << "Found invalid rowset=" << rowset_meta->rowset_id()
@@ -368,6 +376,21 @@ Status DataDir::load() {
                          << " current valid tablet uid=" << tablet->tablet_uid();
         }
     }
+
+    for (int64_t tablet_id : binlog_tablet_ids) {
+        TabletSharedPtr tablet = _tablet_manager->get_tablet(tablet_id, false);
+        if (tablet == nullptr) {
+            continue;
+        }
+        Status status = tablet->init_binlog();
+        // TODO just ignore the error as the way if rowsets fail to load
+        // BinlogManager has an internal flag to mark the result of initialization,
+        // and will reject ingestion if fail to initialize. See BinlogManager#_error_state
+        if (!status.ok()) {
+            LOG(WARNING) << "Fail to load binlog for tablet " << tablet_id << ", " << status;
+        }
+    }
+
     return Status::OK();
 }
 
