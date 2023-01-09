@@ -132,6 +132,27 @@ public:
 
     void delete_unused_binlog_files();
 
+    RowsetSharedPtr get_rowset(const RowsetId& rowset_id) {
+        std::shared_lock lock(_meta_lock);
+        return _rowsets.find(rowset_id)->second;
+    }
+
+    StatusOr<std::shared_ptr<BinlogReader>> create_reader(BinlogReaderParams& reader_params);
+
+    void release_reader(int64_t reader_id) {
+        std::shared_lock lock(_meta_lock);
+        _binlog_readers.erase(reader_id);
+    }
+
+    // Find the meta of binlog file which may contain a given <version, seq_id>.
+    // Return Status::NotFound if there is no such file.
+    StatusOr<BinlogFileMetaPBSharedPtr> find_binlog_meta(int64_t version, int64_t seq_id);
+
+    int32_t num_binlog_files() {
+        std::shared_lock lock(_meta_lock);
+        return _binlog_file_metas.size();
+    }
+
     // This will be protected by TabletMeta#_meta_lock outside
     void update_config(BinlogConfig* binlog_config);
 
@@ -145,7 +166,7 @@ public:
     int64_t max_file_size() { return _max_file_size; }
 
 private:
-    void _set_store_state(Status status);
+    void _set_store_state(const Status& status);
     Status _check_store_state();
     void _apply_build_result(BinlogBuildResult* result);
     void _clear_store();
@@ -193,6 +214,13 @@ private:
     // statistics for disk usage
     int64_t _total_binlog_file_disk_size;
     int64_t _total_rowset_disk_size;
+
+    // Allocate an id for each binlog reader
+    // Guarded by _meta_lock
+    int64_t _next_reader_id;
+    // Mapping from the reader id to the readers.
+    // Guarded by _meta_lock
+    std::unordered_map<int64_t, BinlogReaderSharedPtr> _binlog_readers;
 };
 
 } // namespace starrocks

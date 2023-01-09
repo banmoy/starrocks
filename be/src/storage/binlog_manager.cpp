@@ -307,6 +307,34 @@ void BinlogManager::delete_all_binlog() {
     delete_unused_binlog_files();
 }
 
+StatusOr<BinlogFileMetaPBSharedPtr> BinlogManager::find_binlog_meta(int64_t version, int64_t seq_id) {
+    std::shared_lock lock(_meta_lock);
+    int128_t lsn = BinlogUtil::get_lsn(version, seq_id);
+    auto upper = _binlog_file_metas.upper_bound(lsn);
+    if (upper == _binlog_file_metas.begin()) {
+        return Status::NotFound(strings::Substitute("Can't find file meta for version $0, seq_id $1", version, seq_id));
+    }
+
+    BinlogFileMetaPBSharedPtr file_meta;
+    if (upper == _binlog_file_metas.end()) {
+        file_meta = _binlog_file_metas.rbegin()->second;
+    } else {
+        file_meta = (--upper)->second;
+    }
+
+    if (file_meta->end_version() < version) {
+        return Status::NotFound(strings::Substitute("Can't find file meta for version $0, seq_id $1", version, seq_id));
+    }
+
+    return file_meta;
+}
+
+StatusOr<std::shared_ptr<BinlogReader>> BinlogManager::create_reader(BinlogReaderParams& reader_params) {
+    std::shared_lock lock(_meta_lock);
+    int64_t reader_id = _next_reader_id++;
+    return std::make_shared<BinlogReader>(shared_from_this(), reader_id, reader_params);
+}
+
 void BinlogManager::delete_unused_binlog_files() {
     StatusOr<std::shared_ptr<FileSystem>> status_or;
     if (!status_or.ok()) {
@@ -362,7 +390,7 @@ void BinlogManager::update_config(BinlogConfig* binlog_config) {
     }
 }
 
-void BinlogManager::_set_store_state(Status status) {
+void BinlogManager::_set_store_state(const Status& status) {
     if (status.ok()) {
         _error_state.store(false);
         _error_msg.clear();
@@ -393,6 +421,7 @@ void BinlogManager::_clear_store() {
     STLClearObject(&_binlog_file_metas);
     STLClearObject(&_rowset_count_map);
     STLClearObject(&_rowsets);
+    STLClearObject(&_binlog_readers);
     _total_binlog_file_disk_size = 0;
     _total_rowset_disk_size = 0;
 }
