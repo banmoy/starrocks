@@ -53,10 +53,6 @@ protected:
 };
 
 using BinlogMetaFieldMap = std::unordered_map<std::string, VectorizedFieldPtr>;
-const std::string BINLOG_OP = g_PlanNodes_constants.BINLOG_OP_COLUMN_NAME;
-const std::string BINLOG_VERSION = g_PlanNodes_constants.BINLOG_VERSION_COLUMN_NAME;
-const std::string BINLOG_SEQ_ID = g_PlanNodes_constants.BINLOG_SEQ_ID_COLUMN_NAME;
-const std::string BINLOG_TIMESTAMP = g_PlanNodes_constants.BINLOG_TIMESTAMP_COLUMN_NAME;
 
 class BinlogDataSource final : public DataSource {
 public:
