@@ -19,6 +19,7 @@
 #include "column/vectorized_fwd.h"
 #include "connector/connector.h"
 #include "gen_cpp/PlanNodes_constants.h"
+#include "storage/binlog_reader.h"
 #include "storage/tablet.h"
 
 namespace starrocks::connector {
@@ -79,6 +80,12 @@ private:
     TabletSharedPtr _tablet;
     // TODO this will be used by BinlogReader
     VectorizedSchema _binlog_read_schema;
+
+    BinlogReaderSharedPtr _binlog_reader;
+    std::atomic<bool> _seek_reader = false;
+    int64_t _start_version;
+    int64_t _start_seq_id;
+    int64_t _max_version;
 
     int64_t _rows_read_number = 0;
     int64_t _bytes_read = 0;

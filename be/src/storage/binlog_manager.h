@@ -165,6 +165,25 @@ public:
 
     int64_t max_file_size() { return _max_file_size; }
 
+    // for testing
+    std::pair<int64_t, int64_t> lowest_offset() {
+        std::shared_lock lock(_meta_lock);
+        if (_binlog_file_metas.empty()) {
+            return std::make_pair(-1, -1);
+        }
+        auto meta = _binlog_file_metas.begin();
+        return std::make_pair(meta->second->start_version(), meta->second->start_seq_id());
+    }
+
+    std::pair<int64_t, int64_t> highest_offset() {
+        std::shared_lock lock(_meta_lock);
+        if (_binlog_file_metas.empty()) {
+            return std::make_pair(-1, -1);
+        }
+        auto meta = _binlog_file_metas.rbegin();
+        return std::make_pair(meta->second->end_version(), meta->second->end_seq_id());
+    }
+
 private:
     void _set_store_state(const Status& status);
     Status _check_store_state();

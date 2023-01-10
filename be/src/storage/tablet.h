@@ -297,6 +297,8 @@ public:
 
     Status set_binlog_config(const TBinlogConfig& binlog_config);
 
+    BinlogManager* binlog_manager() { return _binlog_manager == nullptr ? nullptr : _binlog_manager.get(); }
+
     // Whether to init binlog after all of rowset metas are loaded in DataDir#load()
     bool need_init_binlog();
 

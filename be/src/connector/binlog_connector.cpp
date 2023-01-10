@@ -48,16 +48,51 @@ Status BinlogDataSource::open(RuntimeState* state) {
     ASSIGN_OR_RETURN(_binlog_read_schema, _build_binlog_schema())
     VLOG(2) << "Tablet id " << _tablet->tablet_uid() << ", version " << _scan_range.offset.version << ", seq_id "
             << _scan_range.offset.lsn << ", binlog read schema " << _binlog_read_schema;
+
+    BinlogManager* binlog_manager = _tablet->binlog_manager();
+    if (_scan_range.__isset.offset && _scan_range.offset.version > -1 && _scan_range.offset.lsn > -1) {
+        _start_version = _scan_range.offset.version;
+        _start_seq_id = _scan_range.offset.lsn;
+        _max_version = _start_version + 1;
+    } else {
+        std::pair<int64_t, int64_t> pair = binlog_manager->lowest_offset();
+        _start_version = pair.first;
+        _start_seq_id = pair.second;
+
+        pair = binlog_manager->highest_offset();
+        _max_version = pair.first + 1;
+    }
+
+    BinlogReaderParams reader_params;
+    reader_params.chunk_size = state->chunk_size();
+    reader_params.output_schema = _binlog_read_schema;
+    ASSIGN_OR_RETURN(_binlog_reader, binlog_manager->create_reader(reader_params));
+    RETURN_IF_ERROR(_binlog_reader->init());
+
     return Status::OK();
 }
 
-void BinlogDataSource::close(RuntimeState* state) {}
+void BinlogDataSource::close(RuntimeState* state) {
+    if (_binlog_reader != nullptr) {
+        _binlog_reader->close();
+        _binlog_reader.reset();
+    }
+}
 
 Status BinlogDataSource::get_next(RuntimeState* state, ChunkPtr* chunk) {
     SCOPED_RAW_TIMER(&_cpu_time_ns);
     _init_chunk(chunk, state->chunk_size());
-    // TODO replace with BinlogReader
-    return _mock_chunk(chunk->get());
+    if (_start_version < 0) {
+        return Status::EndOfFile(fmt::format("start_version: {}, start_seq_id: {}, max_version: {}", _start_version,
+                                             _start_seq_id, _max_version));
+    }
+
+    if (!_seek_reader) {
+        _seek_reader = true;
+        RETURN_IF_ERROR(_binlog_reader->seek(_start_version, _start_seq_id));
+    }
+    RETURN_IF_ERROR(_binlog_reader->get_next(chunk, _max_version));
+    return Status::OK();
 }
 
 BinlogMetaFieldMap BinlogDataSource::_build_binlog_meta_fields(ColumnId start_cid) {
