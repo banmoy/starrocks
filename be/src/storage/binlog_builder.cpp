@@ -30,13 +30,11 @@ Status BinlogBuilder::append_rowset(const RowsetSharedPtr& rowset) {
     // TODO sync parent dir after creating new file writer which will affect performance
     if (_reused_file_writer != nullptr) {
         _current_writer = _reused_file_writer;
-        RETURN_IF_ERROR(_current_writer->begin(rowset->start_version(), rowset->rowset_id(), 0,
-                                               rowset->creation_time() * 1000000));
+        RETURN_IF_ERROR(_current_writer->begin(_version, rowset->rowset_id(), 0, rowset->creation_time() * 1000000));
     } else {
         ASSIGN_OR_RETURN(_current_writer, _binlog_manager->create_binlog_writer());
         _new_files.push_back(_current_writer->file_path());
-        RETURN_IF_ERROR(_current_writer->begin(rowset->start_version(), rowset->rowset_id(), 0,
-                                               rowset->creation_time() * 1000000));
+        RETURN_IF_ERROR(_current_writer->begin(_version, rowset->rowset_id(), 0, rowset->creation_time() * 1000000));
     }
 
     std::vector<SegmentSharedPtr>& segments = rowset->segments();
@@ -51,14 +49,14 @@ Status BinlogBuilder::append_rowset(const RowsetSharedPtr& rowset) {
             }
             ASSIGN_OR_RETURN(_current_writer, _binlog_manager->create_binlog_writer());
             _new_files.push_back(_current_writer->file_path());
-            RETURN_IF_ERROR(_current_writer->begin(rowset->start_version(), rowset->rowset_id(), _next_seq_id,
+            RETURN_IF_ERROR(_current_writer->begin(_version, rowset->rowset_id(), _next_seq_id,
                                                    rowset->creation_time() * 1000000));
         }
         Status status = _current_writer->add_insert_range(seg_index, 0, num_rows);
         if (!status.ok()) {
             _abort_current_writer();
             LOG(WARNING) << "Fail to add_insert_range for rowset " << rowset->rowset_id() << ", segment index "
-                         << seg_index << ", number of rows " << num_rows << ", version " << rowset->start_version()
+                         << seg_index << ", number of rows " << num_rows << ", version " << _version
                          << ", binlog writer " << _current_writer->file_path() << ", " << status;
             return status;
         }
@@ -68,9 +66,8 @@ Status BinlogBuilder::append_rowset(const RowsetSharedPtr& rowset) {
         Status status = _current_writer->add_empty();
         if (!status.ok()) {
             _abort_current_writer();
-            LOG(WARNING) << "Fail to add_empty for rowset " << rowset->rowset_id() << ", version "
-                         << rowset->start_version() << ", binlog writer " << _current_writer->file_path() << ", "
-                         << status;
+            LOG(WARNING) << "Fail to add_empty for rowset " << rowset->rowset_id() << ", version " << _version
+                         << ", binlog writer " << _current_writer->file_path() << ", " << status;
         }
         return status;
     }
@@ -194,8 +191,8 @@ void BinlogBuilder::_delete_new_files() {
         }
     }
 
-    LOG(INFO) << "Delete newly binlog files under " << _binlog_manager->storage_path()
-              << ", total files: " << total_num << ", failed to delete: " << fail_num;
+    LOG(INFO) << "Delete newly binlog files under " << _binlog_manager->storage_path() << ", total files: " << total_num
+              << ", failed to delete: " << fail_num;
 }
 
 } // namespace starrocks
