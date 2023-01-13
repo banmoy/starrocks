@@ -74,6 +74,7 @@ public:
     }
 
 private:
+    // less than <_max_version, _max_seq_id>
     int64_t _max_version;
     int64_t _max_seq_id;
     RowsetVersionMap* _rowset_version_map;

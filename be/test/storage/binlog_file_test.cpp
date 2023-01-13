@@ -21,6 +21,7 @@
 #include "storage/binlog_file_reader.h"
 #include "storage/binlog_file_writer.h"
 #include "storage/binlog_util.h"
+#include "storage/rowset/rowset.h"
 #include "testutil/assert.h"
 
 namespace starrocks {
@@ -398,5 +399,60 @@ TEST_F(BinlogFileTest, test_abort) {
 
 // TODO add tests for primary key
 TEST_F(BinlogFileTest, test_primary_key) {}
+
+TEST_F(BinlogFileTest, test_load) {
+    CompressionTypePB compression_type = LZ4_FRAME;
+    int64_t file_id = 1;
+    int32_t page_size = 50;
+    std::string file_path = BinlogUtil::binlog_file_path(_binlog_file_dir, file_id);
+    std::shared_ptr<BinlogFileWriter> file_writer =
+            std::make_shared<BinlogFileWriter>(file_id, file_path, page_size, compression_type);
+    file_writer->init();
+    std::shared_ptr<BinlogFileMetaPB> file_meta = std::make_shared<BinlogFileMetaPB>();
+    std::vector<std::shared_ptr<BinlogFileMetaPB>> expect_metas;
+    for (int i = 1; i <= 10; i++) {
+        RowsetId rowset_id;
+        rowset_id.init(2, i, 2, 3);
+        ASSERT_OK(file_writer->begin(i, rowset_id, 0, i));
+        ASSERT_OK(file_writer->add_insert_range(0, 0, 10));
+        ASSERT_OK(file_writer->add_insert_range(1, 0, 20));
+        ASSERT_OK(file_writer->add_insert_range(2, 0, 30));
+        ASSERT_OK(file_writer->commit(true));
+        std::shared_ptr<BinlogFileMetaPB> meta = std::make_shared<BinlogFileMetaPB>();
+        file_writer->copy_file_meta(meta.get());
+        expect_metas.push_back(meta);
+    }
+
+    // verify load without footer
+    std::shared_ptr<Rowset> dummy_rowset = Rowset::create(nullptr, "test", nullptr);
+    RowsetVersionMap version_map;
+    BinlogFileLoadFilter filter(0, 0, &version_map);
+    StatusOr<std::shared_ptr<BinlogFileMetaPB>> status_or = BinlogFileReader::load(file_id, file_path, filter);
+    EXPECT_STATUS(Status::Corruption("There is no valid pages"), status_or.status());
+    for (int i = 1; i <= 10; i++) {
+        Version version(i, i);
+        version_map[version] = dummy_rowset;
+        filter.reset(i, 60, &version_map);
+        status_or = BinlogFileReader::load(file_id, file_path, filter);
+        ASSERT_OK(status_or.status());
+        verify_file_meta(expect_metas[i - 1].get(), status_or.value());
+    }
+
+    // close file and append the meta to the footer
+    ASSERT_OK(file_writer->close(true));
+    version_map.clear();
+    // verify load with footer
+    filter.reset(0, 0, &version_map);
+    status_or = BinlogFileReader::load(file_id, file_path, filter);
+    EXPECT_STATUS(Status::Corruption("There is no valid pages"), status_or.status());
+    for (int i = 1; i <= 10; i++) {
+        Version version(i, i);
+        version_map[version] = dummy_rowset;
+        filter.reset(i, 60, &version_map);
+        status_or = BinlogFileReader::load(file_id, file_path, filter);
+        ASSERT_OK(status_or.status());
+        verify_file_meta(expect_metas[i - 1].get(), status_or.value());
+    }
+}
 
 } // namespace starrocks

@@ -437,8 +437,8 @@ Status BinlogFileReader::scan_pages_to_load(int64_t file_id, RandomAccessFile* r
         file_meta->set_end_seq_id(page_header->end_seq_id());
         file_meta->set_end_timestamp_in_us(page_header->timestamp_in_us());
         RowsetId rowset_id;
-        for (int32_t i = 0; i < file_meta->rowsets_size(); i++) {
-            BinlogUtil::convert_pb_to_rowset_id(file_meta->rowsets(i), &rowset_id);
+        for (int32_t i = 0; i < page_header->rowsets_size(); i++) {
+            BinlogUtil::convert_pb_to_rowset_id(page_header->rowsets(i), &rowset_id);
             rowsets.emplace(rowset_id);
         }
 
