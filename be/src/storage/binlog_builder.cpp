@@ -68,8 +68,8 @@ Status BinlogBuilder::append_rowset(const RowsetSharedPtr& rowset) {
             _abort_current_writer();
             LOG(WARNING) << "Fail to add_empty for rowset " << rowset->rowset_id() << ", version " << _version
                          << ", binlog writer " << _current_writer->file_path() << ", " << status;
+            return status;
         }
-        return status;
     }
 
     RETURN_IF_ERROR(_commit_current_writer(true, false));
