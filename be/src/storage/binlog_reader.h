@@ -77,10 +77,6 @@ const std::string BINLOG_TIMESTAMP = "_binlog_timestamp";
 //  binlog_reader->next_version()
 //  binlog_reader->next_seq_id()
 //
-// Note that the binlog can only be read forward, and you can call seek() multiple
-// times to skip to read some binlog, but the seek position must be no less than
-// <binlog_reader->next_version(), binlog_reader->next_seq_id()> for each call
-//
 // TODO currently only support to read binlog from duplicate key table
 class BinlogReader final {
 public:

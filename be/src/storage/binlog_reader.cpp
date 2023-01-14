@@ -55,13 +55,6 @@ Status BinlogReader::init() {
 }
 
 Status BinlogReader::seek(int64_t version, int64_t seq_id) {
-    if (version < _next_version || (version == _next_version && seq_id > _next_seq_id)) {
-        return Status::InternalError(
-                strings::Substitute("Binlog can only be read forward, next position"
-                                    " <$0, $1>, seek to <$2, $3>",
-                                    _next_version, _next_seq_id, version, seq_id));
-    }
-
     if (_next_version == version && _next_seq_id == seq_id) {
         return Status::OK();
     }
