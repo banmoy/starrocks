@@ -392,6 +392,7 @@ Status Tablet::prepare_binlog(const RowsetSharedPtr& rowset, int64_t version) {
     Status st = rowset->load();
     if (!st.ok()) {
         _binlog_manager->abort(version);
+        rowset->close();
         LOG(WARNING) << "Fail to load rowset for binlog, tablet:" << tablet_id() << " rowset:" << rowset->rowset_id()
                      << st;
         return Status::InternalError(fmt::format("fail to load rowset for binlog {}", rowset->rowset_id().to_string()));
@@ -399,6 +400,7 @@ Status Tablet::prepare_binlog(const RowsetSharedPtr& rowset, int64_t version) {
     st = _binlog_manager->append_rowset(rowset);
     if (!st.ok()) {
         _binlog_manager->abort(version);
+        rowset->close();
         LOG(WARNING) << "Fail to append rowset for binlog, tablet:" << tablet_id() << " rowset:" << rowset->rowset_id()
                      << st;
         return Status::InternalError(
@@ -414,9 +416,10 @@ void Tablet::publish_binlog(int64_t version) {
     }
 }
 
-void Tablet::abort_binlog(int64_t version) {
+void Tablet::abort_binlog(const RowsetSharedPtr& rowset, int64_t version) {
     if (_binlog_manager != nullptr && _binlog_manager->binlog_enable()) {
         _binlog_manager->abort(version);
+        rowset->close();
     }
 }
 
@@ -443,7 +446,7 @@ Status Tablet::add_inc_rowset(const RowsetSharedPtr& rowset, int64_t version) {
     auto st = RowsetMetaManager::save(data_dir()->get_meta(), tablet_uid(), rowset_meta_pb);
     if (!st.ok()) {
         if (contain_status.ok()) {
-            abort_binlog(version);
+            abort_binlog(rowset, version);
         }
 
         LOG(WARNING) << "Fail to save committed rowset. "
@@ -1405,8 +1408,7 @@ Status Tablet::set_binlog_config(const TBinlogConfig& binlog_config) {
 }
 
 bool Tablet::need_init_binlog() {
-    return keys_type() == DUP_KEYS && _binlog_manager != nullptr
-           && _binlog_manager->binlog_enable();
+    return keys_type() == DUP_KEYS && _binlog_manager != nullptr && _binlog_manager->binlog_enable();
 }
 
 Status Tablet::init_binlog() {

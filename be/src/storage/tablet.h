@@ -155,7 +155,7 @@ public:
     //              prepare_binlog
     Status prepare_binlog(const RowsetSharedPtr& rowset, int64_t version);
     void publish_binlog(int64_t version);
-    void abort_binlog(int64_t version);
+    void abort_binlog(const RowsetSharedPtr& rowset, int64_t version);
 
     Status add_inc_rowset(const RowsetSharedPtr& rowset, int64_t version);
     void delete_expired_inc_rowsets();
