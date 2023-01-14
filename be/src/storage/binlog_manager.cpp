@@ -426,4 +426,22 @@ void BinlogManager::_clear_store() {
     _total_rowset_disk_size = 0;
 }
 
+void BinlogManager::install_metas(std::vector<BinlogFileMetaPBSharedPtr>& metas,
+                                  std::unordered_map<RowsetId, RowsetSharedPtr, HashOfRowsetId>& rowsets) {
+    for (auto& meta : metas) {
+        int128_t lsn = BinlogUtil::get_lsn(meta->start_version(), meta->start_seq_id());
+        _binlog_file_metas[lsn] = meta;
+        _total_binlog_file_disk_size += meta->file_size();
+        for (auto& pb : meta->rowsets()) {
+            RowsetId id;
+            BinlogUtil::convert_pb_to_rowset_id(pb, &id);
+            _rowset_count_map[id] += 1;
+            if (_rowsets.count(id) == 0) {
+                _rowsets[id] = rowsets[id];
+                _total_rowset_disk_size += _rowsets[id]->data_disk_size();
+            }
+        }
+    }
+}
+
 } // namespace starrocks

@@ -184,6 +184,17 @@ public:
         return std::make_pair(meta->second->end_version(), meta->second->end_seq_id());
     }
 
+    // for testing
+    void install_metas(std::vector<BinlogFileMetaPBSharedPtr>& metas,
+                       std::unordered_map<RowsetId, RowsetSharedPtr, HashOfRowsetId>& rowsets);
+
+    // For testing
+    std::map<int128_t, BinlogFileMetaPBSharedPtr>& get_file_metas() { return _binlog_file_metas; }
+
+    std::unordered_map<RowsetId, int32_t, HashOfRowsetId>& get_rowset_count() { return _rowset_count_map; }
+
+    std::unordered_map<RowsetId, RowsetSharedPtr, HashOfRowsetId>& get_rowsets() { return _rowsets; }
+
 private:
     void _set_store_state(const Status& status);
     Status _check_store_state();

@@ -128,7 +128,6 @@ protected:
     VectorizedSchema _schema;
     int64_t _tablet_id = 100;
     std::string _binlog_file_dir = "binlog_reader_test";
-    std::shared_ptr<BinlogManager> _binlog_manager;
 };
 
 struct VersionInfo {
