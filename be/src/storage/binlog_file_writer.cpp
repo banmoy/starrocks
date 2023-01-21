@@ -25,10 +25,10 @@ const char* const k_binlog_magic_number = "BINLOG";
 const uint32_t k_binlog_magic_number_length = 6;
 const int32_t k_binlog_format_version = 1;
 
-BinlogFileWriter::BinlogFileWriter(int64_t file_id, std::string file_name, int32_t page_size,
+BinlogFileWriter::BinlogFileWriter(int64_t file_id, std::string file_path, int32_t page_size,
                                    CompressionTypePB compression_type)
         : _file_id(file_id),
-          _file_path(std::move(file_name)),
+          _file_path(std::move(file_path)),
           _max_page_size(page_size),
           _compression_type(compression_type),
           _writer_state(WAITING_INIT) {}
@@ -80,7 +80,47 @@ Status BinlogFileWriter::init() {
     _pending_page_context = std::make_unique<PendingPageContext>();
 
     _writer_state = WAITING_BEGIN;
-    LOG(INFO) << "Init binlog file writer, file id " << _file_id << ", file name " << _file_path;
+    LOG(INFO) << "Init binlog file writer, file path " << _file_path;
+    return Status::OK();
+}
+
+Status BinlogFileWriter::init(BinlogFileMetaPB* previous_meta) {
+    VLOG(3) << "Init an existed binlog writer: " << _file_path;
+    RETURN_IF_ERROR(_check_state(WAITING_INIT));
+
+    std::shared_ptr<FileSystem> fs;
+    ASSIGN_OR_RETURN(fs, FileSystem::CreateSharedFromString(_file_path))
+
+    // 1. try to truncate file first
+    ASSIGN_OR_RETURN(auto file_size, fs->get_file_size(_file_path));
+    if (previous_meta->file_size() < file_size) {
+        Status status = FileSystemUtil::resize_file(_file_path, previous_meta->file_size());
+        if (!status.ok()) {
+            LOG(WARNING) << "Failed to resize file when init, path: " << _file_path << ", current size " << file_size
+                         << ", target size " << previous_meta->file_size() << ", " << status;
+            return status;
+        }
+    }
+
+    // 2. open file
+    WritableFileOptions write_option;
+    write_option.mode = FileSystem::MUST_EXIST;
+    ASSIGN_OR_RETURN(_file, fs->new_writable_file(write_option, _file_path))
+
+    // 3. decide compression codec
+    RETURN_IF_ERROR(get_block_compression_codec(_compression_type, &_compress_codec));
+
+    // 4. init file meta and pending context
+    _file_meta = std::make_unique<BinlogFileMetaPB>();
+    _file_meta->CopyFrom(*previous_meta);
+    _pending_version_context = std::make_unique<PendingVersionContext>();
+    _pending_page_context = std::make_unique<PendingPageContext>();
+    for (auto rowset_id : _file_meta->rowsets()) {
+        _rowsets.emplace(rowset_id);
+    }
+    _writer_state = WAITING_BEGIN;
+
+    LOG(INFO) << "Init binlog file writer to the previous state, file path: " << _file_path;
     return Status::OK();
 }
 
@@ -282,9 +322,14 @@ Status BinlogFileWriter::reset(BinlogFileMetaPB* previous_meta) {
             << ", current file meta: " << BinlogUtil::file_meta_to_string(_file_meta.get())
             << ", previous file meta: " << BinlogUtil::file_meta_to_string(previous_meta);
     RETURN_IF_ERROR(_check_state(WAITING_BEGIN));
+    RETURN_IF_ERROR(_truncate_file(_file_meta->file_size()));
+
     _file_meta->Clear();
     _file_meta->CopyFrom(*previous_meta);
-    RETURN_IF_ERROR(_truncate_file(_file_meta->file_size()));
+    for (auto rowset_id : _file_meta->rowsets()) {
+        _rowsets.emplace(rowset_id);
+    }
+
     return Status::OK();
 }
 
@@ -479,6 +524,21 @@ void BinlogFileWriter::_reset_pending_context() {
     _pending_page_context->rowsets.clear();
     _pending_page_context->page_header.Clear();
     _pending_page_context->page_content.Clear();
+}
+
+StatusOr<std::shared_ptr<BinlogFileWriter>> BinlogFileWriter::reopen(int64_t file_id, const std::string& file_path,
+                                                                     int32_t page_size,
+                                                                     CompressionTypePB compression_type,
+                                                                     BinlogFileMetaPB* previous_meta) {
+    std::shared_ptr<BinlogFileWriter> writer =
+            std::make_shared<BinlogFileWriter>(file_id, file_path, page_size, compression_type);
+    Status status = writer->init(previous_meta);
+    if (!status.ok()) {
+        writer->close(false);
+        LOG(WARNING) << "Failed to reopen writer: " << file_path << ", " << status;
+        return status;
+    }
+    return writer;
 }
 
 } // namespace starrocks

@@ -916,4 +916,8 @@ CONF_String(rocksdb_cf_options_string, "block_based_table_factory={block_cache=1
 // limit local exchange buffer's memory size per driver
 CONF_Int64(local_exchange_buffer_mem_limit_per_driver, "134217728"); // 128MB
 
+// Max size of a binlog file. The default is 512MB.
+CONF_Int64(binlog_file_max_size, "536870912");
+// Max size of a binlog page. The default is 1MB.
+CONF_Int32(binlog_page_max_size, "1048576");
 } // namespace starrocks::config

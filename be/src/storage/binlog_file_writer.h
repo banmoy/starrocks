@@ -131,8 +131,15 @@ class BinlogFileWriter {
 public:
     BinlogFileWriter(int64_t file_id, std::string path, int32_t page_size, CompressionTypePB compression_type);
 
-    // Initialize the file writer.
+    // Initialize the writer as a newly created file.
     Status init();
+
+    // Initialize the writer as an already existed file, and reset the writer to
+    // the state described by the *previous_meta*. The meta can be a valid result
+    // for a previously successful ingestion. The binlog file maybe truncated to
+    // the previous size, and if init successfully, new data can be appended to the
+    // binlog file
+    Status init(BinlogFileMetaPB* previous_meta);
 
     // Begin to write binlog for a new version.
     Status begin(int64_t version, int64_t start_seq_id, int64_t change_event_timestamp_in_us);
@@ -181,6 +188,10 @@ public:
 
     bool closed() { return _writer_state == CLOSED; }
 
+    bool is_writing() { return _writer_state == WRITING; }
+
+    bool is_closed() { return _writer_state == CLOSED; }
+
     // Actual file size currently, including the data committed
     // and pending to commit
     int64_t file_size() { return _file->size(); }
@@ -190,6 +201,15 @@ public:
     std::string file_path() { return _file_path; }
 
     void copy_file_meta(BinlogFileMetaPB* new_file_meta) { new_file_meta->CopyFrom(*_file_meta.get()); }
+
+    // For testing
+    std::unordered_set<int64_t>& rowsets() { return _rowsets; }
+
+    // Reopen an existed binlog file to append data. The writer will be reset
+    // to the state described by *previous_meta*.
+    static StatusOr<std::shared_ptr<BinlogFileWriter>> reopen(int64_t file_id, const std::string& file_path,
+                                                              int32_t page_size, CompressionTypePB compression_type,
+                                                              BinlogFileMetaPB* previous_meta);
 
 private:
     Status _check_state(WriterState expect_state);
@@ -223,5 +243,7 @@ private:
     // context for the page pending to flush
     std::unique_ptr<PendingPageContext> _pending_page_context;
 };
+
+using BinlogFileWriterPtr = std::shared_ptr<BinlogFileWriter>;
 
 } // namespace starrocks

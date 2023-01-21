@@ -23,6 +23,8 @@
 
 namespace starrocks {
 
+using BinlogFileMetaPBPtr = std::shared_ptr<BinlogFileMetaPB>;
+
 class BinlogUtil {
 public:
     static std::string binlog_file_path(std::string& binlog_dir, int64_t file_id) {
