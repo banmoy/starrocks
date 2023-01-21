@@ -140,7 +140,7 @@ Status BinlogFileWriter::add_insert_range(const RowsetSegInfo& seg_info, int32_t
     // if the last and current log entries are in the same segment, no need to set file id.
     // When reading and iterating the page, we can get the file id from the last log entry
     if (page_context->last_segment_index != seg_info.seg_index) {
-        _set_file_id_pb(*(seg_info.rowset_id), seg_info.seg_index, entry_data->mutable_file_id());
+        _set_file_id_pb(seg_info.rowset_id, seg_info.seg_index, entry_data->mutable_file_id());
     } else {
         in_one_segment = true;
     }
@@ -154,7 +154,7 @@ Status BinlogFileWriter::add_insert_range(const RowsetSegInfo& seg_info, int32_t
 
     // only add rowset id for the first time
     if (UNLIKELY(page_context->last_segment_index == -1)) {
-        page_context->rowsets.emplace(*(seg_info.rowset_id));
+        page_context->rowsets.emplace(seg_info.rowset_id);
     }
     page_context->end_seq_id += num_rows;
     page_context->num_log_entries += 1;
@@ -176,13 +176,13 @@ Status BinlogFileWriter::add_update(const RowsetSegInfo& before_info, int32_t be
     UpdatePB* entry_data = log_entry->mutable_update_data();
 
     // set update before
-    _set_file_id_pb(*(before_info.rowset_id), before_info.seg_index, entry_data->mutable_before_file_id());
+    _set_file_id_pb(before_info.rowset_id, before_info.seg_index, entry_data->mutable_before_file_id());
     entry_data->set_before_row_id(before_row_id);
 
     // set update after
     bool in_one_segment = false;
     if (page_context->last_segment_index != after_info.seg_index) {
-        _set_file_id_pb(*(after_info.rowset_id), after_info.seg_index, entry_data->mutable_after_file_id());
+        _set_file_id_pb(after_info.rowset_id, after_info.seg_index, entry_data->mutable_after_file_id());
     } else {
         in_one_segment = true;
     }
@@ -192,9 +192,9 @@ Status BinlogFileWriter::add_update(const RowsetSegInfo& before_info, int32_t be
 
     // only add rowset id for the first time
     if (UNLIKELY(page_context->last_segment_index == -1)) {
-        page_context->rowsets.emplace(*(after_info.rowset_id));
+        page_context->rowsets.emplace(after_info.rowset_id);
     }
-    page_context->rowsets.emplace(*(before_info.rowset_id));
+    page_context->rowsets.emplace(before_info.rowset_id);
     page_context->end_seq_id += 2;
     page_context->num_log_entries += 1;
     page_context->last_segment_index = after_info.seg_index;
@@ -212,15 +212,15 @@ Status BinlogFileWriter::add_delete(const RowsetSegInfo& delete_info, int32_t ro
     LogEntryPB* log_entry = page_context->page_content.add_entries();
     log_entry->set_entry_type(DELETE_PB);
     DeletePB* entry_data = log_entry->mutable_delete_data();
-    _set_file_id_pb(*(delete_info.rowset_id), delete_info.seg_index, entry_data->mutable_file_id());
+    _set_file_id_pb(delete_info.rowset_id, delete_info.seg_index, entry_data->mutable_file_id());
     entry_data->set_row_id(row_id);
 
     page_context->end_seq_id += 1;
     page_context->num_log_entries += 1;
     // TODO reduce estimation cost
     page_context->estimated_page_size += log_entry->ByteSizeLong();
-    _pending_version_context->rowsets.emplace(*(delete_info.rowset_id));
-    page_context->rowsets.emplace(*(delete_info.rowset_id));
+    _pending_version_context->rowsets.emplace(delete_info.rowset_id);
+    page_context->rowsets.emplace(delete_info.rowset_id);
     return Status::OK();
 }
 
@@ -260,8 +260,7 @@ Status BinlogFileWriter::commit(bool end_of_version) {
     for (auto& rowset_id : version_context->rowsets) {
         auto pair = _rowsets.emplace(rowset_id);
         if (pair.second) {
-            RowsetIdPB* rowset_id_pb = file_meta->add_rowsets();
-            BinlogUtil::convert_rowset_id_to_pb(rowset_id, rowset_id_pb);
+            file_meta->add_rowsets(rowset_id);
         }
     }
     _reset_pending_context();
@@ -388,8 +387,7 @@ Status BinlogFileWriter::_append_page(bool end_of_version) {
     page_header.set_timestamp_in_us(_pending_version_context->change_event_timestamp_in_us);
     page_header.set_end_of_version(end_of_version);
     for (auto& rowset_id : _pending_page_context->rowsets) {
-        RowsetIdPB* rowset_id_pb = page_header.add_rowsets();
-        BinlogUtil::convert_rowset_id_to_pb(rowset_id, rowset_id_pb);
+        page_header.add_rowsets(rowset_id);
     }
 
     VLOG(3) << "Estimated page content size " << _pending_page_context->estimated_page_size

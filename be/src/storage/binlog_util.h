@@ -35,16 +35,6 @@ public:
 
     static int128_t get_lsn(int64_t version, int64_t seq_id) { return (((int128_t)version) << 64) | seq_id; }
 
-    static void convert_pb_to_rowset_id(const RowsetIdPB& pb, RowsetId* rowset_id) {
-        rowset_id->init(pb.hi(), pb.mi(), pb.lo());
-    }
-
-    static void convert_rowset_id_to_pb(const RowsetId& rowset_id, RowsetIdPB* pb) {
-        pb->set_hi(rowset_id.hi);
-        pb->set_mi(rowset_id.mi);
-        pb->set_lo(rowset_id.lo);
-    }
-
     static std::string file_meta_to_string(BinlogFileMetaPB* file_meta);
 
     static bool get_file_id_from_name(const std::string& file_name, int64_t* file_id);
