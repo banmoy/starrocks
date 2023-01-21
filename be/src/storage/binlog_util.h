@@ -16,16 +16,12 @@
 
 #include <re2/re2.h>
 
+#include "common/status.h"
 #include "gen_cpp/binlog.pb.h"
 #include "gutil/strings/substitute.h"
-#include "storage/olap_common.h"
-#include "storage/rowset/rowset.h"
 #include "storage/uint24.h"
 
 namespace starrocks {
-
-using RowsetVersionMap = std::unordered_map<Version, RowsetSharedPtr, HashOfVersion>;
-using RowsetIdMap = std::unordered_map<RowsetId, RowsetSharedPtr, HashOfRowsetId>;
 
 class BinlogUtil {
 public:

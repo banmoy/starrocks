@@ -197,22 +197,29 @@ TEST_F(BinlogFileTest, test_basic_write_read) {
     std::shared_ptr<BinlogFileMetaPB> file_meta = std::make_shared<BinlogFileMetaPB>();
     ASSERT_OK(file_writer->begin(1, 0, 1));
     ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(1, 0), 0, 100));
-    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(1, 1), 0, 50));
-    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(1, 2), 0, 96));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(1, 1), 0, 80));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(1, 2), 0, 60));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(1, 3), 0, 40));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(1, 4), 0, 20));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(1, 5), 0, 10));
+
     ASSERT_OK(file_writer->commit(true));
 
     expect_file_meta.set_start_version(1);
     expect_file_meta.set_start_seq_id(0);
     expect_file_meta.set_start_timestamp_in_us(1);
     expect_file_meta.set_end_version(1);
-    expect_file_meta.set_end_seq_id(245);
+    expect_file_meta.set_end_seq_id(309);
     expect_file_meta.set_end_timestamp_in_us(1);
     expect_file_meta.set_num_pages(2);
     expect_file_meta.set_file_size(_fs->get_file_size(file_path).value());
     expect_file_meta.add_rowsets(1);
     expect_entries.emplace_back(_build_insert_segment_log_entry(1, 1, 0, 0, 100, false, 1));
-    expect_entries.emplace_back(_build_insert_segment_log_entry(1, 1, 1, 100, 50, false, 1));
-    expect_entries.emplace_back(_build_insert_segment_log_entry(1, 1, 2, 150, 96, true, 1));
+    expect_entries.emplace_back(_build_insert_segment_log_entry(1, 1, 1, 100, 80, false, 1));
+    expect_entries.emplace_back(_build_insert_segment_log_entry(1, 1, 2, 180, 60, false, 1));
+    expect_entries.emplace_back(_build_insert_segment_log_entry(1, 1, 3, 240, 40, false, 1));
+    expect_entries.emplace_back(_build_insert_segment_log_entry(1, 1, 4, 280, 20, false, 1));
+    expect_entries.emplace_back(_build_insert_segment_log_entry(1, 1, 5, 30, 10, true, 1));
 
     file_writer->copy_file_meta(file_meta.get());
     verify_file_meta(&expect_file_meta, file_meta);
@@ -341,8 +348,11 @@ TEST_F(BinlogFileTest, test_basic_begin_commit_abort) {
     before_file_size = file_writer->file_size();
     ASSERT_OK(file_writer->begin(4, 0, 4));
     ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(4, 0), 0, 100));
-    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(4, 1), 0, 50));
-    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(4, 2), 0, 96));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(4, 1), 0, 80));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(4, 2), 0, 60));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(4, 3), 0, 40));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(4, 4), 0, 20));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(4, 5), 0, 10));
     ASSERT_LE(before_file_size, file_writer->file_size());
     ASSERT_OK(file_writer->abort());
 
