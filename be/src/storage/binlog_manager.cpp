@@ -94,7 +94,7 @@ void BinlogManager::delete_ingestion(int64_t version) {
     BinlogFileWriterPtr writer = BinlogBuilder::discard_binlog_build_result(version, *_build_result);
     {
         std::unique_lock meta_lock(_meta_lock);
-        _active_binlog_writer = std::move(writer);
+        _active_binlog_writer = writer;
         _next_file_id = next_file_id;
     }
     _ingestion_version = -1;
@@ -134,7 +134,7 @@ void BinlogManager::_apply_build_result(BinlogBuildResult* result) {
                 }
             }
 
-            _total_binlog_file_disk_size +=  meta->file_size() - old_file_meta->file_size();
+            _total_binlog_file_disk_size += meta->file_size() - old_file_meta->file_size();
         } else {
             _binlog_file_metas[lsn] = meta;
             for (auto rowset_id : meta->rowsets()) {
@@ -143,12 +143,12 @@ void BinlogManager::_apply_build_result(BinlogBuildResult* result) {
                 }
                 _rowset_count_map[rowset_id] += 1;
             }
-            _total_binlog_file_disk_size +=  meta->file_size();
+            _total_binlog_file_disk_size += meta->file_size();
         }
     }
 
     _next_file_id = result->next_file_id;
-    _active_binlog_writer = std::move(result->active_writer);
+    _active_binlog_writer = result->active_writer;
 }
 
 } // namespace starrocks

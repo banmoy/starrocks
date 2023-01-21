@@ -37,14 +37,13 @@ struct TestLogEntryInfo {
 
 struct DupKeyVersionInfo {
     DupKeyVersionInfo() = default;
-    DupKeyVersionInfo(int64_t ver, int32_t entries, int64_t rows_per_entry)
-            : version(ver),
-              num_entries(entries),
-              num_rows_per_entry(rows_per_entry) {}
+    DupKeyVersionInfo(int64_t ver, int32_t entries, int64_t rows_per_entry, int64_t ts)
+            : version(ver), num_entries(entries), num_rows_per_entry(rows_per_entry), timestamp(ts) {}
 
     int64_t version;
     int64_t num_entries;
     int64_t num_rows_per_entry;
+    int64_t timestamp;
 };
 
 // Iterate log entries from multiple binlog files
@@ -68,10 +67,9 @@ class BinlogTestBase : public testing::Test {
 protected:
     void estimate_log_entry_size(LogEntryTypePB entry_type, int32_t* estimated_size);
 
-    std::shared_ptr<TestLogEntryInfo> build_insert_segment_log_entry(int64_t version, int64_t rowset_id,
-                                                                     int seg_index, int64_t start_seq_id,
-                                                                     int64_t num_rows, bool end_of_version,
-                                                                     int64_t timestamp);
+    std::shared_ptr<TestLogEntryInfo> build_insert_segment_log_entry(int64_t version, int64_t rowset_id, int seg_index,
+                                                                     int64_t start_seq_id, int64_t num_rows,
+                                                                     bool end_of_version, int64_t timestamp);
 
     std::shared_ptr<TestLogEntryInfo> build_empty_rowset_log_entry(int64_t version, int64_t timestamp);
 
@@ -79,11 +77,12 @@ protected:
     void verify_file_id(FileIdPB* expect_file_id, FileIdPB* actual_file_id);
     void verify_log_entry(LogEntryPB* expect, LogEntryPB* actual);
     void verify_log_entry_info(const std::shared_ptr<TestLogEntryInfo>& expect, LogEntryInfo* actual);
-    void verify_file_meta(BinlogFileMetaPB* expect_file_meta, std::shared_ptr<BinlogFileMetaPB> actual_file_meta);
+    void verify_file_meta(BinlogFileMetaPB* expect_file_meta,
+                          const std::shared_ptr<BinlogFileMetaPB>& actual_file_meta);
     void verify_seek_and_next(const std::string& file_path, std::shared_ptr<BinlogFileMetaPB> file_meta,
                               int64_t seek_version, int64_t seek_seq_id,
                               std::vector<std::shared_ptr<TestLogEntryInfo>>& expected, int expected_first_entry_index);
-    void verify_dup_key_multiple_versions(std::vector<DupKeyVersionInfo>& versions, std::string& binlog_storage_path,
+    void verify_dup_key_multiple_versions(std::vector<DupKeyVersionInfo>& versions, std::string binlog_storage_path,
                                           std::vector<BinlogFileMetaPBPtr> file_metas);
 };
 

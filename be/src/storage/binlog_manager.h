@@ -143,6 +143,10 @@ public:
 
     std::unordered_map<int64_t, int32_t>& rowset_count_map() { return _rowset_count_map; }
 
+    int64_t total_binlog_file_disk_size() { return _total_binlog_file_disk_size; }
+
+    int64_t total_rowset_disk_size() { return _total_rowset_disk_size; }
+
 private:
     void _apply_build_result(BinlogBuildResult* result);
 

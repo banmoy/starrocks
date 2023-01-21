@@ -29,6 +29,7 @@ class ExpectDiscardResult;
 class BinlogBuilderTest : public BinlogTestBase {
 public:
     void SetUp() override {
+        srand(GetCurrentTimeMicros());
         CHECK_OK(fs::remove_all(_binlog_file_dir));
         CHECK_OK(fs::create_directories(_binlog_file_dir));
         ASSIGN_OR_ABORT(_fs, FileSystem::CreateSharedFromString(_binlog_file_dir));
@@ -73,12 +74,12 @@ void BinlogBuilderTest::test_write_one_version(ControlParams control_params, Exp
     BinlogFileWriterPtr active_writer;
     BinlogFileMetaPBPtr active_meta;
     if (control_params.start_with_active_writer) {
-        DupKeyVersionInfo version_1(1, 1, 100);
+        DupKeyVersionInfo version_1(1, 1, 100, 1);
         version_info_vec.push_back(version_1);
         std::string file_path = BinlogUtil::binlog_file_path(_binlog_file_dir, next_file_id);
         active_writer = std::make_shared<BinlogFileWriter>(next_file_id, file_path, max_page_size, LZ4_FRAME);
         ASSERT_OK(active_writer->init());
-        ASSERT_OK(active_writer->begin(version_1.version, 0, version_1.version));
+        ASSERT_OK(active_writer->begin(version_1.version, 0, version_1.timestamp));
         ASSERT_OK(active_writer->add_insert_range(RowsetSegInfo(1, 0), 0, version_1.num_rows_per_entry));
         ASSERT_OK(active_writer->commit(true));
         active_meta = std::make_shared<BinlogFileMetaPB>();
@@ -111,7 +112,7 @@ void BinlogBuilderTest::test_write_one_version(ControlParams control_params, Exp
         param->max_file_size = 1;
     }
     ASSERT_OK(builder->commit(result.get()));
-    version_info_vec.push_back({2, num_entries, 100});
+    version_info_vec.push_back({2, num_entries, 100, 2});
 
     ASSERT_EQ(param.get(), result->params.get());
     if (expect_result.num_files > 0) {
@@ -186,7 +187,7 @@ void BinlogBuilderTest::test_abort_one_version(int32_t num_files, bool start_wit
     BinlogFileWriterPtr active_writer;
     BinlogFileMetaPBPtr active_meta;
     if (start_with_active_writer) {
-        DupKeyVersionInfo version_1(1, 1, 100);
+        DupKeyVersionInfo version_1(1, 1, 100, 1);
         version_info_vec.push_back(version_1);
         std::string file_path = BinlogUtil::binlog_file_path(_binlog_file_dir, next_file_id);
         active_writer = std::make_shared<BinlogFileWriter>(next_file_id, file_path, max_page_size, LZ4_FRAME);
@@ -214,14 +215,14 @@ void BinlogBuilderTest::test_abort_one_version(int32_t num_files, bool start_wit
         for (int i = 0; i < 10; i++) {
             ASSERT_OK(builder->add_insert_range(RowsetSegInfo(2, i), 0, 100));
         }
-        version_info_vec.push_back({2, 10, 100});
+        version_info_vec.push_back({2, 10, 100, 2});
     } else {
         int num_entries = 0;
         while (builder->num_files() < num_files) {
             ASSERT_OK(builder->add_insert_range(RowsetSegInfo(2, num_entries), 0, 100));
             num_entries += 1;
         }
-        version_info_vec.push_back({2, 10, num_entries});
+        version_info_vec.push_back({2, 10, num_entries, 2});
     }
     builder->abort(result.get());
     ASSERT_EQ(param.get(), result->params.get());
@@ -299,7 +300,7 @@ TEST_F(BinlogBuilderTest, test_random_commit_abort_multiple_versions) {
         } else {
             ASSERT_OK(builder->commit(result.get()));
         }
-        version_info_vec.push_back({version, num_entries, 100});
+        version_info_vec.push_back({version, num_entries, 100, version});
         for (auto& meta : result->metas) {
             metas[meta->id()] = meta;
         }
@@ -329,10 +330,10 @@ void BinlogBuilderTest::test_discard_binlog_build_result(int64_t version, Binlog
         verify_dup_key_multiple_versions(expect_result.active_version_info_vect, _binlog_file_dir, {file_meta});
 
         std::vector<DupKeyVersionInfo> new_version_info_vect(expect_result.active_version_info_vect);
-        DupKeyVersionInfo new_version(1000, 1, 100);
+        DupKeyVersionInfo new_version(1000, 1, 100, 1000);
         new_version_info_vect.push_back(new_version);
         ASSERT_OK(active_writer->init());
-        ASSERT_OK(active_writer->begin(new_version.version, 0, new_version.version));
+        ASSERT_OK(active_writer->begin(new_version.version, 0, new_version.timestamp));
         ASSERT_OK(active_writer->add_insert_range(RowsetSegInfo(new_version.version, 0), 0,
                                                   new_version.num_rows_per_entry));
         ASSERT_OK(active_writer->commit(true));
@@ -388,7 +389,7 @@ TEST_F(BinlogBuilderTest, test_discard_result_with_active_writer) {
     param->compression_type = LZ4_FRAME;
     param->start_file_id = 1;
 
-    DupKeyVersionInfo version_info(1, 1, 100);
+    DupKeyVersionInfo version_info(1, 1, 100, 1);
     BinlogFileWriterPtr active_writer = std::make_shared<BinlogFileWriter>(
             param->start_file_id, BinlogUtil::binlog_file_path(_binlog_file_dir, param->start_file_id),
             param->max_file_size, param->compression_type);
@@ -420,7 +421,5 @@ TEST_F(BinlogBuilderTest, test_discard_result_with_active_writer) {
 
     test_discard_binlog_build_result(2, result, expect_result);
 }
-
-TEST_F(BinlogBuilderTest, test_build_duplicate_key) {}
 
 } // namespace starrocks

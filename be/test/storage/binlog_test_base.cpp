@@ -140,7 +140,7 @@ void BinlogTestBase::verify_log_entry_info(const std::shared_ptr<TestLogEntryInf
 }
 
 void BinlogTestBase::verify_file_meta(BinlogFileMetaPB* expect_file_meta,
-                                      std::shared_ptr<BinlogFileMetaPB> actual_file_meta) {
+                                      const std::shared_ptr<BinlogFileMetaPB>& actual_file_meta) {
     ASSERT_EQ(expect_file_meta->id(), actual_file_meta->id());
     ASSERT_EQ(expect_file_meta->start_version(), actual_file_meta->start_version());
     ASSERT_EQ(expect_file_meta->start_seq_id(), actual_file_meta->start_seq_id());
@@ -164,7 +164,7 @@ void BinlogTestBase::verify_file_meta(BinlogFileMetaPB* expect_file_meta,
     ASSERT_TRUE(rowset_set.empty());
 }
 
-void BinlogTestBase::verify_seek_and_next(const std::string& file_path, std::shared_ptr<BinlogFileMetaPB> file_meta,
+void BinlogTestBase::verify_seek_and_next(const std::string& file_path, const std::shared_ptr<BinlogFileMetaPB>& file_meta,
                                           int64_t seek_version, int64_t seek_seq_id,
                                           std::vector<std::shared_ptr<TestLogEntryInfo>>& expected,
                                           int expected_first_entry_index) {
@@ -182,19 +182,17 @@ void BinlogTestBase::verify_seek_and_next(const std::string& file_path, std::sha
 }
 
 void BinlogTestBase::verify_dup_key_multiple_versions(std::vector<DupKeyVersionInfo>& versions,
-                                                      std::string& binlog_storage_path,
+                                                      std::string binlog_storage_path,
                                                       std::vector<BinlogFileMetaPBPtr> file_metas) {
     std::shared_ptr<BinlogFileMergeReader> reader =
             std::make_shared<BinlogFileMergeReader>(binlog_storage_path, file_metas);
     Status st = reader->seek(versions[0].version, 0);
     for (auto& version_info : versions) {
         int64_t version = version_info.version;
-        RowsetId rowset_id;
-        rowset_id.init(2, version_info.version, 2, 3);
         std::shared_ptr<TestLogEntryInfo> expect_entry;
         if (version_info.num_entries == 0) {
             ASSERT_TRUE(st.ok());
-            expect_entry = build_empty_rowset_log_entry(version, version);
+            expect_entry = build_empty_rowset_log_entry(version, version_info.timestamp);
             LogEntryInfo* actual_entry = reader->log_entry();
             verify_log_entry_info(expect_entry, actual_entry);
             st = reader->next();
@@ -204,7 +202,7 @@ void BinlogTestBase::verify_dup_key_multiple_versions(std::vector<DupKeyVersionI
                 ASSERT_TRUE(st.ok());
                 bool end_of_version = (n + 1) == version_info.num_entries;
                 expect_entry = build_insert_segment_log_entry(version, version, n, start_seq_id,
-                                                              version_info.num_rows_per_entry, end_of_version, version);
+                                          version_info.num_rows_per_entry, end_of_version, version_info.timestamp);
                 LogEntryInfo* actual_entry = reader->log_entry();
                 verify_log_entry_info(expect_entry, actual_entry);
                 st = reader->next();
