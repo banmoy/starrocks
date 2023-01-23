@@ -313,7 +313,6 @@ Status BinlogBuilder::build_duplicate_key(int64_t version, const RowsetSharedPtr
     if (rowset->num_rows() == 0) {
         status = builder->add_empty();
     } else {
-        RowsetId rowset_id = rowset->rowset_id();
         RowsetSegInfo seg_info(version, 0);
         std::vector<SegmentSharedPtr>& segments = rowset->segments();
         for (int32_t seg_index = 0; seg_index < rowset->num_segments(); seg_index++) {
