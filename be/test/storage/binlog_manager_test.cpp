@@ -327,8 +327,6 @@ TEST_F(BinlogManagerTest, test_ingestion_delete) {
     std::shared_ptr<MockRowsetFetcher> rowset_fetcher;
     std::shared_ptr<BinlogManager> binlog_manager = std::make_shared<BinlogManager>(
             _binlog_file_dir, max_file_size, max_page_size, compress_type, rowset_fetcher);
-    LsnMap& lsn_map = binlog_manager->file_metas();
-    RowsetCountMap& rowset_count_map = binlog_manager->rowset_count_map();
     std::map<int64_t, BinlogFileMetaPBPtr> expect_file_metas;
     std::unordered_map<int64_t, std::unordered_set<int64_t>> version_to_file_ids;
     RowsetSharedPtr mock_rowset;
@@ -355,7 +353,6 @@ TEST_F(BinlogManagerTest, test_ingestion_delete) {
         expect_file_metas[file_id] = file_meta;
         version_to_file_ids[version_1].emplace(file_meta->id());
     }
-    int64_t file_id_1 = result_1->next_file_id - 1;
     binlog_manager->precommit_ingestion(version_1, result_1);
     ASSERT_EQ(result_1.get(), binlog_manager->build_result());
     binlog_manager->commit_ingestion(version_1);

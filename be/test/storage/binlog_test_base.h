@@ -79,7 +79,7 @@ protected:
     void verify_log_entry_info(const std::shared_ptr<TestLogEntryInfo>& expect, LogEntryInfo* actual);
     void verify_file_meta(BinlogFileMetaPB* expect_file_meta,
                           const std::shared_ptr<BinlogFileMetaPB>& actual_file_meta);
-    void verify_seek_and_next(const std::string& file_path, std::shared_ptr<BinlogFileMetaPB> file_meta,
+    void verify_seek_and_next(const std::string& file_path, const std::shared_ptr<BinlogFileMetaPB>& file_meta,
                               int64_t seek_version, int64_t seek_seq_id,
                               std::vector<std::shared_ptr<TestLogEntryInfo>>& expected, int expected_first_entry_index);
     void verify_dup_key_multiple_versions(std::vector<DupKeyVersionInfo>& versions, std::string binlog_storage_path,

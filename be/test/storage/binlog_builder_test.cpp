@@ -239,7 +239,7 @@ void BinlogBuilderTest::test_abort_one_version(int32_t num_files, bool start_wit
         first_delete_id = next_file_id;
     }
 
-    for (int64_t id = next_file_id; id < result->next_file_id; id++) {
+    for (int64_t id = first_delete_id; id < result->next_file_id; id++) {
         std::string path = BinlogUtil::binlog_file_path(_binlog_file_dir, id);
         ASSERT_TRUE(_fs->path_exists(path).is_not_found());
     }
