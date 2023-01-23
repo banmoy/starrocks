@@ -80,7 +80,7 @@ TEST_F(BinlogFileTest, test_basic_write_read) {
     expect_entries.emplace_back(build_insert_segment_log_entry(1, 1, 2, 180, 60, false, 1));
     expect_entries.emplace_back(build_insert_segment_log_entry(1, 1, 3, 240, 40, false, 1));
     expect_entries.emplace_back(build_insert_segment_log_entry(1, 1, 4, 280, 20, false, 1));
-    expect_entries.emplace_back(build_insert_segment_log_entry(1, 1, 5, 30, 10, true, 1));
+    expect_entries.emplace_back(build_insert_segment_log_entry(1, 1, 5, 300, 10, true, 1));
 
     file_writer->copy_file_meta(file_meta.get());
     verify_file_meta(&expect_file_meta, file_meta);
@@ -139,19 +139,20 @@ TEST_F(BinlogFileTest, test_basic_write_read) {
     verify_seek_and_next(file_path, file_meta, 1, 50, expect_entries, 0);
     verify_seek_and_next(file_path, file_meta, 1, 99, expect_entries, 0);
     verify_seek_and_next(file_path, file_meta, 1, 100, expect_entries, 1);
-    verify_seek_and_next(file_path, file_meta, 1, 130, expect_entries, 1);
-    verify_seek_and_next(file_path, file_meta, 1, 149, expect_entries, 1);
-    verify_seek_and_next(file_path, file_meta, 1, 150, expect_entries, 2);
-    verify_seek_and_next(file_path, file_meta, 1, 245, expect_entries, 2);
-    verify_seek_and_next(file_path, file_meta, 2, 0, expect_entries, 3);
-    verify_seek_and_next(file_path, file_meta, 2, 25, expect_entries, 3);
-    verify_seek_and_next(file_path, file_meta, 2, 31, expect_entries, 3);
-    verify_seek_and_next(file_path, file_meta, 3, 0, expect_entries, 4);
-    verify_seek_and_next(file_path, file_meta, 4, 0, expect_entries, 5);
-    verify_seek_and_next(file_path, file_meta, 4, 25, expect_entries, 5);
-    verify_seek_and_next(file_path, file_meta, 4, 32, expect_entries, 5);
-    verify_seek_and_next(file_path, file_meta, 4, 40, expect_entries, 6);
-    verify_seek_and_next(file_path, file_meta, 4, 59, expect_entries, 6);
+    verify_seek_and_next(file_path, file_meta, 1, 150, expect_entries, 1);
+    verify_seek_and_next(file_path, file_meta, 1, 179, expect_entries, 1);
+    verify_seek_and_next(file_path, file_meta, 1, 180, expect_entries, 2);
+    verify_seek_and_next(file_path, file_meta, 1, 200, expect_entries, 2);
+    verify_seek_and_next(file_path, file_meta, 1, 239, expect_entries, 2);
+    verify_seek_and_next(file_path, file_meta, 2, 0, expect_entries, 6);
+    verify_seek_and_next(file_path, file_meta, 2, 25, expect_entries, 6);
+    verify_seek_and_next(file_path, file_meta, 2, 31, expect_entries, 6);
+    verify_seek_and_next(file_path, file_meta, 3, 0, expect_entries, 7);
+    verify_seek_and_next(file_path, file_meta, 4, 0, expect_entries, 8);
+    verify_seek_and_next(file_path, file_meta, 4, 25, expect_entries, 8);
+    verify_seek_and_next(file_path, file_meta, 4, 32, expect_entries, 8);
+    verify_seek_and_next(file_path, file_meta, 4, 40, expect_entries, 9);
+    verify_seek_and_next(file_path, file_meta, 4, 59, expect_entries, 9);
 }
 
 TEST_F(BinlogFileTest, test_basic_begin_commit_abort) {
@@ -222,20 +223,26 @@ TEST_F(BinlogFileTest, test_basic_begin_commit_abort) {
 
     // write binlog successfully
     ASSERT_OK(file_writer->begin(5, 0, 5));
-    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(5, 0), 0, 40));
-    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(5, 1), 0, 20));
-    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(5, 2), 0, 30));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(5, 0), 0, 60));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(5, 1), 0, 50));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(5, 2), 0, 40));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(5, 3), 0, 30));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(5, 4), 0, 20));
+    ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(5, 5), 0, 10));
     ASSERT_OK(file_writer->commit(false));
 
     expect_file_meta.set_end_version(5);
-    expect_file_meta.set_end_seq_id(89);
+    expect_file_meta.set_end_seq_id(209);
     expect_file_meta.set_end_timestamp_in_us(5);
     expect_file_meta.set_num_pages(3);
     expect_file_meta.set_file_size(_fs->get_file_size(file_path).value());
     expect_file_meta.add_rowsets(5);
-    expect_entries.emplace_back(build_insert_segment_log_entry(5, 5, 0, 0, 40, false, 5));
-    expect_entries.emplace_back(build_insert_segment_log_entry(5, 5, 1, 40, 20, false, 5));
-    expect_entries.emplace_back(build_insert_segment_log_entry(5, 5, 2, 60, 30, false, 5));
+    expect_entries.emplace_back(build_insert_segment_log_entry(5, 5, 0, 0, 60, false, 5));
+    expect_entries.emplace_back(build_insert_segment_log_entry(5, 5, 1, 60, 50, false, 5));
+    expect_entries.emplace_back(build_insert_segment_log_entry(5, 5, 2, 110, 40, false, 5));
+    expect_entries.emplace_back(build_insert_segment_log_entry(5, 5, 3, 150, 30, false, 5));
+    expect_entries.emplace_back(build_insert_segment_log_entry(5, 5, 4, 180, 20, false, 5));
+    expect_entries.emplace_back(build_insert_segment_log_entry(5, 5, 5, 200, 10, false, 5));
 
     // test begin without commit/abort
     ASSERT_OK(file_writer->begin(6, 0, 6));
@@ -276,14 +283,16 @@ void BinlogFileTest::test_reset_and_reopen(bool is_reset) {
     ASSERT_LE(file_meta_1->file_size(), file_meta_2->file_size());
     expect_entries.emplace_back(build_insert_segment_log_entry(2, 2, 0, 0, 32, true, 2));
 
-    ASSERT_OK(file_writer->close(true));
     verify_seek_and_next(file_path, file_meta_2, 1, 0, expect_entries, 0);
 
     // 2. reset/reopen the writer, and fallback to version 1
     if (is_reset) {
         ASSERT_OK(file_writer->reset(file_meta_1.get()));
     } else {
-        ASSIGN_OR_ABORT(file_writer, BinlogFileWriter::reopen(1, file_path, 50, LZ4_FRAME, file_meta_1.get()));
+	ASSERT_OK(file_writer->close(true));
+	auto status_or = BinlogFileWriter::reopen(1, file_path, 50, LZ4_FRAME, file_meta_1.get());
+        ASSERT_OK(status_or.status());
+        file_writer = status_or.value();
     }
     ASSERT_EQ(file_meta_1->file_size(), _fs->get_file_size(file_path).value());
     std::unordered_set<int64_t>& fallback_rowsets = file_writer->rowsets();
@@ -295,6 +304,7 @@ void BinlogFileTest::test_reset_and_reopen(bool is_reset) {
     verify_seek_and_next(file_path, file_meta_1, 1, 0, expect_entries, 0);
 
     // 3. append new version 3
+    ASSERT_OK(file_writer->begin(3, 0, 3));
     ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(3, 0), 0, 40));
     ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(3, 1), 0, 20));
     ASSERT_OK(file_writer->add_insert_range(RowsetSegInfo(3, 2), 0, 30));
@@ -338,9 +348,10 @@ TEST_F(BinlogFileTest, test_random_write_read) {
         // there is 1/20 to generate empty version
         version_info.num_entries = (std::rand() % 20 == 0) ? 0 : (std::rand() % avg_entries_per_version * 2 + 1);
         version_info.num_rows_per_entry = std::rand() % 100 + 1;
+        version_info.timestamp = version_info.version;
         versions.push_back(version_info);
-        ASSERT_OK(file_writer->begin(version_info.version, 0, version_info.version));
-        if (version_info.num_entries == 0) {
+        ASSERT_OK(file_writer->begin(version_info.version, 0, version_info.timestamp));
+	if (version_info.num_entries == 0) {
             ASSERT_OK(file_writer->add_empty());
         } else {
             for (int32_t n = 0; n < version_info.num_entries; n++) {
@@ -381,8 +392,9 @@ TEST_F(BinlogFileTest, test_random_begin_commit_abort) {
         int32_t num_pages = std::rand() % 5;
         version_info.num_entries = num_pages * num_log_entries_per_page;
         version_info.num_rows_per_entry = std::rand() % 100 + 1;
-        ASSERT_OK(file_writer->begin(version_info.version, 0, version_info.version));
-        if (version_info.num_entries == 0) {
+	version_info.timestamp = version_info.version;
+        ASSERT_OK(file_writer->begin(version_info.version, 0, version_info.timestamp));        
+	if (version_info.num_entries == 0) {
             ASSERT_OK(file_writer->add_empty());
         } else {
             for (int32_t n = 0; n < version_info.num_entries; n++) {

@@ -322,10 +322,11 @@ Status BinlogFileWriter::reset(BinlogFileMetaPB* previous_meta) {
             << ", current file meta: " << BinlogUtil::file_meta_to_string(_file_meta.get())
             << ", previous file meta: " << BinlogUtil::file_meta_to_string(previous_meta);
     RETURN_IF_ERROR(_check_state(WAITING_BEGIN));
-    RETURN_IF_ERROR(_truncate_file(_file_meta->file_size()));
+    RETURN_IF_ERROR(_truncate_file(previous_meta->file_size()));
 
     _file_meta->Clear();
     _file_meta->CopyFrom(*previous_meta);
+    _rowsets.clear();
     for (auto rowset_id : _file_meta->rowsets()) {
         _rowsets.emplace(rowset_id);
     }
@@ -498,11 +499,10 @@ Status BinlogFileWriter::_truncate_file(int64_t file_size) {
         return Status::OK();
     }
 
-    Status status = FileSystemUtil::resize_file(_file_path, _file_meta->file_size());
+    Status status = FileSystemUtil::resize_file(_file_path, file_size);
     if (!status.ok()) {
-        LOG(WARNING) << "Failed to resize file, version " << _pending_version_context->version << ", file id "
-                     << _file_id << ", file name " << _file_path << ", current size " << _file->size()
-                     << ", target size " << _file_meta->file_size() << ", " << status;
+        LOG(WARNING) << "Failed to resize file, file id: " << _file_id << ", file path: " << _file_path
+                     << ", current size: " << _file->size() << ", target size: " << file_size << ", " << status;
         return status;
     }
 
