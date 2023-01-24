@@ -118,8 +118,6 @@ void BinlogManager::_apply_build_result(BinlogBuildResult* result) {
         bool override_meta = it != _binlog_file_metas.end();
         if (override_meta) {
             BinlogFileMetaPBPtr& old_file_meta = it->second;
-            _binlog_file_metas[lsn] = meta;
-
             std::unordered_set<int64_t> old_rowsets;
             for (auto rowset_id : old_file_meta->rowsets()) {
                 old_rowsets.emplace(rowset_id);
@@ -135,6 +133,7 @@ void BinlogManager::_apply_build_result(BinlogBuildResult* result) {
             }
 
             _total_binlog_file_disk_size += meta->file_size() - old_file_meta->file_size();
+            _binlog_file_metas[lsn] = meta;
         } else {
             _binlog_file_metas[lsn] = meta;
             for (auto rowset_id : meta->rowsets()) {
