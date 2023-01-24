@@ -63,7 +63,7 @@ void BinlogBuilder::abort(BinlogBuildResult* result) {
     if (!_new_files.empty()) {
         _close_current_writer();
         Status st = BinlogBuilder::delete_binlog_files(_new_files);
-        fail_delete_new_files = st.ok();
+        fail_delete_new_files = !st.ok();
     } else if (_current_writer != nullptr) {
         // current writer must be from _params.active_writer
         DCHECK_EQ(_params->active_file_meta->id(), _current_writer->file_id());
@@ -241,7 +241,7 @@ Status BinlogBuilder::delete_binlog_files(std::vector<std::string>& file_paths) 
 
 BinlogFileWriterPtr BinlogBuilder::discard_binlog_build_result(int64_t version, BinlogBuildResult& result) {
     BinlogBuilderParams* params = result.params.get();
-    BinlogFileWriter* prev_active_writer = result.active_writer.get();
+    BinlogFileWriter* prev_active_writer = params->active_file_writer.get();
     BinlogFileWriter* current_active_writer = result.active_writer.get();
 
     bool prev_writer_still_active = prev_active_writer != nullptr && current_active_writer != nullptr &&

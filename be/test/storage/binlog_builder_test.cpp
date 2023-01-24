@@ -101,7 +101,7 @@ void BinlogBuilderTest::test_write_one_version(ControlParams control_params, Exp
     int32_t num_entries = 0;
     while (num_entries < control_params.max_num_entries) {
         if (builder->num_files() == control_params.max_num_files &&
-            builder->current_write_file_size() > max_file_size) {
+            builder->current_write_file_size() > max_file_size - 2 * max_page_size) {
             break;
         }
         ASSERT_OK(builder->add_insert_range(RowsetSegInfo(2, num_entries), 0, 100));
@@ -115,9 +115,8 @@ void BinlogBuilderTest::test_write_one_version(ControlParams control_params, Exp
     version_info_vec.push_back({2, num_entries, 100, 2});
 
     ASSERT_EQ(param.get(), result->params.get());
-    if (expect_result.num_files > 0) {
-        ASSERT_EQ(next_file_id + expect_result.num_files, result->next_file_id);
-    }
+    int64_t start_file_id = control_params.start_with_active_writer ? next_file_id - 1 : next_file_id;
+    ASSERT_EQ(start_file_id + expect_result.num_files, result->next_file_id);
 
     if (expect_result.result_with_active_writer) {
         ASSERT_TRUE(result->active_writer != nullptr);
@@ -125,14 +124,12 @@ void BinlogBuilderTest::test_write_one_version(ControlParams control_params, Exp
         ASSERT_TRUE(result->active_writer == nullptr);
     }
 
-    if (expect_result.num_files > 0) {
-        ASSERT_EQ(expect_result.num_files, result->metas.size());
-    }
+    ASSERT_EQ(expect_result.num_files, result->metas.size());
 
     // test file size limitation
     for (int i = 0; i + 1 < result->metas.size(); i++) {
         auto& meta = result->metas[i];
-        ASSERT_EQ(next_file_id + i, meta->id());
+        ASSERT_EQ(start_file_id + i, meta->id());
         ASSERT_TRUE(max_file_size <= meta->file_size());
         // inaccurate upper limitation
         ASSERT_TRUE(meta->file_size() <= max_file_size + 2 * max_page_size);
@@ -141,12 +138,11 @@ void BinlogBuilderTest::test_write_one_version(ControlParams control_params, Exp
     verify_dup_key_multiple_versions(version_info_vec, _binlog_file_dir, result->metas);
 }
 
-// Test write a single version to a single file, and without start a
 TEST_F(BinlogBuilderTest, test_write_one_version_one_file) {
     ControlParams params{.max_num_entries = 2000,
                          .max_num_files = 1,
                          .start_with_active_writer = false,
-                         .force_to_reach_file_size_limit = false};
+                         .force_to_reach_file_size_limit = true};
     ExpectBuildResult result{.result_with_active_writer = false, .num_files = 1};
     test_write_one_version(params, result);
 }
@@ -155,26 +151,17 @@ TEST_F(BinlogBuilderTest, test_write_one_version_multiple_files) {
     ControlParams params{.max_num_entries = INT32_MAX,
                          .max_num_files = 10,
                          .start_with_active_writer = false,
-                         .force_to_reach_file_size_limit = false};
+                         .force_to_reach_file_size_limit = true};
     ExpectBuildResult result{.result_with_active_writer = false, .num_files = 10};
     test_write_one_version(params, result);
 }
 
-TEST_F(BinlogBuilderTest, test_start_with_active_writer) {
+TEST_F(BinlogBuilderTest, test_active_writer) {
     ControlParams params{.max_num_entries = INT32_MAX,
                          .max_num_files = 5,
                          .start_with_active_writer = true,
                          .force_to_reach_file_size_limit = false};
     ExpectBuildResult result{.result_with_active_writer = true, .num_files = 5};
-    test_write_one_version(params, result);
-}
-
-TEST_F(BinlogBuilderTest, test_result_with_active_writer) {
-    ControlParams params{.max_num_entries = INT32_MAX,
-                         .max_num_files = 5,
-                         .start_with_active_writer = true,
-                         .force_to_reach_file_size_limit = true};
-    ExpectBuildResult result{.result_with_active_writer = false, .num_files = 5};
     test_write_one_version(params, result);
 }
 
@@ -215,18 +202,16 @@ void BinlogBuilderTest::test_abort_one_version(int32_t num_files, bool start_wit
         for (int i = 0; i < 10; i++) {
             ASSERT_OK(builder->add_insert_range(RowsetSegInfo(2, i), 0, 100));
         }
-        version_info_vec.push_back({2, 10, 100, 2});
     } else {
         int num_entries = 0;
         while (builder->num_files() < num_files) {
             ASSERT_OK(builder->add_insert_range(RowsetSegInfo(2, num_entries), 0, 100));
             num_entries += 1;
         }
-        version_info_vec.push_back({2, 10, num_entries, 2});
     }
     builder->abort(result.get());
     ASSERT_EQ(param.get(), result->params.get());
-    ASSERT_TRUE(result->metas.size());
+    ASSERT_EQ(0, result->metas.size());
     int64_t first_delete_id;
     if (start_with_active_writer) {
         ASSERT_TRUE(result->active_writer != nullptr);
@@ -245,13 +230,19 @@ void BinlogBuilderTest::test_abort_one_version(int32_t num_files, bool start_wit
     }
 }
 
-TEST_F(BinlogBuilderTest, test_abort_one_version_one_file) {
+TEST_F(BinlogBuilderTest, test_abort_one_version_one_file_with_active_writer) {
     test_abort_one_version(1, true);
+}
+
+TEST_F(BinlogBuilderTest, test_abort_one_version_one_file_without_active_writer) {
     test_abort_one_version(1, false);
 }
 
-TEST_F(BinlogBuilderTest, test_abort_one_version_multiple_files) {
+TEST_F(BinlogBuilderTest, test_abort_one_version_multiple_files_with_active_writer) {
     test_abort_one_version(5, true);
+}
+
+TEST_F(BinlogBuilderTest, test_abort_one_version_multiple_files_without_active_writer) {
     test_abort_one_version(5, false);
 }
 
@@ -264,9 +255,6 @@ TEST_F(BinlogBuilderTest, test_random_commit_abort_multiple_versions) {
 
     BinlogBuildResultPtr last_result;
     for (int version = 1; version <= num_versions; version++) {
-        RowsetId rowset_id;
-        rowset_id.init(2, version, 2, 2);
-
         BinlogBuilderParamsPtr param = std::make_shared<BinlogBuilderParams>();
         param->binlog_storage_path = _binlog_file_dir;
         param->max_file_size = max_file_size;
@@ -276,31 +264,34 @@ TEST_F(BinlogBuilderTest, test_random_commit_abort_multiple_versions) {
             param->start_file_id = 1;
         } else {
             param->start_file_id = last_result->next_file_id;
-            param->active_file_writer = last_result->active_writer;
-            param->active_file_meta = std::make_shared<BinlogFileMetaPB>();
-            last_result->active_writer->copy_file_meta(param->active_file_meta.get());
+            if (last_result->active_writer != nullptr) {
+                param->active_file_writer = last_result->active_writer;
+                param->active_file_meta = std::make_shared<BinlogFileMetaPB>();
+                last_result->active_writer->copy_file_meta(param->active_file_meta.get());
+            }
         }
 
         std::shared_ptr<BinlogBuilder> builder = std::make_shared<BinlogBuilder>(version, version, param);
-        BinlogBuildResultPtr result = std::make_shared<BinlogBuildResult>();
-        bool is_abort = (std::rand() % 5) == 0;
         bool is_empty = (std::rand() % 50) == 0;
         int32_t num_entries = 0;
+        int32_t rows_per_entry = std::rand() % 100 + 1;
         if (is_empty) {
             builder->add_empty();
         } else {
             int32_t num_files = std::rand() % 5 + 1;
             while (num_entries < 5 || builder->num_files() < num_files) {
-                ASSERT_OK(builder->add_insert_range(RowsetSegInfo(version, num_entries), 0, 100));
+                ASSERT_OK(builder->add_insert_range(RowsetSegInfo(version, num_entries), 0, rows_per_entry));
                 num_entries += 1;
             }
         }
+        bool is_abort = (std::rand() % 5) == 0;
+        BinlogBuildResultPtr result = std::make_shared<BinlogBuildResult>();
         if (is_abort) {
             builder->abort(result.get());
         } else {
             ASSERT_OK(builder->commit(result.get()));
+            version_info_vec.push_back({version, num_entries, rows_per_entry, version});
         }
-        version_info_vec.push_back({version, num_entries, 100, version});
         for (auto& meta : result->metas) {
             metas[meta->id()] = meta;
         }
@@ -332,7 +323,6 @@ void BinlogBuilderTest::test_discard_binlog_build_result(int64_t version, Binlog
         std::vector<DupKeyVersionInfo> new_version_info_vect(expect_result.active_version_info_vect);
         DupKeyVersionInfo new_version(1000, 1, 100, 1000);
         new_version_info_vect.push_back(new_version);
-        ASSERT_OK(active_writer->init());
         ASSERT_OK(active_writer->begin(new_version.version, 0, new_version.timestamp));
         ASSERT_OK(active_writer->add_insert_range(RowsetSegInfo(new_version.version, 0), 0,
                                                   new_version.num_rows_per_entry));
@@ -367,11 +357,13 @@ TEST_F(BinlogBuilderTest, test_discard_result_without_active_writer) {
     result->next_file_id = 5;
     result->active_writer = nullptr;
     for (int64_t file_id = param->start_file_id; file_id < result->next_file_id; file_id++) {
-        BinlogFileMetaPBPtr file_meta = std::shared_ptr<BinlogFileMetaPB>();
+        BinlogFileMetaPBPtr file_meta = std::make_shared<BinlogFileMetaPB>();
         result->metas.push_back(file_meta);
         file_meta->set_id(file_id);
         std::string path = BinlogUtil::binlog_file_path(_binlog_file_dir, file_id);
-        (void)_fs->new_writable_file(path);
+        auto wf = _fs->new_writable_file(path);
+        ASSERT_OK(wf.status());
+        wf.value()->close();
         ASSERT_OK(_fs->path_exists(path));
     }
 
@@ -407,11 +399,13 @@ TEST_F(BinlogBuilderTest, test_discard_result_with_active_writer) {
     result->next_file_id = 5;
     result->active_writer = nullptr;
     for (int64_t file_id = param->start_file_id + 1; file_id < result->next_file_id; file_id++) {
-        BinlogFileMetaPBPtr file_meta = std::shared_ptr<BinlogFileMetaPB>();
+        BinlogFileMetaPBPtr file_meta = std::make_shared<BinlogFileMetaPB>();
         result->metas.push_back(file_meta);
         file_meta->set_id(file_id);
         std::string path = BinlogUtil::binlog_file_path(_binlog_file_dir, file_id);
-        (void)_fs->new_writable_file(path);
+        auto wf = _fs->new_writable_file(path);
+        ASSERT_OK(wf.status());
+        wf.value()->close();
         ASSERT_OK(_fs->path_exists(path));
     }
 

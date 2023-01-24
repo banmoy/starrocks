@@ -184,6 +184,9 @@ void BinlogTestBase::verify_seek_and_next(const std::string& file_path, const st
 void BinlogTestBase::verify_dup_key_multiple_versions(std::vector<DupKeyVersionInfo>& versions,
                                                       std::string binlog_storage_path,
                                                       std::vector<BinlogFileMetaPBPtr> file_metas) {
+    if (versions.empty()) {
+        ASSERT_TRUE(file_metas.empty());
+    }
     std::shared_ptr<BinlogFileMergeReader> reader =
             std::make_shared<BinlogFileMergeReader>(binlog_storage_path, file_metas);
     Status st = reader->seek(versions[0].version, 0);
