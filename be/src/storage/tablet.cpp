@@ -439,11 +439,14 @@ Status Tablet::add_inc_rowset(const RowsetSharedPtr& rowset, int64_t version) {
         return contain_status;
     }
 
-    commit_binlog(version);
     _tablet_meta->add_rs_meta(rowset->rowset_meta());
     _tablet_meta->add_inc_rs_meta(rowset->rowset_meta());
     _rs_version_map[rowset->version()] = rowset;
     _inc_rs_version_map[rowset->version()] = rowset;
+    // BinlogManager#commit_ingestion needs the data disk size of rowset, and will
+    // look up _inc_rs_version_map for the rowset, so should commit binlog after
+    // _inc_rs_version_map is updated
+    commit_binlog(version);
 
     _timestamped_version_tracker.add_version(rowset->version());
     if (config::enable_event_based_compaction_framework) {

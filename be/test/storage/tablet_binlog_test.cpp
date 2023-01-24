@@ -26,7 +26,7 @@
 
 namespace starrocks {
 
-class TabletTest : public BinlogTestBase {
+class TabletBinlogTest : public BinlogTestBase {
 public:
     TabletSharedPtr create_tablet(int64_t tablet_id, int32_t schema_hash) {
         TCreateTabletReq request;
@@ -91,7 +91,7 @@ public:
         }
         auto status_or = writer->build();
         ASSERT_OK(status_or.status());
-        rowset = &status_or.value();
+        *rowset = status_or.value();
     }
 
     void SetUp() override {
@@ -110,7 +110,7 @@ protected:
     TabletSharedPtr _tablet;
 };
 
-TEST_F(TabletTest, test_generate_binlog) {
+TEST_F(TabletBinlogTest, test_generate_binlog) {
     std::vector<DupKeyVersionInfo> version_infos;
     for (int32_t version = 2; version < 100; version++) {
         int32_t num_segments = std::rand() % 5;
@@ -137,4 +137,3 @@ TEST_F(TabletTest, test_generate_binlog) {
 }
 
 } // namespace starrocks
-
