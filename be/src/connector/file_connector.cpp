@@ -146,7 +146,9 @@ void FileDataSource::_init_counter() {
     _scanner_cast_chunk_timer = ADD_TIMER(p, "CastChunkTime");
     _scanner_materialize_timer = ADD_TIMER(p, "MaterializeTime");
     _scanner_init_chunk_timer = ADD_TIMER(p, "CreateChunkTime");
-    _scanner_file_reader_timer = ADD_TIMER(p->create_child("FilePRead", true, true), "FileReadTime");
+    RuntimeProfile* fpr = p->create_child("FilePRead", true, true);
+    _scanner_file_reader_timer = ADD_TIMER(fpr, "FileReadTime");
+    _scanner_pure_file_reader_timer = ADD_TIMER(fpr, "PureFileReadTime");
 }
 
 void FileDataSource::_update_counter() {
@@ -160,6 +162,7 @@ void FileDataSource::_update_counter() {
     COUNTER_UPDATE(_scanner_materialize_timer, _counter.materialize_ns);
     COUNTER_UPDATE(_scanner_init_chunk_timer, _counter.init_chunk_ns);
     COUNTER_UPDATE(_scanner_file_reader_timer, _counter.file_read_ns);
+    COUNTER_UPDATE(_scanner_pure_file_reader_timer, _counter.pure_file_read_ns);
 }
 
 } // namespace connector

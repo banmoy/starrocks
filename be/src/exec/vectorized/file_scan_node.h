@@ -102,6 +102,7 @@ private:
     RuntimeProfile::Counter* _scanner_materialize_timer = nullptr;
     RuntimeProfile::Counter* _scanner_init_chunk_timer = nullptr;
     RuntimeProfile::Counter* _scanner_file_reader_timer = nullptr;
+    RuntimeProfile::Counter* _scanner_pure_file_reader_timer = nullptr;
 };
 
 } // namespace vectorized

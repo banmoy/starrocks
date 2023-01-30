@@ -162,6 +162,10 @@ std::string StreamLoadContext::to_json() const {
     writer.Int64(stream_load_put_cost_nanos / 1000000);
     writer.Key("ReadDataTimeMs");
     writer.Int64(total_received_data_cost_nanos / 1000000);
+    writer.Key("NumberChunkDatas");
+    writer.Int64(number_chunk_data);
+    writer.Key("ReadChunkDataTimeMs");
+    writer.Int64((end_chunk_data_time_nanos - start_chunk_data_time_nanos) / 1000000);
     writer.Key("WriteDataTimeMs");
     writer.Int(write_data_cost_nanos / 1000000);
     writer.Key("CommitAndPublishTimeMs");

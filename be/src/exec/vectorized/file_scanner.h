@@ -29,6 +29,7 @@ struct ScannerCounter {
     int64_t init_chunk_ns = 0;
 
     int64_t file_read_ns = 0;
+    int64_t pure_file_read_ns = 0;
 };
 
 class FileScanner {

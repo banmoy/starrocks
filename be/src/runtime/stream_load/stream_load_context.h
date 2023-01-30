@@ -177,6 +177,10 @@ public:
     int64_t begin_txn_ts = 0;
     int64_t last_active_ts = 0;
 
+    int64_t number_chunk_data = 0;
+    int64_t start_chunk_data_time_nanos = 0;
+    int64_t end_chunk_data_time_nanos = 0;
+
     std::string error_url;
     // if label already be used, set existing job's status here
     // should be RUNNING or FINISHED

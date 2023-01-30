@@ -354,7 +354,14 @@ void StreamLoadAction::on_chunk_data(HttpRequest* req) {
         ctx->buffer->pos += remove_bytes;
         ctx->receive_bytes += remove_bytes;
     }
-    ctx->total_received_data_cost_nanos += (MonotonicNanos() - start_read_data_time);
+
+    int64_t end_read_data_time = MonotonicNanos();
+    ctx->total_received_data_cost_nanos += (end_read_data_time - start_read_data_time);
+    if (ctx->number_chunk_data == 0) {
+        ctx->start_chunk_data_time_nanos = start_read_data_time;
+    }
+    ctx->end_chunk_data_time_nanos = end_read_data_time;
+    ctx->number_chunk_data += 1;
 }
 
 void StreamLoadAction::free_handler_ctx(void* param) {
