@@ -17,7 +17,11 @@ Status CSVScanner::ScannerCSVReader::_fill_buffer() {
 
     DCHECK(_buff.free_space() > 0);
     Slice s(_buff.limit(), _buff.free_space());
-    auto res = _file->read(s.data, s.size);
+    StatusOr<int64_t> res;
+    {
+        SCOPED_RAW_TIMER(&_counter->pure_file_read_ns);
+        res = _file->read(s.data, s.size);
+    }
     // According to the specification of `FileSystem::read`, when reached the end of
     // a file, the returned status will be OK instead of EOF, but here we check
     // EOF also for safety.
