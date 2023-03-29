@@ -18,6 +18,8 @@ package com.starrocks.journal;
 import com.starrocks.common.io.DataOutputBuffer;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -26,7 +28,7 @@ import java.util.concurrent.TimeoutException;
 
 public class JournalTask implements Future<Boolean> {
     // serialized JournalEntity
-    private final DataOutputBuffer buffer;
+    private final List<DataOutputBuffer> buffers;
     // write result
     private Boolean isSucceed = null;
     // count down latch, the producer which called logEdit() will wait on it.
@@ -35,8 +37,8 @@ public class JournalTask implements Future<Boolean> {
     // JournalWrite will commit immediately if received a log with betterCommitBeforeTime > now
     protected long betterCommitBeforeTimeInNano;
 
-    public JournalTask(DataOutputBuffer buffer, long maxWaitIntervalMs) {
-        this.buffer = buffer;
+    public JournalTask(List<DataOutputBuffer> buffers, long maxWaitIntervalMs) {
+        this.buffers = buffers;
         this.latch = new CountDownLatch(1);
         if (maxWaitIntervalMs > 0) {
             this.betterCommitBeforeTimeInNano = System.nanoTime() + maxWaitIntervalMs * 1000000;
@@ -60,12 +62,19 @@ public class JournalTask implements Future<Boolean> {
     }
 
     public long estimatedSizeByte() {
+        long totalJournalIdSize = Long.BYTES * (long) buffers.size();
+        long totalBufferLen = buffers.stream().map(buffer -> (long) buffer.getLength())
+                .reduce(Long::sum).orElse(0L);
         // journal id + buffer
-        return Long.SIZE / 8 + (long) buffer.getLength();
+        return totalJournalIdSize + totalBufferLen;
     }
 
-    public DataOutputBuffer getBuffer() {
-        return buffer;
+    public int numJournals() {
+        return buffers.size();
+    }
+
+    public List<DataOutputBuffer> getBuffer() {
+        return Collections.unmodifiableList(buffers);
     }
 
     @Override

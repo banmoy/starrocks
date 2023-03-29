@@ -110,6 +110,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1035,19 +1036,25 @@ public class EditLog {
         }
     }
 
+    protected void logBatchEdit(List<Pair<Short, Writable>> logs) {
+        long start = System.nanoTime();
+        Future<Boolean> task = submitLog(logs, -1);
+        waitInfinity(start, task);
+    }
+
     /**
      * submit log to queue, wait for JournalWriter
      */
     protected void logEdit(short op, Writable writable) {
         long start = System.nanoTime();
-        Future<Boolean> task = submitLog(op, writable, -1);
+        Future<Boolean> task = submitLog(Collections.singletonList(Pair.create(op, writable)), -1);
         waitInfinity(start, task);
     }
 
     /**
      * submit log in queue and return immediately
      */
-    private Future<Boolean> submitLog(short op, Writable writable, long maxWaitIntervalMs) {
+    private Future<Boolean> submitLog(List<Pair<Short, Writable>> logs, long maxWaitIntervalMs) {
         DataOutputBuffer buffer = new DataOutputBuffer(OUTPUT_BUFFER_INIT_SIZE);
 
         // 1. serialized
@@ -1060,7 +1067,7 @@ public class EditLog {
             // The old implementation swallow exception like this
             LOG.info("failed to serialized: {}", e);
         }
-        JournalTask task = new JournalTask(buffer, maxWaitIntervalMs);
+        JournalTask task = new JournalTask(Collections.singletonList(buffer), maxWaitIntervalMs);
 
         /*
          * for historical reasons, logEdit is not allowed to raise Exception, which is really unreasonable to me.

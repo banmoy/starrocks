@@ -16,6 +16,7 @@
 package com.starrocks.journal;
 
 import com.starrocks.common.Config;
+import com.starrocks.common.io.DataOutputBuffer;
 import com.starrocks.common.util.Daemon;
 import com.starrocks.common.util.Util;
 import com.starrocks.metric.MetricRepo;
@@ -23,6 +24,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 
@@ -46,13 +48,7 @@ public class JournalWriter {
 
     // belows are variables that will reset every batch
     // store journal tasks of this batch
-    protected List<JournalTask> currentBatchTasks = new ArrayList<>();
-    // current journal task
-    private JournalTask currentJournal;
-    // batch start time
-    private long startTimeNano;
-    // batch size in bytes
-    private long uncommittedEstimatedBytes;
+    protected PendingCommitTasks pendingCommitTasks;
 
     /**
      * If this flag is set true, we will roll journal,
@@ -67,6 +63,7 @@ public class JournalWriter {
     public JournalWriter(Journal journal, BlockingQueue<JournalTask> journalQueue) {
         this.journal = journal;
         this.journalQueue = journalQueue;
+        this.pendingCommitTasks = new PendingCommitTasks();
     }
 
     /**
@@ -99,28 +96,30 @@ public class JournalWriter {
 
     protected void writeOneBatch() throws InterruptedException {
         // waiting if necessary until an element becomes available
-        currentJournal = journalQueue.take();
+        JournalTask journalTask = journalQueue.take();
         long nextJournalId = nextVisibleJournalId;
-        initBatch();
+        pendingCommitTasks.reset();
 
         try {
             this.journal.batchWriteBegin();
 
             while (true) {
-                journal.batchWriteAppend(nextJournalId, currentJournal.getBuffer());
-                currentBatchTasks.add(currentJournal);
-                nextJournalId += 1;
+                for (DataOutputBuffer buffer : journalTask.getBuffer()) {
+                    journal.batchWriteAppend(nextJournalId, buffer);
+                    nextJournalId += 1;
+                }
+                pendingCommitTasks.addJournalTask(journalTask);
 
                 if (shouldCommitNow()) {
                     break;
                 }
 
-                currentJournal = journalQueue.take();
+                journalTask = journalQueue.take();
             }
         } catch (JournalException e) {
             // abort current task
-            LOG.warn("failed to write batch, will abort current journal {} and commit", currentJournal, e);
-            abortJournalTask(currentJournal, e.getMessage());
+            LOG.warn("failed to write batch, will abort current journal {} and commit", journalTask, e);
+            abortJournalTask(journalTask, e.getMessage());
         } finally {
             try {
                 // commit
@@ -130,8 +129,7 @@ public class JournalWriter {
                 markCurrentBatchSucceed();
             } catch (JournalException e) {
                 // abort
-                LOG.warn("failed to commit batch, will abort current {} journals.",
-                        currentBatchTasks.size(), e);
+                LOG.warn("failed to commit batch, will abort current {} journals.", pendingCommitTasks.getNumJournals(), e);
                 try {
                     journal.batchWriteAbort();
                 } catch (JournalException e2) {
@@ -146,20 +144,14 @@ public class JournalWriter {
         updateBatchMetrics();
     }
 
-    private void initBatch() {
-        startTimeNano = System.nanoTime();
-        uncommittedEstimatedBytes = 0;
-        currentBatchTasks.clear();
-    }
-
     private void markCurrentBatchSucceed() {
-        for (JournalTask t : currentBatchTasks) {
+        for (JournalTask t : pendingCommitTasks.getJournalTasks()) {
             t.markSucceed();
         }
     }
 
     private void abortCurrentBatch(String errMsg) {
-        for (JournalTask t : currentBatchTasks) {
+        for (JournalTask t : pendingCommitTasks.getJournalTasks()) {
             abortJournalTask(t, errMsg);
         }
     }
@@ -180,32 +172,32 @@ public class JournalWriter {
 
     private boolean shouldCommitNow() {
         // 1. check if is an emergency journal
-        if (currentJournal.getBetterCommitBeforeTimeInNano() > 0) {
-            long delayNanos = System.nanoTime() - currentJournal.getBetterCommitBeforeTimeInNano();
+        if (pendingCommitTasks.getBetterCommitTimeInNano() > 0) {
+            long betterCommitTime = pendingCommitTasks.getBetterCommitTimeInNano();
+            long delayNanos = System.nanoTime() - betterCommitTime;
             if (delayNanos >= 0) {
                 long logTime = System.currentTimeMillis();
                 // avoid logging too many messages if triggered frequently
                 if (lastLogTimeForDelayTriggeredCommit + 500 < logTime) {
                     lastLogTimeForDelayTriggeredCommit = logTime;
                     LOG.warn("journal expect commit before {} is delayed {} nanos, will commit now",
-                            currentJournal.getBetterCommitBeforeTimeInNano(), delayNanos);
+                            betterCommitTime, delayNanos);
                 }
                 return true;
             }
         }
 
         // 2. check uncommitted journal by count
-        if (currentBatchTasks.size() >= Config.metadata_journal_max_batch_cnt) {
+        if (pendingCommitTasks.getNumJournals() >= Config.metadata_journal_max_batch_cnt) {
             LOG.warn("uncommitted journal {} >= {}, will commit now",
-                    currentBatchTasks.size(), Config.metadata_journal_max_batch_cnt);
+                    pendingCommitTasks.getNumJournals(), Config.metadata_journal_max_batch_cnt);
             return true;
         }
 
         // 3. check uncommitted journals by size
-        uncommittedEstimatedBytes += currentJournal.estimatedSizeByte();
-        if (uncommittedEstimatedBytes >= Config.metadata_journal_max_batch_size_mb * 1024 * 1024) {
+        if (pendingCommitTasks.getEstimatedBytes() >= Config.metadata_journal_max_batch_size_mb * 1024 * 1024) {
             LOG.warn("uncommitted estimated bytes {} >= {}MB, will commit now",
-                    uncommittedEstimatedBytes, Config.metadata_journal_max_batch_size_mb);
+                    pendingCommitTasks.getEstimatedBytes(), Config.metadata_journal_max_batch_size_mb);
             return true;
         }
 
@@ -218,15 +210,12 @@ public class JournalWriter {
      */
     private void updateBatchMetrics() {
         if (MetricRepo.isInit) {
-            MetricRepo.COUNTER_EDIT_LOG_WRITE.increase((long) currentBatchTasks.size());
-            MetricRepo.HISTO_JOURNAL_WRITE_LATENCY.update((System.nanoTime() - startTimeNano) / 1000000);
-            MetricRepo.HISTO_JOURNAL_WRITE_BATCH.update(currentBatchTasks.size());
-            MetricRepo.HISTO_JOURNAL_WRITE_BYTES.update(uncommittedEstimatedBytes);
+            MetricRepo.COUNTER_EDIT_LOG_WRITE.increase((long) pendingCommitTasks.getNumJournals());
+            MetricRepo.HISTO_JOURNAL_WRITE_LATENCY.update((System.nanoTime() - pendingCommitTasks.getStartTimeInNano()) / 1000000);
+            MetricRepo.HISTO_JOURNAL_WRITE_BATCH.update(pendingCommitTasks.getNumJournals());
+            MetricRepo.HISTO_JOURNAL_WRITE_BYTES.update(pendingCommitTasks.getEstimatedBytes());
             MetricRepo.GAUGE_STACKED_JOURNAL_NUM.setValue((long) journalQueue.size());
-
-            for (JournalTask e : currentBatchTasks) {
-                MetricRepo.COUNTER_EDIT_LOG_SIZE_BYTES.increase(e.estimatedSizeByte());
-            }
+            MetricRepo.COUNTER_EDIT_LOG_SIZE_BYTES.increase(pendingCommitTasks.getEstimatedBytes());
         }
         if (journalQueue.size() > Config.metadata_journal_max_batch_cnt) {
             LOG.warn("journal has piled up: {} in queue after consume", journalQueue.size());
@@ -248,7 +237,7 @@ public class JournalWriter {
     }
 
     private void rollJournalAfterBatch() {
-        rollJournalCounter += currentBatchTasks.size();
+        rollJournalCounter += pendingCommitTasks.getNumJournals();
         if (rollJournalCounter >= Config.edit_log_roll_num || needForceRollJournal()) {
             try {
                 journal.rollJournal(nextVisibleJournalId);
@@ -268,6 +257,57 @@ public class JournalWriter {
             }
             LOG.info("edit log rolled because {}", reason);
             rollJournalCounter = 0;
+        }
+    }
+
+    private static class PendingCommitTasks {
+
+        private final List<JournalTask> journalTasks;
+        private long startTimeInNano;
+        private int numJournals;
+        private long estimatedBytes;
+        private long betterCommitTimeInNano;
+
+        public PendingCommitTasks() {
+            this.journalTasks = new ArrayList<>();
+        }
+
+        public void reset() {
+            journalTasks.clear();
+            startTimeInNano = System.nanoTime();
+            numJournals = 0;
+            estimatedBytes = 0L;
+            betterCommitTimeInNano = -1;
+        }
+
+        public void addJournalTask(JournalTask task) {
+            journalTasks.add(task);
+            numJournals += task.numJournals();
+            estimatedBytes += task.estimatedSizeByte();
+            long taskCommitTime = task.getBetterCommitBeforeTimeInNano();
+            if (taskCommitTime != -1) {
+                betterCommitTimeInNano = betterCommitTimeInNano == -1 ? taskCommitTime : Math.min(betterCommitTimeInNano, taskCommitTime);
+            }
+        }
+
+        public long getStartTimeInNano() {
+            return startTimeInNano;
+        }
+
+        public int getNumJournals() {
+            return numJournals;
+        }
+
+        public long getEstimatedBytes() {
+            return estimatedBytes;
+        }
+
+        public long getBetterCommitTimeInNano() {
+            return betterCommitTimeInNano;
+        }
+
+        public List<JournalTask> getJournalTasks() {
+            return Collections.unmodifiableList(journalTasks);
         }
     }
 }
