@@ -1924,4 +1924,7 @@ public class Config extends ConfigBase {
      **/
     @ConfField(mutable = true)
     public static boolean enable_auto_tablet_distribution = false;
+
+    @ConfField(mutable = true)
+    public static long redirect_wait_ms = 0;
 }
