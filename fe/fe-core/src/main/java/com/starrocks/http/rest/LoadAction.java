@@ -35,6 +35,7 @@
 package com.starrocks.http.rest;
 
 import com.google.common.base.Strings;
+import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
 import com.starrocks.http.ActionController;
 import com.starrocks.http.BaseRequest;
@@ -109,7 +110,7 @@ public class LoadAction extends RestBaseAction {
 
         LOG.info("redirect load action to destination={}, db: {}, tbl: {}, label: {}",
                 redirectAddr.toString(), dbName, tableName, label);
-        redirectTo(request, response, redirectAddr);
+        redirectTo(request, response, redirectAddr, Config.redirect_wait_ms);
     }
 }
 

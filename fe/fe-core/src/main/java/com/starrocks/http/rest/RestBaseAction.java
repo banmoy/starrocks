@@ -134,7 +134,7 @@ public class RestBaseAction extends BaseAction {
         sendResult(request, response);
     }
 
-    public void redirectTo(BaseRequest request, BaseResponse response, TNetworkAddress addr)
+    public void redirectTo(BaseRequest request, BaseResponse response, TNetworkAddress addr, long waitMs)
             throws DdlException {
         String urlStr = request.getRequest().uri();
         URI urlObj = null;
@@ -148,7 +148,20 @@ public class RestBaseAction extends BaseAction {
             throw new DdlException(e.getMessage());
         }
         response.updateHeader(HttpHeaderNames.LOCATION.toString(), resultUriObj.toString());
+        if (waitMs > 0) {
+            try {
+                Thread.sleep(waitMs);
+                LOG.info("Wait {} ms for {}", waitMs, resultUriObj);
+            } catch (Exception e) {
+                // ignore
+            }
+        }
         writeResponse(request, response, HttpResponseStatus.TEMPORARY_REDIRECT);
+    }
+
+    public void redirectTo(BaseRequest request, BaseResponse response, TNetworkAddress addr)
+            throws DdlException {
+        redirectTo(request, response, addr, 0);
     }
 
     public boolean redirectToLeader(BaseRequest request, BaseResponse response) throws DdlException {

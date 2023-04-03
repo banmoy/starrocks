@@ -2098,4 +2098,7 @@ public class Config extends ConfigBase {
      **/
     @ConfField(mutable = true)
     public static long auto_increment_cache_size = 100000;
+
+    @ConfField(mutable = true)
+    public static long redirect_wait_ms = 0;
 }

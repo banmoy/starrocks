@@ -36,6 +36,7 @@ package com.starrocks.http.rest;
 
 import com.google.common.base.Strings;
 import com.starrocks.catalog.Database;
+import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
 import com.starrocks.common.LabelAlreadyUsedException;
 import com.starrocks.common.UserException;
@@ -277,7 +278,12 @@ public class TransactionLoadAction extends RestBaseAction {
 
         LOG.info("redirect transaction action to destination={}, db: {}, table: {}, op: {}, label: {}",
                 redirectAddr, dbName, tableName, op, label);
-        redirectTo(request, response, redirectAddr);
+
+        long waitMs = 0;
+        if (op.equalsIgnoreCase(LOAD)) {
+            waitMs = Config.redirect_wait_ms;
+        }
+        redirectTo(request, response, redirectAddr, waitMs);
     }
 }
 
