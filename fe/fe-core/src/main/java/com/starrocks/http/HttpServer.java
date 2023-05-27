@@ -192,6 +192,8 @@ public class HttpServer {
     protected class StarrocksHttpServerInitializer extends ChannelInitializer<SocketChannel> {
         @Override
         protected void initChannel(SocketChannel ch) throws Exception {
+            LOG.debug("initChannel, local address: {}, remote address: {}",
+                    ch.localAddress(), ch.remoteAddress());
             ch.pipeline().addLast(new HttpServerCodec(
                             Config.http_max_initial_line_length,
                             Config.http_max_header_size,

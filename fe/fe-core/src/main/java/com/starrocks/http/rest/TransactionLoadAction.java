@@ -35,6 +35,7 @@ import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.system.Backend;
 import com.starrocks.thrift.TNetworkAddress;
 import com.starrocks.transaction.TransactionStatus;
+import io.netty.channel.Channel;
 import io.netty.handler.codec.http.HttpMethod;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
@@ -107,6 +108,7 @@ public class TransactionLoadAction extends RestBaseAction {
         if (redirectToLeader(request, response)) {
             return;
         }
+
         String dbName = request.getRequest().headers().get(DB_KEY);
         String tableName = request.getRequest().headers().get(TABLE_KEY);
         String label = request.getRequest().headers().get(LABEL_KEY);
@@ -128,6 +130,12 @@ public class TransactionLoadAction extends RestBaseAction {
         }
         if (Strings.isNullOrEmpty(label)) {
             throw new UserException("empty label.");
+        }
+
+        if (LOG.isDebugEnabled()) {
+            Channel channel = request.getContext().channel();
+            LOG.debug("executeTransaction, local address: {}, remote address: {}, db: {}, table: {}, op: {}, label: {}",
+                    channel.localAddress(), channel.remoteAddress(), dbName, tableName, op, label);
         }
 
         // 1. handle commit/rollback PREPARED transaction

@@ -62,7 +62,8 @@ public class HttpServerHandler extends ChannelInboundHandlerAdapter {
         if (msg instanceof HttpRequest) {
             this.request = (HttpRequest) msg;
             if (LOG.isDebugEnabled()) {
-                LOG.debug("request: url:[{}]", request.uri());
+                LOG.debug("channelRead, local address: {}, remote address: {}, request: url:[{}]",
+                        ctx.channel().localAddress(), ctx.channel().remoteAddress(), request.uri());
             }
             try {
                 validateRequest(ctx, request);
