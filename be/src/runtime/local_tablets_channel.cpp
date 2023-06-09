@@ -435,6 +435,10 @@ int LocalTabletsChannel::_close_sender(const int64_t* partitions, size_t partiti
 }
 
 Status LocalTabletsChannel::_open_all_writers(const PTabletWriterOpenRequest& params) {
+    int32_t sleep_seconds = config::tablet_open_sleep_seconds;
+    LOG(INFO) << "LocalTabletsChannel txn_id: " << _txn_id << " load_id: " << print_id(params.id()) << " sleep "
+              << sleep_seconds << " before open writers";
+    sleep(sleep_seconds);
     std::vector<SlotDescriptor*>* index_slots = nullptr;
     int32_t schema_hash = 0;
     for (auto& index : _schema->indexes()) {
