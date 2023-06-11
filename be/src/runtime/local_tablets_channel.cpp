@@ -94,7 +94,7 @@ Status LocalTabletsChannel::open(const PTabletWriterOpenRequest& params, std::sh
 void LocalTabletsChannel::add_segment(brpc::Controller* cntl, const PTabletWriterAddSegmentRequest* request,
                                       PTabletWriterAddSegmentResult* response, google::protobuf::Closure* done) {
     int32_t sleep_seconds = config::tablet_add_sleep_seconds;
-    LOG(INFO) << "LocalTabletsChannel txn_id: " << _txn_id << " load_id: " << print_id(request.id()) << " sleep "
+    LOG(INFO) << "LocalTabletsChannel txn_id: " << _txn_id << " load_id: " << print_id(request->id()) << " sleep "
               << sleep_seconds << " when adding segment";
     ClosureGuard closure_guard(done);
     auto it = _delta_writers.find(request->tablet_id());
