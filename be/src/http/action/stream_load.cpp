@@ -177,7 +177,22 @@ Status StreamLoadAction::_handle(StreamLoadContext* ctx) {
             ctx->body_sink->append(std::move(ctx->buffer));
             ctx->buffer = nullptr;
         }
+        if (config::sleep_before_finish > 0) {
+            LOG(INFO) << "Begin to sleep for finish, txn_id: " << ctx->txn_id << ", label: " << ctx->label
+                      << ", sleep seconds: " << config::sleep_before_finish;
+            sleep(config::sleep_before_finish);
+            LOG(INFO) << "Stop to sleep for finish, txn_id: " << ctx->txn_id << ", label: " << ctx->label
+                      << ", sleep seconds: " << config::sleep_before_finish;
+        }
         RETURN_IF_ERROR(ctx->body_sink->finish());
+    }
+
+    if (config::sleep_before_future > 0) {
+        LOG(INFO) << "Begin to sleep for future, txn_id: " << ctx->txn_id << ", label: " << ctx->label
+                  << ", sleep seconds: " << config::sleep_before_future;
+        sleep(config::sleep_before_future);
+        LOG(INFO) << "Stop to sleep for finish, txn_id: " << ctx->txn_id << ", label: " << ctx->label
+                  << ", sleep seconds: " << config::sleep_before_future;
     }
 
     // wait stream load finish
