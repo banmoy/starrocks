@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -87,8 +88,8 @@ private:
     std::condition_variable _get_cond;
     bool _non_blocking_read{false};
 
-    bool _finished{false};
-    bool _cancelled{false};
+    std::atomic<bool> _finished{false};
+    std::atomic<bool> _cancelled{false};
 
     ByteBufferPtr _write_buf;
     ByteBufferPtr _read_buf;
