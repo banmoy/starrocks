@@ -180,6 +180,7 @@ Status StreamLoadAction::_handle(StreamLoadContext* ctx) {
         RETURN_IF_ERROR(ctx->body_sink->finish());
     }
 
+    LOG(INFO) << "streaming load handle future." << ctx->brief() << ", ctx=" << ctx;
     // wait stream load finish
     RETURN_IF_ERROR(ctx->future.get());
 
@@ -218,7 +219,7 @@ int StreamLoadAction::on_header(HttpRequest* req) {
         return -1;
     } else {
         LOG(INFO) << "new income streaming load request." << ctx->brief() << ", db=" << ctx->db
-                  << ", tbl=" << ctx->table;
+                  << ", tbl=" << ctx->table << ", http_request=" << req << ", ctx=" << ctx;
     }
 
     VLOG(1) << "streaming load request: " << req->debug_string();
@@ -320,6 +321,7 @@ void StreamLoadAction::on_chunk_data(HttpRequest* req) {
         return;
     }
 
+    LOG(INFO) << "streaming load on_chunk_data." << ctx->brief() << ", http_request=" << req << ", ctx=" << ctx;
     SCOPED_THREAD_LOCAL_MEM_TRACKER_SETTER(ctx->instance_mem_tracker.get());
 
     struct evhttp_request* ev_req = req->get_evhttp_request();
@@ -376,6 +378,7 @@ void StreamLoadAction::free_handler_ctx(void* param) {
     if (ctx == nullptr) {
         return;
     }
+    LOG(INFO) << "streaming load free_handler_ctx." << ctx->brief() << ", ctx=" << ctx;
     // sender is going, make receiver know it
     if (ctx->body_sink != nullptr) {
         ctx->body_sink->cancel(Status::Cancelled("Cancelled"));
