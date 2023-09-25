@@ -216,8 +216,8 @@ Status StreamLoadPipe::finish() {
     {
         std::lock_guard<std::mutex> l(_lock);
         _finished = true;
+        _get_cond.notify_all();
     }
-    _get_cond.notify_all();
     return Status::OK();
 }
 
@@ -228,9 +228,9 @@ void StreamLoadPipe::cancel(const Status& status) {
         if (_err_st.ok()) {
             _err_st = status;
         }
+        _get_cond.notify_all();
+        _put_cond.notify_all();
     }
-    _get_cond.notify_all();
-    _put_cond.notify_all();
 }
 
 Status StreamLoadPipe::_append(const ByteBufferPtr& buf) {
