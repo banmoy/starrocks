@@ -129,6 +129,7 @@ void StreamLoadAction::handle(HttpRequest* req) {
         return;
     }
 
+    LOG(INFO) << "streaming load handle." << ctx->brief() << ", ctx=" << ctx;
     // status already set to fail
     if (ctx->status.ok()) {
         ctx->status = _handle(ctx);
@@ -180,7 +181,6 @@ Status StreamLoadAction::_handle(StreamLoadContext* ctx) {
         RETURN_IF_ERROR(ctx->body_sink->finish());
     }
 
-    LOG(INFO) << "streaming load handle future." << ctx->brief() << ", ctx=" << ctx;
     // wait stream load finish
     RETURN_IF_ERROR(ctx->future.get());
 
@@ -320,8 +320,13 @@ void StreamLoadAction::on_chunk_data(HttpRequest* req) {
     if (ctx == nullptr || !ctx->status.ok()) {
         return;
     }
-
     LOG(INFO) << "streaming load on_chunk_data." << ctx->brief() << ", http_request=" << req << ", ctx=" << ctx;
+
+    while (config::block_on_chunk_data) {
+        sleep(config::block_sleep_s);
+    }
+    LOG(INFO) << "streaming load block pass." << ctx->brief() << ", http_request=" << req << ", ctx=" << ctx;
+
     SCOPED_THREAD_LOCAL_MEM_TRACKER_SETTER(ctx->instance_mem_tracker.get());
 
     struct evhttp_request* ev_req = req->get_evhttp_request();

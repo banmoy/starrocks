@@ -969,4 +969,6 @@ CONF_mInt32(finish_publish_version_internal, "100");
 
 CONF_mInt32(get_txn_status_internal_sec, "30");
 
+CONF_mBool(block_on_chunk_data, "false");
+CONF_mBool(block_sleep_s, "1");
 } // namespace starrocks::config
