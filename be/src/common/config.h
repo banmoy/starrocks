@@ -1041,4 +1041,5 @@ CONF_mInt32(get_txn_status_internal_sec, "30");
 // TOPN RuntimeFilter parameters
 CONF_mInt32(desc_hint_split_range, "10");
 
+CONF_mInt32(segment_flush_thread_start_block_ms, "0");
 } // namespace starrocks::config

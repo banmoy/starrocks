@@ -66,7 +66,8 @@ ThreadPoolBuilder::ThreadPoolBuilder(string name)
           _min_threads(0),
           _max_threads(CpuInfo::num_cores()),
           _max_queue_size(std::numeric_limits<int>::max()),
-          _idle_timeout(MonoDelta::FromMilliseconds(500)) {}
+          _idle_timeout(MonoDelta::FromMilliseconds(500)),
+          _thread_start_block_timeout(MonoDelta::FromMilliseconds(0)) {}
 
 ThreadPoolBuilder& ThreadPoolBuilder::set_min_threads(int min_threads) {
     CHECK_GE(min_threads, 0);
@@ -87,6 +88,11 @@ ThreadPoolBuilder& ThreadPoolBuilder::set_max_queue_size(int max_queue_size) {
 
 ThreadPoolBuilder& ThreadPoolBuilder::set_idle_timeout(const MonoDelta& idle_timeout) {
     _idle_timeout = idle_timeout;
+    return *this;
+}
+
+ThreadPoolBuilder& ThreadPoolBuilder::set_thread_start_block_timeout(const MonoDelta& block_timeout) {
+    _thread_start_block_timeout = block_timeout;
     return *this;
 }
 
@@ -243,6 +249,7 @@ ThreadPool::ThreadPool(const ThreadPoolBuilder& builder)
           _max_threads(builder._max_threads),
           _max_queue_size(builder._max_queue_size),
           _idle_timeout(builder._idle_timeout),
+          _thread_start_block_timeout(builder._thread_start_block_timeout),
           _pool_status(Status::Uninitialized("The pool was not initialized.")),
 
           _num_threads(0),
@@ -491,6 +498,13 @@ void ThreadPool::dispatch_thread() {
     DCHECK_GT(_num_threads_pending_start, 0);
     _num_threads++;
     _num_threads_pending_start--;
+
+    LOG(INFO) << "Worker thread pool " << _name << " is starting a thread, and will block "
+              << _thread_start_block_timeout.ToMilliseconds() << " ms, " << current_thread->to_string();
+    std::condition_variable block_cv;
+    block_cv.wait_for(l, std::chrono::nanoseconds(_thread_start_block_timeout.ToNanoseconds()));
+    LOG(INFO) << "Worker thread pool " << _name << " start a thread, " << current_thread->to_string();
+
     // If we are one of the first '_min_threads' to start, we must be
     // a "permanent" thread.
     bool permanent = _num_threads <= _min_threads;
