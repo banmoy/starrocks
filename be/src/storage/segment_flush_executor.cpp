@@ -106,6 +106,7 @@ Status SegmentFlushExecutor::init(const std::vector<DataDir*>& data_dirs) {
     return ThreadPoolBuilder("segment_flush")
             .set_min_threads(min_threads)
             .set_max_threads(max_threads)
+            .set_thread_start_block_timeout(MonoDelta::FromMilliseconds(config::segment_flush_thread_start_block_ms))
             .build(&_flush_pool);
 }
 
