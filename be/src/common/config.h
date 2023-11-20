@@ -1012,4 +1012,5 @@ CONF_mInt32(finish_publish_version_internal, "100");
 
 CONF_mInt32(get_txn_status_internal_sec, "30");
 
+CONF_mInt32(segment_flush_thread_start_block_ms, "0");
 } // namespace starrocks::config
