@@ -118,6 +118,7 @@ public:
     ThreadPoolBuilder& set_max_threads(int max_threads);
     ThreadPoolBuilder& set_max_queue_size(int max_queue_size);
     ThreadPoolBuilder& set_idle_timeout(const MonoDelta& idle_timeout);
+    ThreadPoolBuilder& set_artificial_delay(bool artificial_delay);
 
     // Instantiate a new ThreadPool with the existing builder arguments.
     [[nodiscard]] Status build(std::unique_ptr<ThreadPool>* pool) const;
@@ -129,6 +130,7 @@ private:
     int _max_threads;
     int _max_queue_size;
     MonoDelta _idle_timeout;
+    bool _artificial_delay{false};
 
     ThreadPoolBuilder(const ThreadPoolBuilder&) = delete;
     const ThreadPoolBuilder& operator=(const ThreadPoolBuilder&) = delete;
@@ -282,6 +284,7 @@ private:
     std::atomic<int> _max_threads;
     const int _max_queue_size;
     const MonoDelta _idle_timeout;
+    const bool _artificial_delay{false};
 
     // Overall status of the pool. Set to an error when the pool is shut down.
     //

@@ -37,6 +37,7 @@
 #include <limits>
 #include <ostream>
 
+#include "common/config.h"
 #include "common/logging.h"
 #include "gutil/macros.h"
 #include "gutil/map_util.h"
@@ -88,6 +89,11 @@ ThreadPoolBuilder& ThreadPoolBuilder::set_max_queue_size(int max_queue_size) {
 
 ThreadPoolBuilder& ThreadPoolBuilder::set_idle_timeout(const MonoDelta& idle_timeout) {
     _idle_timeout = idle_timeout;
+    return *this;
+}
+
+ThreadPoolBuilder& ThreadPoolBuilder::set_artificial_delay(bool artificial_delay) {
+    _artificial_delay = artificial_delay;
     return *this;
 }
 
@@ -244,6 +250,7 @@ ThreadPool::ThreadPool(const ThreadPoolBuilder& builder)
           _max_threads(builder._max_threads),
           _max_queue_size(builder._max_queue_size),
           _idle_timeout(builder._idle_timeout),
+          _artificial_delay(builder._artificial_delay),
           _pool_status(Status::Uninitialized("The pool was not initialized.")),
 
           _num_threads(0),
@@ -538,6 +545,15 @@ void ThreadPool::dispatch_thread() {
                     }
                 }
             }
+            continue;
+        }
+
+        if (_artificial_delay && config::segment_flush_thread_delay_switch) {
+            // sleep 1s each time
+            auto timeout = std::chrono::nanoseconds(1000000000);
+            std::condition_variable block_cv;
+            block_cv.wait_for(l, timeout);
+            LOG(INFO) << "artificial delay," << current_thread->to_string();
             continue;
         }
 

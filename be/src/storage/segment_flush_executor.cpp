@@ -39,6 +39,9 @@ Status SegmentFlushToken::submit(brpc::Controller* cntl, const PTabletWriterAddS
 
     auto submit_st = _flush_token->submit_func([this, cntl, request, response, done] {
         auto& writer = this->_writer;
+        LOG(INFO) << "Executing flush func. txn_id: " << writer->txn_id()
+                  << " tablet_id: " << writer->tablet()->tablet_id();
+
         auto st = Status::OK();
         if (request->has_segment() && cntl->request_attachment().size() > 0) {
             auto& segment_pb = request->segment();
@@ -84,6 +87,8 @@ Status SegmentFlushToken::submit(brpc::Controller* cntl, const PTabletWriterAddS
     });
     if (submit_st.ok()) {
         closure_guard.release();
+        LOG(INFO) << "Submit flush func successfully. txn_id: " << _writer->txn_id()
+                  << " tablet_id: " << _writer->tablet()->tablet_id();
     } else {
         submit_st.to_protobuf(response->mutable_status());
     }
@@ -93,6 +98,8 @@ Status SegmentFlushToken::submit(brpc::Controller* cntl, const PTabletWriterAddS
 
 void SegmentFlushToken::cancel() {
     _flush_token->shutdown();
+    LOG(INFO) << "Cancel flush token. txn_id: " << _writer->txn_id()
+              << " tablet_id: " << _writer->tablet()->tablet_id();
 }
 
 void SegmentFlushToken::wait() {
@@ -106,6 +113,7 @@ Status SegmentFlushExecutor::init(const std::vector<DataDir*>& data_dirs) {
     return ThreadPoolBuilder("segment_flush")
             .set_min_threads(min_threads)
             .set_max_threads(max_threads)
+            .set_artificial_delay(true)
             .build(&_flush_pool);
 }
 
