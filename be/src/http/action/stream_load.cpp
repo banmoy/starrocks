@@ -137,6 +137,12 @@ StreamLoadAction::StreamLoadAction(ExecEnv* exec_env, ConcurrentLimiter* limiter
 StreamLoadAction::~StreamLoadAction() = default;
 
 static void _send_reply(HttpRequest* req, const std::string& str) {
+    if (config::stream_load_response_delay_sec > 0) {
+        LOG(INFO) << "Sleep " << config::stream_load_response_delay_sec<< " seconds before sending response: " << str;
+        sleep(config::stream_load_response_delay_sec);
+        LOG(INFO) << "Awake to send response: " << str;
+    }
+
     if (config::enable_stream_load_verbose_log) {
         LOG(INFO) << "streaming load response: " << str;
     }
