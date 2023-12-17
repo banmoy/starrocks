@@ -54,6 +54,30 @@
 
 namespace starrocks {
 
+void try_block(std::string msg) {
+    int i = 0;
+    while (config::load_brpc_cpu_block) {
+        if (i == 0) {
+            LOG(INFO) << "start cpu block: " << msg;
+        }
+        i += 1;
+    }
+    if (i > 0) {
+        LOG(INFO) << "stop cpu block: " << msg;
+    }
+
+    i = 0;
+    while (config::load_brpc_io_block) {
+        if (i == 0) {
+            LOG(INFO) << "start io block: " << msg;
+        }
+        sleep(2);
+    }
+    if (i > 0) {
+        LOG(INFO) << "stop io block: " << msg;
+    }
+}
+
 template <typename T>
 void BackendInternalServiceImpl<T>::tablet_writer_open(google::protobuf::RpcController* cntl_base,
                                                        const PTabletWriterOpenRequest* request,
@@ -61,6 +85,7 @@ void BackendInternalServiceImpl<T>::tablet_writer_open(google::protobuf::RpcCont
                                                        google::protobuf::Closure* done) {
     VLOG_RPC << "tablet writer open, id=" << print_id(request->id()) << ", index_id=" << request->index_id()
              << ", txn_id: " << request->txn_id();
+    try_block(request->DebugString());
     PInternalServiceImplBase<T>::_exec_env->load_channel_mgr()->open(static_cast<brpc::Controller*>(cntl_base),
                                                                      *request, response, done);
 }
@@ -83,6 +108,7 @@ void BackendInternalServiceImpl<T>::tablet_writer_add_chunk(google::protobuf::Rp
     VLOG_RPC << "tablet writer add chunk, id=" << print_id(request->id()) << ", txn_id: " << request->txn_id()
              << ", index_id=" << request->index_id() << ", sender_id=" << request->sender_id()
              << ", eos=" << request->eos();
+    try_block(request->DebugString());
     PInternalServiceImplBase<T>::_exec_env->load_channel_mgr()->add_chunk(*request, response);
 }
 
@@ -92,6 +118,7 @@ void BackendInternalServiceImpl<T>::tablet_writer_add_chunks(google::protobuf::R
                                                              PTabletWriterAddBatchResult* response,
                                                              google::protobuf::Closure* done) {
     ClosureGuard closure_guard(done);
+    try_block(request->DebugString());
     PInternalServiceImplBase<T>::_exec_env->load_channel_mgr()->add_chunks(*request, response);
 }
 
@@ -103,6 +130,7 @@ void BackendInternalServiceImpl<T>::tablet_writer_add_segment(google::protobuf::
     VLOG_RPC << "tablet writer add segment, id=" << print_id(request->id()) << ", txn_id: " << request->txn_id()
              << ", index_id=" << request->index_id() << ", tablet_id=" << request->tablet_id()
              << ", eos=" << request->eos();
+    try_block(request->DebugString());
     PInternalServiceImplBase<T>::_exec_env->load_channel_mgr()->add_segment(static_cast<brpc::Controller*>(controller),
                                                                             request, response, done);
 }
@@ -115,6 +143,7 @@ void BackendInternalServiceImpl<T>::tablet_writer_cancel(google::protobuf::RpcCo
     VLOG_RPC << "tablet writer cancel, id=" << print_id(request->id()) << ", txn_id: " << request->txn_id()
              << ", index_id=" << request->index_id() << ", sender_id=" << request->sender_id()
              << ", tablet_id=" << request->tablet_id();
+    try_block(request->DebugString());
     PInternalServiceImplBase<T>::_exec_env->load_channel_mgr()->cancel(static_cast<brpc::Controller*>(cntl_base),
                                                                        *request, response, done);
 }

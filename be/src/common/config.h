@@ -1139,4 +1139,8 @@ CONF_mInt32(desc_hint_split_range, "10");
 // it may be evicted if the disk is full
 CONF_mInt64(lake_local_pk_index_unused_threshold_seconds, "86400"); // 1 day
 
+CONF_Int32(bthread_concurrency, "-1");
+CONF_mBool(load_brpc_cpu_block, "false");
+CONF_mBool(load_brpc_io_block, "false");
+
 } // namespace starrocks::config
