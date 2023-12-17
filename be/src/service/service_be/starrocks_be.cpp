@@ -46,9 +46,12 @@ namespace brpc {
 
 DECLARE_uint64(max_body_size);
 DECLARE_int64(socket_max_unwritten_bytes);
-DECLARE_int32(bthread_concurrency);
 
 } // namespace brpc
+
+namespace bthread {
+DECLARE_int32(bthread_concurrency);
+} // namespace bthread
 
 namespace starrocks {
 
@@ -200,7 +203,7 @@ void start_be(const std::vector<StorePath>& paths, bool as_cn) {
     brpc::FLAGS_max_body_size = config::brpc_max_body_size;
     brpc::FLAGS_socket_max_unwritten_bytes = config::brpc_socket_max_unwritten_bytes;
     if (config::bthread_concurrency > 0) {
-        brpc::FLAGS_bthread_concurrency = config::bthread_concurrency;
+        bthread::FLAGS_bthread_concurrency = config::bthread_concurrency;
     }
     auto brpc_server = std::make_unique<brpc::Server>();
 
