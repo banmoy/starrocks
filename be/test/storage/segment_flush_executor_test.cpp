@@ -235,15 +235,24 @@ protected:
 
 class MockClosure : public ::google::protobuf::Closure {
 public:
-    MockClosure() = default;
+    MockClosure() : _request(std::make_unique<PTabletWriterAddSegmentRequest>()) {}
+
     ~MockClosure() override = default;
 
-    void Run() override { _run.store(true); }
+    void Run() override {
+        _run.store(true);
+        // free the request to simulate the behaviour of brpc.
+        // brpc will release the request after send response
+        _request.reset();
+    }
 
     bool has_run() { return _run.load(); }
 
+    PTabletWriterAddSegmentRequest* request() { return _request.get(); }
+
 private:
     std::atomic_bool _run = false;
+    std::unique_ptr<PTabletWriterAddSegmentRequest> _request;
 };
 
 TEST_F(SegmentFlushExecutorTest, test_write_and_commit_segment) {
@@ -256,31 +265,75 @@ TEST_F(SegmentFlushExecutorTest, test_write_and_commit_segment) {
     std::shared_ptr<AsyncDeltaWriter> async_delta_writer =
             create_delta_writer(_tablet->tablet_id(), _tablet->schema_hash(), _mem_tracker.get());
     DeltaWriter* delta_writer = async_delta_writer->writer();
-    PTabletWriterAddSegmentRequest request;
+
+    MockClosure closure;
+    PTabletWriterAddSegmentRequest* request = closure.request();
     std::unique_ptr<starrocks::PUniqueId> id = std::make_unique<starrocks::PUniqueId>();
     id->set_lo(delta_writer->load_id().lo());
     id->set_hi(delta_writer->load_id().hi());
-    request.set_allocated_id(id.release());
-    request.set_txn_id(delta_writer->txn_id());
-    request.set_index_id(delta_writer->index_id());
-    request.set_tablet_id(delta_writer->tablet()->tablet_id());
-    request.set_eos(true);
+    request->set_allocated_id(id.release());
+    request->set_txn_id(delta_writer->txn_id());
+    request->set_index_id(delta_writer->index_id());
+    request->set_tablet_id(delta_writer->tablet()->tablet_id());
+    request->set_eos(true);
 
     brpc::Controller controller;
     attach_segment_data(*segment_pb.get(), &controller);
-    request.set_allocated_segment(segment_pb.release());
+    request->set_allocated_segment(segment_pb.release());
 
     PTabletWriterAddSegmentResult response;
-    MockClosure closure;
     AsyncDeltaWriterSegmentRequest async_request{
-            .cntl = &controller, .request = &request, .response = &response, .done = &closure};
+            .cntl = &controller, .request = request, .response = &response, .done = &closure};
     async_delta_writer->write_segment(async_request);
     ASSERT_OK(delta_writer->segment_flush_token()->wait());
     ASSERT_TRUE(closure.has_run());
+    Status response_st = response.status();
+    ASSERT_TRUE(response_st.ok());
     RowsetSharedPtr prepared_rowset;
     ASSERT_OK(get_prepared_rowset(_tablet->tablet_id(), delta_writer->txn_id(), _partition_id, &prepared_rowset));
     check_single_segment_rowset_result(prepared_rowset, 10);
     ASSERT_OK(StorageEngine::instance()->txn_manager()->delete_txn(_partition_id, _tablet, delta_writer->txn_id()));
+}
+
+TEST_F(SegmentFlushExecutorTest, test_write_segment_fail) {
+    ASSERT_OK(prepare_primary_tablet_segment_dir("./ut_dir/SegmentFlushExecutorTest_test_write_segment_fail"));
+    // the rowset on the primary tablet
+    RowsetSharedPtr primary_rowset;
+    std::unique_ptr<SegmentPB> segment_pb = std::make_unique<SegmentPB>();
+    create_single_seg_rowset(_tablet.get(), 10, _primary_tablet_segment_dir, primary_rowset, segment_pb.get());
+
+    std::shared_ptr<AsyncDeltaWriter> async_delta_writer =
+            create_delta_writer(_tablet->tablet_id(), _tablet->schema_hash(), _mem_tracker.get());
+    DeltaWriter* delta_writer = async_delta_writer->writer();
+
+    MockClosure closure;
+    PTabletWriterAddSegmentRequest* request = closure.request();
+    std::unique_ptr<starrocks::PUniqueId> id = std::make_unique<starrocks::PUniqueId>();
+    id->set_lo(delta_writer->load_id().lo());
+    id->set_hi(delta_writer->load_id().hi());
+    request->set_allocated_id(id.release());
+    request->set_txn_id(delta_writer->txn_id());
+    request->set_index_id(delta_writer->index_id());
+    request->set_tablet_id(delta_writer->tablet()->tablet_id());
+    request->set_eos(true);
+
+    brpc::Controller controller;
+    attach_segment_data(*segment_pb.get(), &controller);
+    // inject error when flushing segment so that the flush will fail.
+    // Make the data size in SegmentPB larger than the actual size, and
+    // the check in rowset_writer::_flush_segment will fail
+    segment_pb->set_data_size(segment_pb->data_size() + 1);
+    request->set_allocated_segment(segment_pb.release());
+
+    PTabletWriterAddSegmentResult response;
+    AsyncDeltaWriterSegmentRequest async_request{
+            .cntl = &controller, .request = request, .response = &response, .done = &closure};
+    async_delta_writer->write_segment(async_request);
+    ASSERT_OK(delta_writer->segment_flush_token()->wait());
+    ASSERT_EQ(State::kAborted, delta_writer->get_state());
+    ASSERT_TRUE(closure.has_run());
+    Status response_st = response.status();
+    ASSERT_FALSE(response_st.ok());
 }
 
 TEST_F(SegmentFlushExecutorTest, test_submit_after_cancel) {
