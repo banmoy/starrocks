@@ -31,6 +31,9 @@
 
 namespace starrocks {
 
+static bvar::Adder<uint64_t> g_segment_flush_count("be", "segment_flush_count");
+static bvar::Adder<uint64_t> g_segment_flush_size("be", "segment_flush_size");
+
 // A task responsible for flushing the segment received the primary tablet. It will also
 // respond to the brpc BackendInternalServiceImpl<T>::tablet_writer_add_segment if release()
 // is not called.
@@ -87,7 +90,11 @@ public:
         if (_request->has_segment() && _cntl->request_attachment().size() > 0) {
             auto scope = IOProfiler::scope(IOProfiler::TAG_LOAD, _writer->tablet()->tablet_id());
             auto& segment_pb = _request->segment();
+            MonotonicStopWatch timer;
+            timer.start();
             st = _writer->write_segment(segment_pb, _cntl->request_attachment());
+            g_segment_flush_count << 1;
+            g_segment_flush_size << segment_pb.data_size();
         } else if (!_request->eos()) {
             st = Status::InternalError(fmt::format("request {} has no segment", _request->DebugString()));
         }
@@ -153,8 +160,7 @@ private:
         if (config::load_add_segment_slow_us > 0 && total_time_us > config::load_add_segment_slow_us) {
             LOG(WARNING) << "Slow add segment, txn_id: " << _writer->txn_id()
                          << ", tablet id: " << _writer->tablet()->tablet_id() << ", eos: " << eos
-                         << ", create_time_us: " << _client_time_us << ", finish_time_us: " << finish_time_us
-                         << ", total_time_cost_us: " << total_time_us
+                         << ", total_time_cost_us: " << total_time_us << ", create_time_us: " << _client_time_us
                          << ", receive_cost_us: " << (_receive_time_us - _client_time_us)
                          << ", prepare_cost_us: " << (_execute_time_us - _receive_time_us)
                          << ", write_cost_us: " << (_write_segment_time_us - _execute_time_us)

@@ -7,6 +7,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors
 
+#include <bvar/bvar.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <fmt/format.h>
@@ -33,6 +34,7 @@
 #include "testutil/sync_point.h"
 #include "util/errno.h"
 #include "util/slice.h"
+#include "util/stopwatch.hpp"
 
 #ifdef USE_STAROS
 #include "fslib/metric_key.h"
@@ -52,6 +54,10 @@ DEFINE_HISTOGRAM_METRIC_KEY_WITH_TAG_BUCKET(s_sr_posix_write_iolatency, staros::
 #endif
 
 namespace starrocks {
+
+bvar::LatencyRecorder g_posix_write_iolatency("be", "posix_write_io");
+bvar::IntRecorder g_posix_write_iosize;
+bvar::Window<bvar::IntRecorder> g_posix_write_iosize_minute("be", "posix_write_io_size", &g_posix_write_iosize, 60);
 
 using std::string;
 using strings::Substitute;
@@ -206,10 +212,15 @@ public:
 #ifdef USE_STAROS
         staros::starlet::metrics::TimeObserver<prometheus::Histogram> write_latency(s_sr_posix_write_iolatency);
 #endif
+        MonotonicStopWatch watch;
+        watch.start();
         size_t bytes_written = 0;
         RETURN_IF_ERROR(do_writev_at(_fd, _filename, _filesize, data, cnt, &bytes_written));
         _filesize += bytes_written;
         _pending_sync = true;
+        auto cost_ns = watch.elapsed_time();
+        g_posix_write_iolatency << cost_ns / 1000;
+        g_posix_write_iosize << bytes_written;
 #ifdef USE_STAROS
         s_sr_posix_write_iosize.Observe(bytes_written);
 #endif

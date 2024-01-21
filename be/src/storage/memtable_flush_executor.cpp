@@ -34,6 +34,8 @@
 
 #include "storage/memtable_flush_executor.h"
 
+#include <bvar/bvar.h>
+
 #include <memory>
 
 #include "gen_cpp/data.pb.h"
@@ -41,6 +43,9 @@
 #include "storage/memtable.h"
 
 namespace starrocks {
+
+static bvar::Adder<uint64_t> g_memtable_flush_count("be", "memtable_flush_count");
+static bvar::Adder<uint64_t> g_memtable_flush_size("be", "memtable_flush_size");
 
 class MemtableFlushTask final : public Runnable {
 public:
@@ -129,9 +134,16 @@ void FlushToken::_flush_memtable(MemTable* memtable, SegmentPB* segment) {
     MonotonicStopWatch timer;
     timer.start();
     set_status(memtable->flush(segment));
-    _stats.flush_time_ns += timer.elapsed_time();
+    uint64_t elapsed_time = timer.elapsed_time();
+    _stats.flush_time_ns += elapsed_time;
     _stats.flush_count++;
     _stats.flush_size_bytes += memtable->memory_usage();
+    g_memtable_flush_count << 1;
+    g_memtable_flush_size << memtable->memory_usage();
+    if (config::memtable_flush_slow_us > 0 && (elapsed_time / 1000) > config::memtable_flush_slow_us) {
+        LOG(WARNING) << "Slow memtable flush, tablet_id: " << memtable->tablet_id()
+                     << ", flush_size: " << memtable->memory_usage() << ", flush_time_us: " << (elapsed_time / 1000);
+    }
 }
 
 Status MemTableFlushExecutor::init(const std::vector<DataDir*>& data_dirs) {
