@@ -34,6 +34,7 @@
 
 #pragma once
 
+#include <bvar/bvar.h>
 #include <fmt/format.h>
 
 #include <atomic>
@@ -248,6 +249,12 @@ public:
 
     int max_threads() const { return _max_threads.load(std::memory_order_acquire); }
 
+    // Use bvar as the counter, and should not be called frequently.
+    int64_t total_task_num() const { return _total_task_num.get_value(); }
+
+    // Use bvar as the counter, and should not be called frequently.
+    int64_t total_run_time_ns() const { return _total_run_time_ns.get_value(); }
+
 private:
     friend class ThreadPoolBuilder;
     friend class ThreadPoolToken;
@@ -371,6 +378,12 @@ private:
 
     // ExecutionMode::CONCURRENT token used by the pool for tokenless submission.
     std::unique_ptr<ThreadPoolToken> _tokenless;
+
+    // Total number of tasks that have run
+    bvar::Adder<int64_t> _total_task_num;
+
+    // Accumulated time in nanoseconds to run tasks.
+    bvar::Adder<int64_t> _total_run_time_ns;
 
     ThreadPool(const ThreadPool&) = delete;
     const ThreadPool& operator=(const ThreadPool&) = delete;

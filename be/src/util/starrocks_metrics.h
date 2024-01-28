@@ -67,6 +67,21 @@ private:
     StarRocksMetrics::instance()->metrics()->register_hook(                                               \
             #name, [&]() { StarRocksMetrics::instance()->name.set_value(func()); });
 
+#define METRIC_DEFINE_THREAD_POOL(threadpool_name)                                     \
+    METRIC_DEFINE_UINT_GAUGE(threadpool_name##_threadpool_size, MetricUnit::NOUNIT);   \
+    METRIC_DEFINE_UINT_GAUGE(threadpool_name##_total_run_time_ns, MetricUnit::NOUNIT); \
+    METRIC_DEFINE_UINT_GAUGE(threadpool_name##_total_task_num, MetricUnit::NOUNIT);    \
+    METRIC_DEFINE_UINT_GAUGE(threadpool_name##_queue_count, MetricUnit::NOUNIT)
+
+#define REGISTER_THREAD_POOL_METRICS(name, threadpool)                                                            \
+    do {                                                                                                          \
+        REGISTER_GAUGE_STARROCKS_METRIC(name##_threadpool_size, [this]() { return threadpool->num_threads(); })   \
+        REGISTER_GAUGE_STARROCKS_METRIC(name##_total_run_time_ns,                                                 \
+                                        [this]() { return threadpool->total_run_time_ns(); })                     \
+        REGISTER_GAUGE_STARROCKS_METRIC(name##_total_task_num, [this]() { return threadpool->total_task_num(); }) \
+        REGISTER_GAUGE_STARROCKS_METRIC(name##_queue_count, [this]() { return threadpool->num_queued_tasks(); })  \
+    } while (false)
+
 class StarRocksMetrics {
 public:
     // query execution
@@ -269,14 +284,14 @@ public:
     METRIC_DEFINE_UINT_GAUGE(brpc_endpoint_stub_count, MetricUnit::NOUNIT);
     METRIC_DEFINE_UINT_GAUGE(tablet_writer_count, MetricUnit::NOUNIT);
 
-    // queue task count of thread pool
-    METRIC_DEFINE_UINT_GAUGE(publish_version_queue_count, MetricUnit::NOUNIT);
-    METRIC_DEFINE_UINT_GAUGE(async_delta_writer_queue_count, MetricUnit::NOUNIT);
-    METRIC_DEFINE_UINT_GAUGE(memtable_flush_queue_count, MetricUnit::NOUNIT);
-    METRIC_DEFINE_UINT_GAUGE(segment_replicate_queue_count, MetricUnit::NOUNIT);
-    METRIC_DEFINE_UINT_GAUGE(segment_flush_queue_count, MetricUnit::NOUNIT);
-    METRIC_DEFINE_UINT_GAUGE(update_apply_queue_count, MetricUnit::NOUNIT);
-    METRIC_DEFINE_UINT_GAUGE(pk_index_compaction_queue_count, MetricUnit::NOUNIT);
+    // thread pool metrics
+    METRIC_DEFINE_THREAD_POOL(publish_version);
+    METRIC_DEFINE_THREAD_POOL(async_delta_writer);
+    METRIC_DEFINE_THREAD_POOL(memtable_flush);
+    METRIC_DEFINE_THREAD_POOL(segment_replicate);
+    METRIC_DEFINE_THREAD_POOL(segment_flush);
+    METRIC_DEFINE_THREAD_POOL(update_apply);
+    METRIC_DEFINE_THREAD_POOL(pk_index_compaction);
 
     METRIC_DEFINE_UINT_GAUGE(load_rpc_threadpool_size, MetricUnit::NOUNIT);
 
