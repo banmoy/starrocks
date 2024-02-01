@@ -268,6 +268,8 @@ TEST_F(StarRocksMetricsTest, Normal) {
 }
 
 TEST_F(StarRocksMetricsTest, PageCacheMetrics) {
+    int input;
+    std::cin >> input;
     TestMetricsVisitor visitor;
     auto instance = StarRocksMetrics::instance();
     auto metrics = instance->metrics();
