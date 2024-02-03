@@ -220,9 +220,51 @@ Status StorageEngine::_open(const EngineOptions& options) {
 
     _async_delta_writer_executor =
             std::make_unique<bthreads::ThreadPoolExecutor>(thread_pool.release(), kTakesOwnership);
-    REGISTER_THREAD_POOL_METRICS(
-            async_delta_writer,
-            static_cast<bthreads::ThreadPoolExecutor*>(_async_delta_writer_executor.get())->get_thread_pool());
+
+    do {
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "async_delta_writer_threadpool_size",
+                &StarRocksMetrics::instance()->async_delta_writer_threadpool_size);
+        StarRocksMetrics::instance()->metrics()->register_hook("async_delta_writer_threadpool_size", [&]() {
+            StarRocksMetrics::instance()->async_delta_writer_threadpool_size.set_value([this]() {
+                return static_cast<bthreads::ThreadPoolExecutor*>(_async_delta_writer_executor.get())
+                        ->get_thread_pool()
+                        ->num_threads();
+            }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "async_delta_writer_total_run_time_ns",
+                &StarRocksMetrics::instance()->async_delta_writer_total_run_time_ns);
+        StarRocksMetrics::instance()->metrics()->register_hook("async_delta_writer_total_run_time_ns", [&]() {
+            StarRocksMetrics::instance()->async_delta_writer_total_run_time_ns.set_value([this]() {
+                return static_cast<bthreads::ThreadPoolExecutor*>(_async_delta_writer_executor.get())
+                        ->get_thread_pool()
+                        ->total_run_time_ns();
+            }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "async_delta_writer_total_task_num", &StarRocksMetrics::instance()->async_delta_writer_total_task_num);
+        StarRocksMetrics::instance()->metrics()->register_hook("async_delta_writer_total_task_num", [&]() {
+            StarRocksMetrics::instance()->async_delta_writer_total_task_num.set_value([this]() {
+                return static_cast<bthreads::ThreadPoolExecutor*>(_async_delta_writer_executor.get())
+                        ->get_thread_pool()
+                        ->total_task_num();
+            }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "async_delta_writer_queue_count", &StarRocksMetrics::instance()->async_delta_writer_queue_count);
+        StarRocksMetrics::instance()->metrics()->register_hook("async_delta_writer_queue_count", [&]() {
+            StarRocksMetrics::instance()->async_delta_writer_queue_count.set_value([this]() {
+                return static_cast<bthreads::ThreadPoolExecutor*>(_async_delta_writer_executor.get())
+                        ->get_thread_pool()
+                        ->num_queued_tasks();
+            }());
+        });
+    } while (false);
+
+    //    REGISTER_THREAD_POOL_METRICS(
+    //            async_delta_writer,
+    //            static_cast<bthreads::ThreadPoolExecutor*>(_async_delta_writer_executor.get())->get_thread_pool());
 
     _memtable_flush_executor = std::make_unique<MemTableFlushExecutor>();
     REGISTER_THREAD_POOL_METRICS(memtable_flush, _memtable_flush_executor->get_thread_pool());
