@@ -67,7 +67,7 @@ private:
     StarRocksMetrics::instance()->metrics()->register_hook(                                               \
             #name, [&]() { StarRocksMetrics::instance()->name.set_value(func()); });
 
-#define METRIC_DEFINE_THREAD_POOL(threadpool_name)                                     \
+#define METRICS_DEFINE_THREAD_POOL(threadpool_name)                                    \
     METRIC_DEFINE_UINT_GAUGE(threadpool_name##_threadpool_size, MetricUnit::NOUNIT);   \
     METRIC_DEFINE_UINT_GAUGE(threadpool_name##_total_run_time_ns, MetricUnit::NOUNIT); \
     METRIC_DEFINE_UINT_GAUGE(threadpool_name##_total_task_num, MetricUnit::NOUNIT);    \
@@ -294,13 +294,13 @@ public:
     METRIC_DEFINE_UINT_GAUGE(tablet_writer_count, MetricUnit::NOUNIT);
 
     // thread pool metrics
-    METRIC_DEFINE_THREAD_POOL(publish_version);
-    METRIC_DEFINE_THREAD_POOL(async_delta_writer);
-    METRIC_DEFINE_THREAD_POOL(memtable_flush);
-    METRIC_DEFINE_THREAD_POOL(segment_replicate);
-    METRIC_DEFINE_THREAD_POOL(segment_flush);
-    METRIC_DEFINE_THREAD_POOL(update_apply);
-    METRIC_DEFINE_THREAD_POOL(pk_index_compaction);
+    METRICS_DEFINE_THREAD_POOL(publish_version);
+    METRICS_DEFINE_THREAD_POOL(async_delta_writer);
+    METRICS_DEFINE_THREAD_POOL(memtable_flush);
+    METRICS_DEFINE_THREAD_POOL(segment_replicate);
+    METRICS_DEFINE_THREAD_POOL(segment_flush);
+    METRICS_DEFINE_THREAD_POOL(update_apply);
+    METRICS_DEFINE_THREAD_POOL(pk_index_compaction);
 
     METRIC_DEFINE_UINT_GAUGE(load_rpc_threadpool_size, MetricUnit::NOUNIT);
 
