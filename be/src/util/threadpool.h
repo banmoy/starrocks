@@ -233,8 +233,8 @@ public:
     }
 
     int num_queued_tasks() const {
+        LOG(INFO) << "thread pool: " << _name << ", " << this << ", " << &_lock;
         std::lock_guard l(_lock);
-	LOG(INFO) << "thread pool: " << _name;
         return _total_queued_tasks;
     }
 
