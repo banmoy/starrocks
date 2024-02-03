@@ -283,15 +283,90 @@ Status StorageEngine::_open(const EngineOptions& options) {
     //            static_cast<bthreads::ThreadPoolExecutor*>(_async_delta_writer_executor.get())->get_thread_pool());
 
     _memtable_flush_executor = std::make_unique<MemTableFlushExecutor>();
-    REGISTER_THREAD_POOL_METRICS(memtable_flush, _memtable_flush_executor->get_thread_pool());
+    do {
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "memtable_flush_threadpool_size", &StarRocksMetrics::instance()->memtable_flush_threadpool_size);
+        StarRocksMetrics::instance()->metrics()->register_hook("memtable_flush_threadpool_size", [&]() {
+            StarRocksMetrics::instance()->memtable_flush_threadpool_size.set_value(
+                    [this]() { return _memtable_flush_executor->get_thread_pool()->num_threads(); }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "memtable_flush_total_run_time_ns", &StarRocksMetrics::instance()->memtable_flush_total_run_time_ns);
+        StarRocksMetrics::instance()->metrics()->register_hook("memtable_flush_total_run_time_ns", [&]() {
+            StarRocksMetrics::instance()->memtable_flush_total_run_time_ns.set_value(
+                    [this]() { return _memtable_flush_executor->get_thread_pool()->total_run_time_ns(); }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "memtable_flush_total_task_num", &StarRocksMetrics::instance()->memtable_flush_total_task_num);
+        StarRocksMetrics::instance()->metrics()->register_hook("memtable_flush_total_task_num", [&]() {
+            StarRocksMetrics::instance()->memtable_flush_total_task_num.set_value(
+                    [this]() { return _memtable_flush_executor->get_thread_pool()->total_task_num(); }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric("memtable_flush_queue_count",
+                                                                 &StarRocksMetrics::instance()->memtable_flush_queue_count);
+        StarRocksMetrics::instance()->metrics()->register_hook("memtable_flush_queue_count", [&]() {
+            StarRocksMetrics::instance()->memtable_flush_queue_count.set_value(
+                    [this]() { return _memtable_flush_executor->get_thread_pool()->num_queued_tasks(); }());
+        });
+    } while (false);
 
     _segment_flush_executor = std::make_unique<SegmentFlushExecutor>();
     RETURN_IF_ERROR_WITH_WARN(_segment_flush_executor->init(dirs), "init SegmentFlushExecutor failed");
-    REGISTER_THREAD_POOL_METRICS(segment_flush, _segment_flush_executor->get_thread_pool());
+    do {
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "segment_flush_threadpool_size", &StarRocksMetrics::instance()->segment_flush_threadpool_size);
+        StarRocksMetrics::instance()->metrics()->register_hook("segment_flush_threadpool_size", [&]() {
+            StarRocksMetrics::instance()->segment_flush_threadpool_size.set_value(
+                    [this]() { return _segment_flush_executor->get_thread_pool()->num_threads(); }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "segment_flush_total_run_time_ns", &StarRocksMetrics::instance()->segment_flush_total_run_time_ns);
+        StarRocksMetrics::instance()->metrics()->register_hook("segment_flush_total_run_time_ns", [&]() {
+            StarRocksMetrics::instance()->segment_flush_total_run_time_ns.set_value(
+                    [this]() { return _segment_flush_executor->get_thread_pool()->total_run_time_ns(); }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "segment_flush_total_task_num", &StarRocksMetrics::instance()->segment_flush_total_task_num);
+        StarRocksMetrics::instance()->metrics()->register_hook("segment_flush_total_task_num", [&]() {
+            StarRocksMetrics::instance()->segment_flush_total_task_num.set_value(
+                    [this]() { return _segment_flush_executor->get_thread_pool()->total_task_num(); }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric("segment_flush_queue_count",
+                                                                 &StarRocksMetrics::instance()->segment_flush_queue_count);
+        StarRocksMetrics::instance()->metrics()->register_hook("segment_flush_queue_count", [&]() {
+            StarRocksMetrics::instance()->segment_flush_queue_count.set_value(
+                    [this]() { return _segment_flush_executor->get_thread_pool()->num_queued_tasks(); }());
+        });
+    } while (false);
 
     _segment_replicate_executor = std::make_unique<SegmentReplicateExecutor>();
     RETURN_IF_ERROR_WITH_WARN(_segment_replicate_executor->init(dirs), "init SegmentReplicateExecutor failed");
-    REGISTER_THREAD_POOL_METRICS(segment_replicate, _segment_replicate_executor->get_thread_pool());
+    do {
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "segment_replicate_threadpool_size", &StarRocksMetrics::instance()->segment_replicate_threadpool_size);
+        StarRocksMetrics::instance()->metrics()->register_hook("segment_replicate_threadpool_size", [&]() {
+            StarRocksMetrics::instance()->segment_replicate_threadpool_size.set_value(
+                    [this]() { return _segment_replicate_executor->get_thread_pool()->num_threads(); }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "segment_replicate_total_run_time_ns", &StarRocksMetrics::instance()->segment_replicate_total_run_time_ns);
+        StarRocksMetrics::instance()->metrics()->register_hook("segment_replicate_total_run_time_ns", [&]() {
+            StarRocksMetrics::instance()->segment_replicate_total_run_time_ns.set_value(
+                    [this]() { return _segment_replicate_executor->get_thread_pool()->total_run_time_ns(); }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "segment_replicate_total_task_num", &StarRocksMetrics::instance()->segment_replicate_total_task_num);
+        StarRocksMetrics::instance()->metrics()->register_hook("segment_replicate_total_task_num", [&]() {
+            StarRocksMetrics::instance()->segment_replicate_total_task_num.set_value(
+                    [this]() { return _segment_replicate_executor->get_thread_pool()->total_task_num(); }());
+        });
+        StarRocksMetrics::instance()->metrics()->register_metric(
+                "segment_replicate_queue_count", &StarRocksMetrics::instance()->segment_replicate_queue_count);
+        StarRocksMetrics::instance()->metrics()->register_hook("segment_replicate_queue_count", [&]() {
+            StarRocksMetrics::instance()->segment_replicate_queue_count.set_value(
+                    [this]() { return _segment_replicate_executor->get_thread_pool()->num_queued_tasks(); }());
+        });
+    } while (false);
 
     RETURN_IF_ERROR_WITH_WARN(_replication_txn_manager->init(dirs), "init ReplicationTxnManager failed");
 
