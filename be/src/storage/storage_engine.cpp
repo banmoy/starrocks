@@ -225,6 +225,7 @@ Status StorageEngine::_open(const EngineOptions& options) {
             static_cast<bthreads::ThreadPoolExecutor*>(_async_delta_writer_executor.get())->get_thread_pool());
 
     _memtable_flush_executor = std::make_unique<MemTableFlushExecutor>();
+    RETURN_IF_ERROR_WITH_WARN(_memtable_flush_executor->init(dirs), "init MemTableFlushExecutor failed");
     REGISTER_THREAD_POOL_METRICS(memtable_flush, _memtable_flush_executor->get_thread_pool());
 
     _segment_flush_executor = std::make_unique<SegmentFlushExecutor>();
