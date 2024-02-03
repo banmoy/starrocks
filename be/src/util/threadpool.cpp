@@ -45,7 +45,6 @@
 #include "testutil/sync_point.h"
 #include "util/cpu_info.h"
 #include "util/scoped_cleanup.h"
-#include "util/stopwatch.hpp"
 #include "util/thread.h"
 
 namespace starrocks {
@@ -558,9 +557,7 @@ void ThreadPool::dispatch_thread() {
 
         l.unlock();
 
-        MonotonicStopWatch watch;
-        watch.start();
-
+        MonoTime start_time = MonoTime::Now();
         // Execute the task
         task.runnable->run();
         current_thread->inc_finished_tasks();
@@ -572,9 +569,11 @@ void ThreadPool::dispatch_thread() {
         // In the worst case, the destructor might even try to do something
         // with this threadpool, and produce a deadlock.
         task.runnable.reset();
+        MonoTime finish_time = MonoTime::Now();
 
         _total_task_num << 1;
-        _total_run_time_ns << watch.elapsed_time();
+        _total_task_num << start_time.GetDeltaSince(task.submit_time).ToNanoseconds();
+        _total_run_time_ns << finish_time.GetDeltaSince(start_time).ToNanoseconds();
 
         l.lock();
         _last_active_timestamp = MonoTime::Now();

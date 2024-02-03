@@ -302,10 +302,11 @@ TEST_F(StarRocksMetricsTest, PageCacheMetrics) {
     ASSERT_STREQ(std::to_string(cache->get_capacity()).c_str(), capacity_metric->to_string().c_str());
 }
 
-#define ASSERT_THREAD_POOL_METRICS_REGISTER(name, instance)                              \
-    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_threadpool_size"));   \
-    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_total_run_time_ns")); \
-    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_total_task_num"));    \
+#define ASSERT_THREAD_POOL_METRICS_REGISTER(name, instance)                                  \
+    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_threadpool_size"));       \
+    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_total_pending_time_ns")); \
+    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_total_run_time_ns"));     \
+    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_total_task_num"));        \
     ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_queue_count"))
 
 TEST_F(StarRocksMetricsTest, test_metrics_register) {
