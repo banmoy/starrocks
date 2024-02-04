@@ -427,6 +427,7 @@ Status ThreadPool::do_submit(std::shared_ptr<Runnable> r, ThreadPoolToken* token
             token->transition(ThreadPoolToken::State::RUNNING);
         }
     }
+    _total_submitted_task_num << 1;
     _total_queued_tasks++;
 
     // Wake up an idle thread for this task. Choosing the thread at the front of
@@ -571,8 +572,8 @@ void ThreadPool::dispatch_thread() {
         task.runnable.reset();
         MonoTime finish_time = MonoTime::Now();
 
-        _total_task_num << 1;
-        _total_task_num << start_time.GetDeltaSince(task.submit_time).ToNanoseconds();
+        _total_finished_task_num << 1;
+        _total_pending_time_ns << start_time.GetDeltaSince(task.submit_time).ToNanoseconds();
         _total_run_time_ns << finish_time.GetDeltaSince(start_time).ToNanoseconds();
 
         l.lock();

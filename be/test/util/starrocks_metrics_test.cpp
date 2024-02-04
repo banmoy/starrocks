@@ -302,12 +302,14 @@ TEST_F(StarRocksMetricsTest, PageCacheMetrics) {
     ASSERT_STREQ(std::to_string(cache->get_capacity()).c_str(), capacity_metric->to_string().c_str());
 }
 
-#define ASSERT_THREAD_POOL_METRICS_REGISTER(name, instance)                                  \
-    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_threadpool_size"));       \
-    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_total_pending_time_ns")); \
-    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_total_run_time_ns"));     \
-    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_total_task_num"));        \
-    ASSERT_NE(nullptr, instance->get_metric(std::string(#name) + "_queue_count"))
+void assert_threadpool_metrics_register(const std::string& pool_name, MetricRegistry* instance) {
+    ASSERT_NE(nullptr, instance->get_metric(pool_name + "_threadpool_size"));
+    ASSERT_NE(nullptr, instance->get_metric(pool_name + "_total_pending_time_ns"));
+    ASSERT_NE(nullptr, instance->get_metric(pool_name + "_total_run_time_ns"));
+    ASSERT_NE(nullptr, instance->get_metric(pool_name + "_total_submitted_task_num"));
+    ASSERT_NE(nullptr, instance->get_metric(pool_name + "_total_finished_task_num"));
+    ASSERT_NE(nullptr, instance->get_metric(pool_name + "_queue_count"));
+}
 
 TEST_F(StarRocksMetricsTest, test_metrics_register) {
     auto instance = StarRocksMetrics::instance()->metrics();
@@ -320,13 +322,13 @@ TEST_F(StarRocksMetricsTest, test_metrics_register) {
     ASSERT_NE(nullptr, instance->get_metric("segment_flush_duration_us"));
     ASSERT_NE(nullptr, instance->get_metric("segment_flush_io_time_us"));
     ASSERT_NE(nullptr, instance->get_metric("segment_flush_bytes_total"));
-    ASSERT_THREAD_POOL_METRICS_REGISTER(publish_version, instance);
-    ASSERT_THREAD_POOL_METRICS_REGISTER(async_delta_writer, instance);
-    ASSERT_THREAD_POOL_METRICS_REGISTER(memtable_flush, instance);
-    ASSERT_THREAD_POOL_METRICS_REGISTER(segment_replicate, instance);
-    ASSERT_THREAD_POOL_METRICS_REGISTER(segment_flush, instance);
-    ASSERT_THREAD_POOL_METRICS_REGISTER(update_apply, instance);
-    ASSERT_THREAD_POOL_METRICS_REGISTER(pk_index_compaction, instance);
+    assert_threadpool_metrics_register("publish_version", instance);
+    assert_threadpool_metrics_register("async_delta_writer", instance);
+    assert_threadpool_metrics_register("memtable_flush", instance);
+    assert_threadpool_metrics_register("segment_replicate", instance);
+    assert_threadpool_metrics_register("segment_flush", instance);
+    assert_threadpool_metrics_register("update_apply", instance);
+    assert_threadpool_metrics_register("pk_index_compaction", instance);
 }
 
 } // namespace starrocks
