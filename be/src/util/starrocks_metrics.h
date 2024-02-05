@@ -77,7 +77,7 @@ private:
 
 #define REGISTER_THREAD_POOL_METRICS(name, threadpool)                                                           \
     do {                                                                                                         \
-        REGISTER_GAUGE_STARROCKS_METRIC(name##_threadpool_size, [this]() { return threadpool->num_threads(); })  \
+        REGISTER_GAUGE_STARROCKS_METRIC(name##_threadpool_size, [this]() { return threadpool->max_threads(); })  \
         REGISTER_GAUGE_STARROCKS_METRIC(name##_total_pending_time_ns,                                            \
                                         [this]() { return threadpool->total_pending_time_ns(); })                \
         REGISTER_GAUGE_STARROCKS_METRIC(name##_total_run_time_ns,                                                \
