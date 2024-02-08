@@ -108,6 +108,10 @@ void LoadChannelMgr::open(brpc::Controller* cntl, const PTabletWriterOpenRequest
             channel = it->second;
         } else if (!_mem_tracker->limit_exceeded() || config::enable_new_load_on_memory_limit_exceeded) {
             int64_t mem_limit_in_req = request.has_load_mem_limit() ? request.load_mem_limit() : -1;
+            if (mem_limit_in_req > 0) {
+                LOG(INFO) << "Load job has memory limit, load_id: " << load_id << ", txn_id: " << txn_id
+                          << ", job_limit: " << mem_limit_in_req << ", total_limit: " << _mem_tracker->limit();
+            }
             int64_t job_max_memory = calc_job_max_load_memory(mem_limit_in_req, _mem_tracker->limit());
 
             int64_t timeout_in_req_s = request.has_load_channel_timeout_s() ? request.load_channel_timeout_s() : -1;
