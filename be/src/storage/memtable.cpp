@@ -343,6 +343,7 @@ Status MemTable::flush(SegmentPB* seg_info) {
     StarRocksMetrics::instance()->memtable_flush_total.increment(1);
     StarRocksMetrics::instance()->memtable_flush_duration_us.increment(duration_ns / 1000);
     StarRocksMetrics::instance()->memtable_flush_io_time_us.increment(io_stat.write_time_ns / 1000);
+    StarRocksMetrics::instance()->memtable_flush_io_sync_time_us.increment(io_stat.sync_time_ns / 1000);
     auto flush_bytes = memory_usage();
     StarRocksMetrics::instance()->memtable_flush_memory_bytes_total.increment(flush_bytes);
     StarRocksMetrics::instance()->memtable_flush_disk_bytes_total.increment(io_stat.write_bytes);
