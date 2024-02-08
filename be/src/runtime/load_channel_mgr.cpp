@@ -195,14 +195,20 @@ void LoadChannelMgr::cancel(brpc::Controller* cntl, const PTabletWriterCancelReq
 
 void* LoadChannelMgr::load_channel_clean_bg_worker(void* arg) {
 #ifndef BE_TEST
-    uint64_t interval = 60;
+    uint64_t interval = 5;
 #else
     uint64_t interval = 1;
 #endif
     auto mgr = static_cast<LoadChannelMgr*>(arg);
+    std::atomic<int> loop{0};
     while (!bthread_stopped(bthread_self())) {
         if (bthread_usleep(interval * 1000 * 1000) == 0) {
-            mgr->_start_load_channels_clean();
+            mgr->_update_memory_metrics();
+            int st = loop.fetch_add(1);
+            if (st >= 12) {
+                mgr->_start_load_channels_clean();
+                loop.store(0);
+            }
         }
     }
     return nullptr;
@@ -215,6 +221,18 @@ Status LoadChannelMgr::_start_bg_worker() {
         return Status::InternalError("Fail to create bthread");
     }
     return Status::OK();
+}
+
+void LoadChannelMgr::_update_memory_metrics() {
+    StarRocksMetrics::instance()->load_memory_limit.set_value(_mem_tracker->limit());
+    StarRocksMetrics::instance()->load_memory_current.set_value(_mem_tracker->consumption());
+    StarRocksMetrics::instance()->load_memory_peak.set_value(_mem_tracker->peak_consumption());
+    auto parent = _mem_tracker->parent();
+    if (parent != nullptr) {
+        StarRocksMetrics::instance()->process_memory_limit.set_value(parent->limit());
+        StarRocksMetrics::instance()->process_memory_current.set_value(parent->consumption());
+        StarRocksMetrics::instance()->process_memory_peak.set_value(parent->peak_consumption());
+    }
 }
 
 void LoadChannelMgr::_start_load_channels_clean() {

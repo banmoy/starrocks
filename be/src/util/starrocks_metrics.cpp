@@ -194,6 +194,13 @@ StarRocksMetrics::StarRocksMetrics() : _metrics(_s_registry_name) {
     _metrics.register_metric("load_rows", &load_rows_total);
     _metrics.register_metric("load_bytes", &load_bytes_total);
 
+    _metrics.register_metric("process_memory", MetricLabels().add("type", "limit"), &process_memory_limit);
+    _metrics.register_metric("process_memory", MetricLabels().add("type", "current"), &process_memory_current);
+    _metrics.register_metric("process_memory", MetricLabels().add("type", "peek"), &process_memory_peak);
+    _metrics.register_metric("load_memory", MetricLabels().add("type", "limit"), &load_memory_limit);
+    _metrics.register_metric("load_memory", MetricLabels().add("type", "current"), &load_memory_current);
+    _metrics.register_metric("load_memory", MetricLabels().add("type", "peek"), &load_memory_peak);
+
     // Gauge
     REGISTER_STARROCKS_METRIC(memory_pool_bytes_total);
     REGISTER_STARROCKS_METRIC(process_thread_num);

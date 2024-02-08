@@ -198,6 +198,13 @@ public:
     METRIC_DEFINE_INT_COUNTER(load_rows_total, MetricUnit::ROWS);
     METRIC_DEFINE_INT_COUNTER(load_bytes_total, MetricUnit::BYTES);
 
+    METRIC_DEFINE_INT_GAUGE(process_memory_limit, MetricUnit::BYTES);
+    METRIC_DEFINE_INT_GAUGE(process_memory_current, MetricUnit::BYTES);
+    METRIC_DEFINE_INT_GAUGE(process_memory_peak, MetricUnit::BYTES);
+    METRIC_DEFINE_INT_GAUGE(load_memory_limit, MetricUnit::BYTES);
+    METRIC_DEFINE_INT_GAUGE(load_memory_current, MetricUnit::BYTES);
+    METRIC_DEFINE_INT_GAUGE(load_memory_peak, MetricUnit::BYTES);
+
     METRIC_DEFINE_INT_COUNTER(async_delta_writer_execute_total, MetricUnit::OPERATIONS);
     METRIC_DEFINE_INT_COUNTER(async_delta_writer_task_total, MetricUnit::OPERATIONS);
 
