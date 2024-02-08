@@ -472,10 +472,12 @@ Status DeltaWriter::close() {
         Status st = Status::OK();
         st = flush_memtable_async(true);
         _set_state(st.ok() ? kClosed : kAborted, st);
+        if (st.ok()) {
+            StarRocksMetrics::instance()->delta_writer_close_total.increment(1);
+            StarRocksMetrics::instance()->delta_writer_close_duration_us.increment(watch.elapsed_time() / 1000);
+        }
         return st;
     }
-    StarRocksMetrics::instance()->delta_writer_close_total.increment(1);
-    StarRocksMetrics::instance()->delta_writer_close_duration_us.increment(watch.elapsed_time() / 1000);
     return Status::OK();
 }
 
@@ -488,6 +490,7 @@ Status DeltaWriter::flush_memtable_async(bool eos) {
     if (_mem_table != nullptr) {
         RETURN_IF_ERROR(_mem_table->finalize());
     }
+    auto final_cost = watch.elapsed_time();
     if (_mem_table != nullptr && _opt.miss_auto_increment_column && _replica_state == Primary &&
         _mem_table->get_result_chunk() != nullptr) {
         RETURN_IF_ERROR(_fill_auto_increment_id(*_mem_table->get_result_chunk()));
@@ -561,6 +564,7 @@ Status DeltaWriter::flush_memtable_async(bool eos) {
         }
     }
     StarRocksMetrics::instance()->delta_writer_flush_total.increment(1);
+    StarRocksMetrics::instance()->delta_writer_flush_finalize_duration_us.increment(final_cost / 1000);
     StarRocksMetrics::instance()->delta_writer_flush_duration_us.increment(watch.elapsed_time() / 1000);
     return Status::OK();
 }
