@@ -32,6 +32,7 @@
 #include "storage/txn_manager.h"
 #include "storage/update_manager.h"
 #include "util/starrocks_metrics.h"
+#include "util/stopwatch.hpp"
 
 namespace starrocks {
 
@@ -360,6 +361,8 @@ Status DeltaWriter::_check_partial_update_with_sort_key(const Chunk& chunk) {
 }
 
 Status DeltaWriter::write(const Chunk& chunk, const uint32_t* indexes, uint32_t from, uint32_t size) {
+    MonotonicStopWatch watch;
+    watch.start();
     SCOPED_THREAD_LOCAL_MEM_SETTER(_mem_tracker, false);
     RETURN_IF_ERROR(_check_partial_update_with_sort_key(chunk));
 
@@ -406,6 +409,8 @@ Status DeltaWriter::write(const Chunk& chunk, const uint32_t* indexes, uint32_t 
     if (!st.ok()) {
         _set_state(kAborted, st);
     }
+    StarRocksMetrics::instance()->delta_writer_write_total.increment(1);
+    StarRocksMetrics::instance()->delta_writer_write_duration_us.increment(watch.elapsed_time() / 1000);
     return st;
 }
 
@@ -445,6 +450,8 @@ Status DeltaWriter::write_segment(const SegmentPB& segment_pb, butil::IOBuf& dat
 }
 
 Status DeltaWriter::close() {
+    MonotonicStopWatch watch;
+    watch.start();
     SCOPED_THREAD_LOCAL_MEM_SETTER(_mem_tracker, false);
     auto state = get_state();
     switch (state) {
@@ -467,10 +474,14 @@ Status DeltaWriter::close() {
         _set_state(st.ok() ? kClosed : kAborted, st);
         return st;
     }
+    StarRocksMetrics::instance()->delta_writer_close_total.increment(1);
+    StarRocksMetrics::instance()->delta_writer_close_duration_us.increment(watch.elapsed_time() / 1000);
     return Status::OK();
 }
 
 Status DeltaWriter::flush_memtable_async(bool eos) {
+    MonotonicStopWatch watch;
+    watch.start();
     _last_write_ts = 0;
     _write_buffer_size = 0;
     // _mem_table is nullptr means write() has not been called
@@ -549,12 +560,19 @@ Status DeltaWriter::flush_memtable_async(bool eos) {
             });
         }
     }
+    StarRocksMetrics::instance()->delta_writer_flush_total.increment(1);
+    StarRocksMetrics::instance()->delta_writer_flush_duration_us.increment(watch.elapsed_time() / 1000);
     return Status::OK();
 }
 
 Status DeltaWriter::_flush_memtable() {
     RETURN_IF_ERROR(flush_memtable_async());
-    return _flush_token->wait();
+    MonotonicStopWatch watch;
+    watch.start();
+    Status st = _flush_token->wait();
+    StarRocksMetrics::instance()->delta_writer_write_flush_total.increment(1);
+    StarRocksMetrics::instance()->delta_writer_write_flush_duration_us.increment(watch.elapsed_time() / 1000);
+    return st;
 }
 
 Status DeltaWriter::_build_current_tablet_schema(int64_t index_id, const POlapTableSchemaParam& ptable_schema_param,
@@ -605,6 +623,8 @@ void DeltaWriter::_reset_mem_table() {
 }
 
 Status DeltaWriter::commit() {
+    MonotonicStopWatch watch;
+    watch.start();
     Span span;
     if (_opt.parent_span) {
         span = Tracer::Instance().add_span("delta_writer_commit", _opt.parent_span);
@@ -639,6 +659,7 @@ Status DeltaWriter::commit() {
         _set_state(kAborted, st);
         return st;
     }
+    auto flush_ts = watch.elapsed_time();
 
     if (auto res = _rowset_writer->build(); res.ok()) {
         _cur_rowset = std::move(res).value();
@@ -647,6 +668,7 @@ Status DeltaWriter::commit() {
         _set_state(kAborted, res.status());
         return res.status();
     }
+    auto rowset_build_ts = watch.elapsed_time();
 
     if (_tablet->keys_type() == KeysType::PRIMARY_KEYS) {
         auto st = _storage_engine->update_manager()->on_rowset_finished(_tablet.get(), _cur_rowset.get());
@@ -655,6 +677,7 @@ Status DeltaWriter::commit() {
             return st;
         }
     }
+    auto pk_finish_ts = watch.elapsed_time();
 
     if (_replicate_token != nullptr) {
         if (auto st = _replicate_token->wait(); UNLIKELY(!st.ok())) {
@@ -663,9 +686,11 @@ Status DeltaWriter::commit() {
             return st;
         }
     }
+    auto replicate_ts = watch.elapsed_time();
 
     auto res = _storage_engine->txn_manager()->commit_txn(_opt.partition_id, _tablet, _opt.txn_id, _opt.load_id,
                                                           _cur_rowset, false);
+    auto txn_ts = watch.elapsed_time();
 
     if (!res.ok()) {
         _storage_engine->update_manager()->on_rowset_cancel(_tablet.get(), _cur_rowset.get());
@@ -685,6 +710,13 @@ Status DeltaWriter::commit() {
         }
     }
     VLOG(1) << "Closed delta writer. tablet_id: " << _tablet->tablet_id() << ", stats: " << _flush_token->get_stats();
+    StarRocksMetrics::instance()->delta_writer_commit_total.increment(1);
+    StarRocksMetrics::instance()->delta_writer_commit_flush_duration_us.increment(flush_ts / 1000);
+    StarRocksMetrics::instance()->delta_writer_commit_pk_duration_us.increment((pk_finish_ts - rowset_build_ts) / 1000);
+    StarRocksMetrics::instance()->delta_writer_commit_replicate_duration_us.increment((replicate_ts - pk_finish_ts) /
+                                                                                      1000);
+    StarRocksMetrics::instance()->delta_writer_commit_txn_duration_us.increment((txn_ts - replicate_ts) / 1000);
+    StarRocksMetrics::instance()->delta_writer_commit_duration_us.increment(watch.elapsed_time() / 1000);
     return Status::OK();
 }
 

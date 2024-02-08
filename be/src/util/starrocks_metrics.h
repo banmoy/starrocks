@@ -198,6 +198,25 @@ public:
     METRIC_DEFINE_INT_COUNTER(load_rows_total, MetricUnit::ROWS);
     METRIC_DEFINE_INT_COUNTER(load_bytes_total, MetricUnit::BYTES);
 
+    METRIC_DEFINE_INT_COUNTER(async_delta_writer_execute_total, MetricUnit::OPERATIONS);
+    METRIC_DEFINE_INT_COUNTER(async_delta_writer_task_total, MetricUnit::OPERATIONS);
+
+    METRIC_DEFINE_INT_COUNTER(delta_writer_write_total, MetricUnit::OPERATIONS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_write_flush_total, MetricUnit::OPERATIONS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_write_flush_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_write_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_close_total, MetricUnit::OPERATIONS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_close_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_commit_total, MetricUnit::OPERATIONS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_commit_flush_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_commit_pk_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_commit_replicate_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_commit_txn_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_commit_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_flush_total, MetricUnit::OPERATIONS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_flush_finalize_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(delta_writer_flush_duration_us, MetricUnit::MICROSECONDS);
+
     METRIC_DEFINE_INT_COUNTER(memtable_flush_total, MetricUnit::OPERATIONS);
     METRIC_DEFINE_INT_COUNTER(memtable_flush_duration_us, MetricUnit::MICROSECONDS);
     METRIC_DEFINE_INT_COUNTER(memtable_flush_io_time_us, MetricUnit::MICROSECONDS);

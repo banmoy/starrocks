@@ -19,6 +19,7 @@
 #include "runtime/current_thread.h"
 #include "storage/segment_flush_executor.h"
 #include "storage/storage_engine.h"
+#include "util/starrocks_metrics.h"
 
 namespace starrocks {
 
@@ -33,7 +34,9 @@ int AsyncDeltaWriter::_execute(void* meta, bthread::TaskIterator<AsyncDeltaWrite
     }
     auto writer = static_cast<DeltaWriter*>(meta);
     bool flush_after_write = false;
+    int num_task = 0;
     for (; iter; ++iter) {
+        num_task += 1;
         Status st;
         if (iter->abort) {
             writer->abort(iter->abort_with_log);
@@ -81,6 +84,8 @@ int AsyncDeltaWriter::_execute(void* meta, bthread::TaskIterator<AsyncDeltaWrite
         LOG_IF(WARNING, !st.ok()) << "Fail to flush. txn_id: " << writer->txn_id()
                                   << " tablet_id: " << writer->tablet()->tablet_id() << ": " << st;
     }
+    StarRocksMetrics::instance()->async_delta_writer_execute_total.increment(1);
+    StarRocksMetrics::instance()->async_delta_writer_task_total.increment(num_task);
     return 0;
 }
 

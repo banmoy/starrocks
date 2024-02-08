@@ -54,6 +54,25 @@ StarRocksMetrics::StarRocksMetrics() : _metrics(_s_registry_name) {
     REGISTER_STARROCKS_METRIC(query_scan_bytes);
     REGISTER_STARROCKS_METRIC(query_scan_rows);
 
+    REGISTER_STARROCKS_METRIC(async_delta_writer_execute_total);
+    REGISTER_STARROCKS_METRIC(async_delta_writer_task_total);
+
+    REGISTER_STARROCKS_METRIC(delta_writer_write_total);
+    REGISTER_STARROCKS_METRIC(delta_writer_write_flush_total);
+    REGISTER_STARROCKS_METRIC(delta_writer_write_flush_duration_us);
+    REGISTER_STARROCKS_METRIC(delta_writer_write_duration_us);
+    REGISTER_STARROCKS_METRIC(delta_writer_close_total);
+    REGISTER_STARROCKS_METRIC(delta_writer_close_duration_us);
+    REGISTER_STARROCKS_METRIC(delta_writer_commit_total);
+    REGISTER_STARROCKS_METRIC(delta_writer_commit_flush_duration_us);
+    REGISTER_STARROCKS_METRIC(delta_writer_commit_pk_duration_us);
+    REGISTER_STARROCKS_METRIC(delta_writer_commit_replicate_duration_us);
+    REGISTER_STARROCKS_METRIC(delta_writer_commit_txn_duration_us);
+    REGISTER_STARROCKS_METRIC(delta_writer_commit_duration_us);
+    REGISTER_STARROCKS_METRIC(delta_writer_flush_total);
+    REGISTER_STARROCKS_METRIC(delta_writer_flush_finalize_duration_us);
+    REGISTER_STARROCKS_METRIC(delta_writer_flush_duration_us);
+
     REGISTER_STARROCKS_METRIC(memtable_flush_total);
     REGISTER_STARROCKS_METRIC(memtable_flush_duration_us);
     REGISTER_STARROCKS_METRIC(memtable_flush_io_time_us);
