@@ -205,6 +205,19 @@ public:
     METRIC_DEFINE_INT_GAUGE(load_memory_current, MetricUnit::BYTES);
     METRIC_DEFINE_INT_GAUGE(load_memory_peak, MetricUnit::BYTES);
 
+    METRIC_DEFINE_INT_COUNTER(load_add_chunks_total, MetricUnit::NOUNIT);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunks_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_total, MetricUnit::NOUNIT);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_write_tablets_total, MetricUnit::NOUNIT);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_latch_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_eos_total, MetricUnit::NOUNIT);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_replicate_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_persist_duration_us, MetricUnit::MICROSECONDS);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_commit_tablets_total, MetricUnit::NOUNIT);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_abort_tablets_total, MetricUnit::NOUNIT);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_persist_tablets_total, MetricUnit::NOUNIT);
+
     METRIC_DEFINE_INT_COUNTER(async_delta_writer_execute_total, MetricUnit::OPERATIONS);
     METRIC_DEFINE_INT_COUNTER(async_delta_writer_task_total, MetricUnit::OPERATIONS);
 

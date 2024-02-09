@@ -54,6 +54,19 @@ StarRocksMetrics::StarRocksMetrics() : _metrics(_s_registry_name) {
     REGISTER_STARROCKS_METRIC(query_scan_bytes);
     REGISTER_STARROCKS_METRIC(query_scan_rows);
 
+    REGISTER_STARROCKS_METRIC(load_add_chunks_total);
+    REGISTER_STARROCKS_METRIC(load_add_chunks_duration_us);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_total);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_write_tablets_total);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_latch_duration_us);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_duration_us);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_eos_total);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_replicate_duration_us);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_persist_duration_us);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_commit_tablets_total);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_abort_tablets_total);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_persist_tablets_total);
+
     REGISTER_STARROCKS_METRIC(async_delta_writer_execute_total);
     REGISTER_STARROCKS_METRIC(async_delta_writer_task_total);
 

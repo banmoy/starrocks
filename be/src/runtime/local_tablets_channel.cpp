@@ -126,6 +126,8 @@ void LocalTabletsChannel::add_segment(brpc::Controller* cntl, const PTabletWrite
 
 void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequest& request,
                                     PTabletWriterAddBatchResult* response) {
+    MonotonicStopWatch watch;
+    watch.start();
     std::shared_lock<bthreads::BThreadSharedMutex> lk(_rw_mtx);
     auto t0 = std::chrono::steady_clock::now();
     int64_t wait_memtable_flush_time_us = 0;
@@ -219,12 +221,14 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
     std::unordered_map<int64_t, std::vector<int64_t>> node_id_to_abort_tablets;
     context->set_node_id_to_abort_tablets(&node_id_to_abort_tablets);
 
+    int num_tablets = 0;
     for (int i = 0; i < channel_size; ++i) {
         size_t from = channel_row_idx_start_points[i];
         size_t size = channel_row_idx_start_points[i + 1] - from;
         if (size == 0) {
             continue;
         }
+        num_tablets += 1;
         auto tablet_id = tablet_ids[row_indexes[from]];
         auto it = _delta_writers.find(tablet_id);
         DCHECK(it != _delta_writers.end());
@@ -276,6 +280,7 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
 
     // This will only block the bthread, will not block the pthread
     count_down_latch.wait();
+    auto latch_ts = watch.elapsed_time();
 
     // Abort tablets which primary replica already failed
     if (response->status().status_code() != TStatusCode::OK) {
@@ -320,6 +325,7 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
             }
         }
     }
+    auto replicate_ts = watch.elapsed_time();
 
     {
         std::lock_guard lock(_senders[request.sender_id()].lock);
@@ -367,6 +373,11 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
             }
         }
         auto st = StorageEngine::instance()->txn_manager()->persist_tablet_related_txns(tablets);
+        StarRocksMetrics::instance()->load_add_chunk_eos_total.increment(1);
+        StarRocksMetrics::instance()->load_add_chunk_persist_tablets_total.increment(tablets.size());
+        StarRocksMetrics::instance()->load_add_chunk_replicate_duration_us.increment((replicate_ts - latch_ts) / 1000);
+        StarRocksMetrics::instance()->load_add_chunk_persist_duration_us.increment(
+                (watch.elapsed_time() - replicate_ts) / 1000);
         LOG_IF(WARNING, !st.ok()) << "failed to persist transactions: " << st;
     } else if (request.eos() && request.wait_all_sender_close()) {
         std::string msg = fmt::format("LocalTabletsChannel txn_id: {} load_id: {}", _txn_id, print_id(request.id()));
@@ -377,7 +388,12 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
         lk.unlock();
         // wait for all senders closed, may be timed out
         drain_senders(remain * 1000, msg);
+        LOG(INFO) << "Wait all sender close, txn_id: " << _txn_id << ", load_id: " << print_id(request.id());
     }
+    StarRocksMetrics::instance()->load_add_chunk_total.increment(1);
+    StarRocksMetrics::instance()->load_add_chunk_duration_us.increment(watch.elapsed_time() / 1000);
+    StarRocksMetrics::instance()->load_add_chunk_latch_duration_us.increment(latch_ts / 1000);
+    StarRocksMetrics::instance()->load_add_chunk_write_tablets_total.increment(num_tablets);
 
     int64_t last_execution_time_us = 0;
     if (response->has_execution_time_us()) {
@@ -506,6 +522,8 @@ void LocalTabletsChannel::_commit_tablets(const PTabletWriterAddChunkRequest& re
                                           const std::shared_ptr<LocalTabletsChannel::WriteContext>& context) {
     vector<int64_t> commit_tablet_ids;
     std::unordered_map<int64_t, std::vector<int64_t>> node_id_to_abort_tablets;
+    int num_commit = 0;
+    int num_abort = 0;
     {
         std::lock_guard l1(_partitions_ids_lock);
         for (auto& [tablet_id, delta_writer] : _delta_writers) {
@@ -514,6 +532,7 @@ void LocalTabletsChannel::_commit_tablets(const PTabletWriterAddChunkRequest& re
                 if (UNLIKELY(_partition_ids.count(delta_writer->partition_id()) == 0)) {
                     // no data load, abort txn without printing log
                     delta_writer->abort(false);
+                    num_abort += 1;
 
                     // secondary replicas need abort by primary replica
                     if (_is_replicated_storage) {
@@ -526,6 +545,7 @@ void LocalTabletsChannel::_commit_tablets(const PTabletWriterAddChunkRequest& re
                     auto cb = new WriteCallback(context);
                     delta_writer->commit(cb);
                     commit_tablet_ids.emplace_back(tablet_id);
+                    num_commit += 1;
                 }
             }
         }
@@ -537,6 +557,8 @@ void LocalTabletsChannel::_commit_tablets(const PTabletWriterAddChunkRequest& re
 
     // abort seconary replicas located on other nodes which have no data
     _abort_replica_tablets(request, "", node_id_to_abort_tablets);
+    StarRocksMetrics::instance()->load_add_chunk_commit_tablets_total.increment(num_commit);
+    StarRocksMetrics::instance()->load_add_chunk_abort_tablets_total.increment(num_abort);
 }
 
 int LocalTabletsChannel::_close_sender(const int64_t* partitions, size_t partitions_size) {
