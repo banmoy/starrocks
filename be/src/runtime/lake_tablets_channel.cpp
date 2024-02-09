@@ -44,6 +44,7 @@
 #include "util/compression/block_compression.h"
 #include "util/countdown_latch.h"
 #include "util/stack_trace_mutex.h"
+#include "util/trace.h"
 
 namespace starrocks {
 
@@ -67,8 +68,8 @@ public:
     Status open(const PTabletWriterOpenRequest& params, PTabletWriterOpenResult* result,
                 std::shared_ptr<OlapTableSchemaParam> schema, bool is_incremental) override;
 
-    void add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequest& request,
-                   PTabletWriterAddBatchResult* response) override;
+    void add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequest& request, PTabletWriterAddBatchResult* response,
+                   Trace* trace = nullptr) override;
 
     Status incremental_open(const PTabletWriterOpenRequest& params, PTabletWriterOpenResult* result,
                             std::shared_ptr<OlapTableSchemaParam> schema) override;
@@ -226,7 +227,7 @@ Status LakeTabletsChannel::open(const PTabletWriterOpenRequest& params, PTabletW
 }
 
 void LakeTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequest& request,
-                                   PTabletWriterAddBatchResult* response) {
+                                   PTabletWriterAddBatchResult* response, Trace* trace) {
     std::shared_lock<bthreads::BThreadSharedMutex> rolk(_rw_mtx);
     auto t0 = std::chrono::steady_clock::now();
     int64_t wait_memtable_flush_time_us = 0;

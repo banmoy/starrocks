@@ -1215,4 +1215,6 @@ CONF_mBool(enable_profile_for_external_plan, "false");
 
 // the max length supported for varchar type
 CONF_mInt32(olap_string_max_length, "1048576");
+
+CONF_mInt32(load_add_chunks_slow_trace_ms, "-1");
 } // namespace starrocks::config

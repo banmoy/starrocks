@@ -20,6 +20,7 @@ namespace starrocks {
 
 class LoadChannel;
 class MemTracker;
+class Trace;
 struct TabletsChannelKey;
 
 namespace lake {

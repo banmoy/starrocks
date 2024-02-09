@@ -44,6 +44,7 @@ class PTabletWriterAddBatchResult;
 class PTabletWriterAddChunkRequest;
 class PTabletWriterAddSegmentRequest;
 class PTabletWriterAddSegmentResult;
+class Trace;
 
 class TabletsChannel {
 public:
@@ -57,7 +58,7 @@ public:
                                     std::shared_ptr<OlapTableSchemaParam> schema) = 0;
 
     virtual void add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequest& request,
-                           PTabletWriterAddBatchResult* response) = 0;
+                           PTabletWriterAddBatchResult* response, Trace* trace = nullptr) = 0;
 
     virtual void cancel() = 0;
 

@@ -32,6 +32,7 @@ class Controller;
 namespace starrocks {
 
 class MemTracker;
+class Trace;
 
 class LocalTabletsChannel : public TabletsChannel {
 public:
@@ -48,8 +49,8 @@ public:
     Status open(const PTabletWriterOpenRequest& params, PTabletWriterOpenResult* result,
                 std::shared_ptr<OlapTableSchemaParam> schema, bool is_incremental) override;
 
-    void add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequest& request,
-                   PTabletWriterAddBatchResult* response) override;
+    void add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequest& request, PTabletWriterAddBatchResult* response,
+                   Trace* trace = nullptr) override;
 
     Status incremental_open(const PTabletWriterOpenRequest& params, PTabletWriterOpenResult* result,
                             std::shared_ptr<OlapTableSchemaParam> schema) override;
@@ -132,12 +133,16 @@ private:
 
         void set_count_down_latch(BThreadCountDownLatch* latch) { _latch = latch; }
 
+        void set_trace(Trace* trace) { _trace = trace; }
+        Trace* trace() { return _trace; }
+
     private:
         friend class LocalTabletsChannel;
 
         mutable bthread::Mutex _response_lock;
         PTabletWriterAddBatchResult* _response;
         BThreadCountDownLatch* _latch{nullptr};
+        Trace* _trace;
 
         Chunk _chunk;
         std::unique_ptr<uint32_t[]> _row_indexes;
@@ -152,6 +157,8 @@ private:
         ~WriteCallback() override = default;
 
         void run(const Status& st, const CommittedRowsetInfo* info, const FailedRowsetInfo* failed_info) override;
+
+        Trace* trace() override { return _context->trace(); }
 
         WriteCallback(const WriteCallback&) = delete;
         void operator=(const WriteCallback&) = delete;
@@ -171,12 +178,13 @@ private:
     int _close_sender(const int64_t* partitions, size_t partitions_size);
 
     void _commit_tablets(const PTabletWriterAddChunkRequest& request,
-                         const std::shared_ptr<LocalTabletsChannel::WriteContext>& context);
+                         const std::shared_ptr<LocalTabletsChannel::WriteContext>& context, Trace* trace = nullptr);
 
     void _abort_replica_tablets(const PTabletWriterAddChunkRequest& request, const std::string& abort_reason,
-                                const std::unordered_map<int64_t, std::vector<int64_t>>& node_id_to_abort_tablets);
+                                const std::unordered_map<int64_t, std::vector<int64_t>>& node_id_to_abort_tablets,
+                                Trace* trace = nullptr);
 
-    void _flush_stale_memtables();
+    void _flush_stale_memtables(Trace* trace = nullptr);
 
     LoadChannel* _load_channel;
 

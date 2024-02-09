@@ -39,6 +39,7 @@ class CommittedRowsetInfo;
 class FailedRowsetInfo;
 class AsyncDeltaWriterCallback;
 class AsyncDeltaWriterSegmentRequest;
+class Trace;
 
 // AsyncDeltaWriter is a wrapper on DeltaWriter to support non-blocking async write.
 // All submitted tasks will be executed in the FIFO order.
@@ -77,15 +78,15 @@ public:
     // This method will flush all the records in memtable to disk.
     //
     // [thread-safe and wait-free]
-    void flush();
+    void flush(Trace* trace = nullptr);
 
     // [thread-safe and wait-free]
     void commit(AsyncDeltaWriterCallback* cb);
 
     // [thread-safe and wait-free]
-    void abort(bool with_log = true);
+    void abort(bool with_log = true, Trace* trace = nullptr);
 
-    void cancel(const Status& st);
+    void cancel(const Status& st, Trace* trace = nullptr);
 
     int64_t partition_id() const { return _writer->partition_id(); }
 
@@ -121,16 +122,20 @@ private:
         bool abort = false;
         bool abort_with_log = false;
         bool flush_after_write = false;
+        int32_t task_id;
+        int64_t create_ts_ns;
     };
 
     static int _execute(void* meta, bthread::TaskIterator<AsyncDeltaWriter::Task>& iter);
 
     Status _init();
-    void _close();
+    void _close(Trace* trace = nullptr);
+    void _tag_task(Task* task);
 
     std::shared_ptr<DeltaWriter> _writer;
     bthread::ExecutionQueueId<Task> _queue_id;
     std::atomic<bool> _closed;
+    std::atomic<int32_t> _task_id{0};
 };
 
 class CommittedRowsetInfo {
@@ -172,6 +177,8 @@ public:
     // st == Status::OK && info != nullptr means commit succeeded.
     // st == Status::OK && info == nullptr means the writes succeeded with no commit.
     virtual void run(const Status& st, const CommittedRowsetInfo* info, const FailedRowsetInfo* failed_info) = 0;
+
+    virtual Trace* trace() = 0;
 };
 
 } // namespace starrocks

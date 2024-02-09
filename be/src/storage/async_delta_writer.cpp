@@ -20,6 +20,7 @@
 #include "storage/segment_flush_executor.h"
 #include "storage/storage_engine.h"
 #include "util/starrocks_metrics.h"
+#include "util/trace.h"
 
 namespace starrocks {
 
@@ -38,6 +39,9 @@ int AsyncDeltaWriter::_execute(void* meta, bthread::TaskIterator<AsyncDeltaWrite
     for (; iter; ++iter) {
         num_task += 1;
         Status st;
+        ADOPT_TRACE(iter->write_cb->trace());
+        TRACE("async delta writer execute start, txn_id: $0, tablet_id: $1, task_id: $2, pending_ns: $3",
+              writer->txn_id(), writer->tablet()->tablet_id(), iter->task_id, (MonotonicNanos() - iter->create_ts_ns));
         if (iter->abort) {
             writer->abort(iter->abort_with_log);
             continue;
@@ -47,6 +51,8 @@ int AsyncDeltaWriter::_execute(void* meta, bthread::TaskIterator<AsyncDeltaWrite
         }
 
         if (iter->flush_after_write) {
+            TRACE("async delta writer execute, txn_id: $0, tablet_id: $1, task_id: $2, flush_after_write: $3",
+                  writer->txn_id(), writer->tablet()->tablet_id(), iter->task_id, flush_after_write);
             flush_after_write = true;
             continue;
         }
@@ -78,6 +84,8 @@ int AsyncDeltaWriter::_execute(void* meta, bthread::TaskIterator<AsyncDeltaWrite
         // Do NOT touch |iter->commit_cb| since here, it may have been deleted.
         LOG_IF(ERROR, !st.ok()) << "Fail to write or commit. txn_id: " << writer->txn_id()
                                 << " tablet_id: " << writer->tablet()->tablet_id() << ": " << st;
+        TRACE("async delta writer execute end, txn_id: $0, tablet_id: $1, task_id: $2",
+              writer->txn_id(), writer->tablet()->tablet_id(), iter->task_id);
     }
     if (flush_after_write) {
         auto st = writer->flush_memtable_async(false);
@@ -123,23 +131,31 @@ void AsyncDeltaWriter::write(const AsyncDeltaWriterRequest& req, AsyncDeltaWrite
     task.indexes_size = req.indexes_size;
     task.write_cb = cb;
     task.commit_after_write = req.commit_after_write;
+    _tag_task(&task);
     int r = bthread::execution_queue_execute(_queue_id, task);
     if (r != 0) {
         LOG(WARNING) << "Fail to execution_queue_execute: " << r;
         FailedRowsetInfo failed_info{.tablet_id = _writer->tablet()->tablet_id(), .replicate_token = nullptr};
         task.write_cb->run(Status::InternalError("fail to call execution_queue_execute"), nullptr, &failed_info);
     }
+    TRACE_TO(cb->trace(), "async delta writer write, txn_id: $0, tablet_id: $1, task_id: $2",
+          writer()->txn_id(), writer()->tablet()->tablet_id(), task.task_id);
 }
 
-void AsyncDeltaWriter::flush() {
+void AsyncDeltaWriter::flush(Trace* trace) {
     Task task;
     task.chunk = nullptr;
     task.indexes = nullptr;
     task.indexes_size = 0;
     task.flush_after_write = true;
+    _tag_task(&task);
     if (int r = bthread::execution_queue_execute(_queue_id, task); r != 0) {
         LOG(WARNING) << "Fail to execution_queue_execute tablet_id: " << _writer->tablet()->tablet_id()
                      << " ret: " << r;
+    }
+    if (trace) {
+        TRACE_TO(trace, "async delta writer flush, txn_id: $0, tablet_id: $1, task_id: $2", writer()->txn_id(),
+                 writer()->tablet()->tablet_id(), task.task_id);
     }
 }
 
@@ -158,33 +174,49 @@ void AsyncDeltaWriter::commit(AsyncDeltaWriterCallback* cb) {
     task.indexes_size = 0;
     task.write_cb = cb;
     task.commit_after_write = true;
+    _tag_task(&task);
     int r = bthread::execution_queue_execute(_queue_id, task);
     if (r != 0) {
         LOG(WARNING) << "Fail to execution_queue_execute: " << r;
         FailedRowsetInfo failed_info{.tablet_id = _writer->tablet()->tablet_id(), .replicate_token = nullptr};
         task.write_cb->run(Status::InternalError("fail to call execution_queue_execute"), nullptr, &failed_info);
     }
+    TRACE_TO(cb->trace(), "async delta writer commit, txn_id: $0, tablet_id: $1, task_id: $2",
+             writer()->txn_id(), writer()->tablet()->tablet_id(), task.task_id);
 }
 
-void AsyncDeltaWriter::cancel(const Status& st) {
+void AsyncDeltaWriter::cancel(const Status& st, Trace* trace) {
     _writer->cancel(st);
+    if (trace) {
+        TRACE_TO(trace, "async delta writer cancel, txn_id: $0, tablet_id: $1", writer()->txn_id(),
+                 writer()->tablet()->tablet_id());
+    }
 }
 
-void AsyncDeltaWriter::abort(bool with_log) {
+void AsyncDeltaWriter::abort(bool with_log, Trace* trace) {
     Task task;
     task.abort = true;
     task.abort_with_log = with_log;
+    _tag_task(&task);
 
     bthread::TaskOptions options;
     int r = bthread::execution_queue_execute(_queue_id, task, &options);
     LOG_IF(WARNING, r != 0) << "Fail to execution_queue_execute: " << r;
+    if (trace) {
+        TRACE_TO(trace, "async delta writer abort, txn_id: $0, tablet_id: $1, task_id: $2",
+                 writer()->txn_id(), writer()->tablet()->tablet_id(), task.task_id);
+    }
 
     // Wait until all background tasks finished
     // https://github.com/StarRocks/starrocks/issues/8906
-    _close();
+    _close(trace);
 }
 
-void AsyncDeltaWriter::_close() {
+void AsyncDeltaWriter::_close(Trace* trace) {
+    if (trace) {
+        TRACE_TO(trace, "async delta writer _close start, txn_id: $0, tablet_id: $1", writer()->txn_id(),
+                 writer()->tablet()->tablet_id());
+    }
     bool value = _closed.load(std::memory_order_acquire);
     if (value) {
         return;
@@ -192,9 +224,22 @@ void AsyncDeltaWriter::_close() {
     if (_closed.compare_exchange_strong(value, true, std::memory_order_acq_rel) && _queue_id.value != kInvalidQueueId) {
         int r = bthread::execution_queue_stop(_queue_id);
         LOG_IF(WARNING, r != 0) << "Fail to stop execution queue: " << r;
+        if (trace) {
+            TRACE_TO(trace, "async delta writer _close join, txn_id: $0, tablet_id: $1", writer()->txn_id(),
+                     writer()->tablet()->tablet_id());
+        }
         r = bthread::execution_queue_join(_queue_id);
         LOG_IF(WARNING, r != 0) << "Fail to join execution queue: " << r;
     }
+    if (trace) {
+        TRACE_TO(trace, "async delta writer _close end, txn_id: $0, tablet_id: $1", writer()->txn_id(),
+                 writer()->tablet()->tablet_id());
+    }
+}
+
+void AsyncDeltaWriter::_tag_task(Task* task) {
+    task->task_id = _task_id.fetch_add(1);
+    task->create_ts_ns = MonotonicNanos();
 }
 
 } // namespace starrocks

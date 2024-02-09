@@ -47,6 +47,7 @@
 #include "util/lru_cache.h"
 #include "util/starrocks_metrics.h"
 #include "util/stopwatch.hpp"
+#include "util/trace.h"
 
 #define RETURN_RESPONSE_IF_ERROR(stmt, response)                                      \
     do {                                                                              \
@@ -128,7 +129,7 @@ void LoadChannel::open(brpc::Controller* cntl, const PTabletWriterOpenRequest& r
 }
 
 void LoadChannel::_add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequest& request,
-                             PTabletWriterAddBatchResult* response) {
+                             PTabletWriterAddBatchResult* response, Trace* trace) {
     _num_chunk++;
     _last_updated_time.store(time(nullptr), std::memory_order_relaxed);
     auto channel = get_tablets_channel(request.index_id());
@@ -137,19 +138,20 @@ void LoadChannel::_add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequest& r
         response->mutable_status()->add_error_msgs("cannot find the tablets channel associated with the index id");
         return;
     }
-    channel->add_chunk(chunk, request, response);
+    channel->add_chunk(chunk, request, response, trace);
 }
 
 void LoadChannel::add_chunk(const PTabletWriterAddChunkRequest& request, PTabletWriterAddBatchResult* response) {
+    scoped_refptr<Trace> trace_gurad = scoped_refptr<Trace>(new Trace());
     faststring uncompressed_buffer;
     Chunk chunk;
     if (request.has_chunk()) {
         auto& pchunk = request.chunk();
         RETURN_RESPONSE_IF_ERROR(_build_chunk_meta(pchunk), response);
         RETURN_RESPONSE_IF_ERROR(_deserialize_chunk(pchunk, chunk, &uncompressed_buffer), response);
-        _add_chunk(&chunk, request, response);
+        _add_chunk(&chunk, request, response, trace_gurad.get());
     } else {
-        _add_chunk(nullptr, request, response);
+        _add_chunk(nullptr, request, response, trace_gurad.get());
     }
 }
 
@@ -164,18 +166,22 @@ void LoadChannel::add_chunks(const PTabletWriterAddChunksRequest& req, PTabletWr
     watch.start();
     faststring uncompressed_buffer;
     std::unique_ptr<Chunk> chunk;
+    scoped_refptr<Trace> trace_gurad = scoped_refptr<Trace>(new Trace());
+    int64_t txn_id = -1;
+    TRACE_TO(trace_gurad.get(), "receive add_chunks");
     for (int i = 0; i < req.requests_size(); i++) {
         auto& request = req.requests(i);
         VLOG_RPC << "tablet writer add chunk, id=" << print_id(request.id()) << ", index_id=" << request.index_id()
                  << ", sender_id=" << request.sender_id() << " request_index=" << i << " eos=" << request.eos();
 
+        txn_id = request.txn_id();
         if (i == 0 && request.has_chunk()) {
             chunk = std::make_unique<Chunk>();
             auto& pchunk = request.chunk();
             RETURN_RESPONSE_IF_ERROR(_build_chunk_meta(pchunk), response);
             RETURN_RESPONSE_IF_ERROR(_deserialize_chunk(pchunk, *chunk, &uncompressed_buffer), response);
         }
-        _add_chunk(chunk.get(), request, response);
+        _add_chunk(chunk.get(), request, response, trace_gurad.get());
 
         if (response->status().status_code() != TStatusCode::OK) {
             LOG(WARNING) << "tablet writer add chunk, id=" << print_id(request.id())
@@ -185,8 +191,13 @@ void LoadChannel::add_chunks(const PTabletWriterAddChunksRequest& req, PTabletWr
             return;
         }
     }
+    auto latency_us = watch.elapsed_time() / 1000;
     StarRocksMetrics::instance()->load_add_chunks_total.increment(1);
-    StarRocksMetrics::instance()->load_add_chunks_duration_us.increment(watch.elapsed_time() / 1000);
+    StarRocksMetrics::instance()->load_add_chunks_duration_us.increment(latency_us);
+    if (config::load_add_chunks_slow_trace_ms > 0 && (latency_us / 1000 > config::load_add_chunks_slow_trace_ms)) {
+        LOG(INFO) << "Load add_chunks trace, txn_id: " << txn_id << ", latency: " << latency_us << "us\n"
+                  << trace_gurad.get()->DumpToString();
+    }
 }
 
 void LoadChannel::add_segment(brpc::Controller* cntl, const PTabletWriterAddSegmentRequest* request,
