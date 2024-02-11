@@ -21,6 +21,7 @@
 #include "storage/storage_engine.h"
 #include "util/starrocks_metrics.h"
 #include "util/stopwatch.hpp"
+#include "util/thread.h"
 #include "util/trace.h"
 
 namespace starrocks {
@@ -41,15 +42,17 @@ int AsyncDeltaWriter::_execute(void* meta, bthread::TaskIterator<AsyncDeltaWrite
     auto writer = static_cast<DeltaWriter*>(meta);
     bool flush_after_write = false;
     auto execute_id = g_execute_id.fetch_add(1);
+    auto thread_id = Thread::current_thread_id();
     int num_task = 0;
     for (; iter; ++iter) {
         auto t = watch.elapsed_time();
         num_task += 1;
         Status st;
         ADOPT_TRACE(iter->write_cb->trace());
-        TRACE("async delta writer execute start, txn_id: $0, tablet_id: $1, task_id: $2, execute_id: $3, pending_ns: "
-              "$4",
-              writer->txn_id(), writer->tablet()->tablet_id(), iter->task_id, execute_id,
+        TRACE("async delta writer execute start, txn_id: $0, tablet_id: $1, task_id: $2, execute_id: $3, thread_id: "
+              "$4, pending_ns: "
+              "$5",
+              writer->txn_id(), writer->tablet()->tablet_id(), iter->task_id, execute_id, thread_id,
               (MonotonicNanos() - iter->create_ts_ns));
         if (iter->abort) {
             writer->abort(iter->abort_with_log);
@@ -93,8 +96,10 @@ int AsyncDeltaWriter::_execute(void* meta, bthread::TaskIterator<AsyncDeltaWrite
         // Do NOT touch |iter->commit_cb| since here, it may have been deleted.
         LOG_IF(ERROR, !st.ok()) << "Fail to write or commit. txn_id: " << writer->txn_id()
                                 << " tablet_id: " << writer->tablet()->tablet_id() << ": " << st;
-        TRACE("async delta writer execute end, txn_id: $0, tablet_id: $1, task_id: $2, execute_id: $3, latency_ns: $4",
-              writer->txn_id(), writer->tablet()->tablet_id(), iter->task_id, execute_id, (watch.elapsed_time() - t));
+        TRACE("async delta writer execute end, txn_id: $0, tablet_id: $1, task_id: $2, execute_id: $3, thread_id: $4, "
+              "latency_ns: $5",
+              writer->txn_id(), writer->tablet()->tablet_id(), iter->task_id, execute_id, thread_id,
+              (watch.elapsed_time() - t));
     }
     if (flush_after_write) {
         auto st = writer->flush_memtable_async(false);
