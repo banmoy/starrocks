@@ -33,6 +33,7 @@
 #include "types/logical_type_infra.h"
 #include "util/starrocks_metrics.h"
 #include "util/time.h"
+#include "util/trace.h"
 
 namespace starrocks {
 
@@ -162,6 +163,7 @@ bool MemTable::check_supported_column_partial_update(const Chunk& chunk) {
 }
 
 StatusOr<bool> MemTable::insert(const Chunk& chunk, const uint32_t* indexes, uint32_t from, uint32_t size) {
+    TRACE("memtable insert start, tablet_id: $0, size: $1", tablet_id(), size);
     if (_chunk == nullptr) {
         _chunk = ChunkHelper::new_chunk(*_vectorized_schema, 0);
     }
@@ -191,6 +193,7 @@ StatusOr<bool> MemTable::insert(const Chunk& chunk, const uint32_t* indexes, uin
 
     size_t cur_row_count = _chunk->num_rows();
     if (_slot_descs != nullptr) {
+        TRACE("memtable insert append columns, tablet_id: $0, fields: $1", tablet_id(), _slot_descs->size());
         // For schema change, FE will construct a shadow column.
         // The shadow column is not exist in _vectorized_schema
         // So the chunk can only be accessed by the subscript
@@ -205,6 +208,8 @@ StatusOr<bool> MemTable::insert(const Chunk& chunk, const uint32_t* indexes, uin
             dest->append(*full_row_col.get());
         }
     } else {
+        TRACE("memtable insert append columns, tablet_id: $0, fields: $1", tablet_id(),
+              _vectorized_schema->num_fields());
         for (int i = 0; i < _vectorized_schema->num_fields(); i++) {
             const ColumnPtr& src = chunk.get_column_by_index(i);
             ColumnPtr& dest = _chunk->get_column_by_index(i);
@@ -225,6 +230,7 @@ StatusOr<bool> MemTable::insert(const Chunk& chunk, const uint32_t* indexes, uin
     // and create a new memtable for incoming data
     bool suggest_flush = false;
     if (is_full()) {
+        TRACE("memtable insert full, tablet_id: $0", tablet_id());
         size_t orig_bytes = write_buffer_size();
         RETURN_IF_ERROR(_merge());
         size_t new_bytes = write_buffer_size();
@@ -239,6 +245,8 @@ StatusOr<bool> MemTable::insert(const Chunk& chunk, const uint32_t* indexes, uin
     if (is_full()) {
         suggest_flush = true;
     }
+    TRACE("memtable insert end, tablet_id: $0, bytes: $1, rows: $2", tablet_id(), write_buffer_size(),
+          write_buffer_rows());
 
     return suggest_flush;
 }
