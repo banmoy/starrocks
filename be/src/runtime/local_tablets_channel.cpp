@@ -239,8 +239,6 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
 
         // back pressure OlapTableSink since there are too many memtables need to flush
         while (delta_writer->get_flush_stats().queueing_memtable_num >= config::max_queueing_memtable_per_tablet) {
-            TRACE_TO(trace, "memtable queue overflow, txn_id: $0, tablet_id: $1", request.txn_id(),
-                     delta_writer->writer()->tablet()->tablet_id());
             auto t1 = std::chrono::steady_clock::now();
             if (std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000 > request.timeout_ms()) {
                 LOG(INFO) << "LocalTabletsChannel txn_id: " << _txn_id << " load_id: " << print_id(request.id())
@@ -251,6 +249,8 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
             bthread_usleep(10000); // 10ms
             wait_memtable_flush_time_us += 10000;
         }
+        TRACE_TO(trace, "memtable queue overflow, txn_id: $0, tablet_id: $1, time_us: $2", request.txn_id(),
+                 delta_writer->writer()->tablet()->tablet_id(), wait_memtable_flush_time_us);
 
         AsyncDeltaWriterRequest req;
         req.chunk = chunk;
