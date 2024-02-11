@@ -32,7 +32,9 @@
 #include "io/io_profiler.h"
 #include "testutil/sync_point.h"
 #include "util/errno.h"
+#include "util/pretty_printer.h"
 #include "util/slice.h"
+#include "util/stack_util.h"
 #include "util/stopwatch.hpp"
 
 #ifdef USE_STAROS
@@ -301,7 +303,13 @@ public:
             _pending_sync = false;
             RETURN_IF_ERROR(do_sync(_fd, _filename));
         }
-        IOProfiler::add_sync(watch.elapsed_time());
+        auto elapsed = watch.elapsed_time();
+        IOProfiler::add_sync(elapsed);
+        if (config::fs_posix_sync_slow_ms > 0 && (elapsed / 1000 > config::fs_posix_sync_slow_ms)) {
+            LOG(INFO) << "Slow sync, file_name: " << _filename << ", file_size: " << _filesize
+                      << ", cost_us: " << (elapsed / 1000) << ", stack\n"
+                      << get_stack_trace();
+        }
         return Status::OK();
     }
 
