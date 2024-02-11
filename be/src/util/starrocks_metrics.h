@@ -220,6 +220,7 @@ public:
 
     METRIC_DEFINE_INT_COUNTER(async_delta_writer_execute_total, MetricUnit::OPERATIONS);
     METRIC_DEFINE_INT_COUNTER(async_delta_writer_task_total, MetricUnit::OPERATIONS);
+    METRIC_DEFINE_INT_COUNTER(async_delta_writer_execute_duration_us, MetricUnit::MICROSECONDS);
 
     METRIC_DEFINE_INT_COUNTER(delta_writer_write_total, MetricUnit::OPERATIONS);
     METRIC_DEFINE_INT_COUNTER(delta_writer_write_flush_total, MetricUnit::OPERATIONS);
