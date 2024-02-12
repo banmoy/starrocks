@@ -414,7 +414,9 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
     }
     StarRocksMetrics::instance()->load_add_chunk_total.increment(1);
     StarRocksMetrics::instance()->load_add_chunk_duration_us.increment(watch.elapsed_time() / 1000);
-    StarRocksMetrics::instance()->load_add_chunk_latch_duration_us.increment(latch_ts / 1000);
+    StarRocksMetrics::instance()->load_add_chunk_wait_memtable_duration_us.increment(wait_memtable_flush_time_us);
+    StarRocksMetrics::instance()->load_add_chunk_latch_duration_us.increment(latch_ts / 1000 -
+                                                                             wait_memtable_flush_time_us);
     StarRocksMetrics::instance()->load_add_chunk_write_tablets_total.increment(num_tablets);
 
     int64_t last_execution_time_us = 0;

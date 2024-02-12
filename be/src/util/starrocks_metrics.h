@@ -209,6 +209,7 @@ public:
     METRIC_DEFINE_INT_COUNTER(load_add_chunks_duration_us, MetricUnit::MICROSECONDS);
     METRIC_DEFINE_INT_COUNTER(load_add_chunk_total, MetricUnit::NOUNIT);
     METRIC_DEFINE_INT_COUNTER(load_add_chunk_write_tablets_total, MetricUnit::NOUNIT);
+    METRIC_DEFINE_INT_COUNTER(load_add_chunk_wait_memtable_duration_us, MetricUnit::MICROSECONDS);
     METRIC_DEFINE_INT_COUNTER(load_add_chunk_latch_duration_us, MetricUnit::MICROSECONDS);
     METRIC_DEFINE_INT_COUNTER(load_add_chunk_duration_us, MetricUnit::MICROSECONDS);
     METRIC_DEFINE_INT_COUNTER(load_add_chunk_eos_total, MetricUnit::NOUNIT);

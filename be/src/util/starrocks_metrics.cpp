@@ -58,6 +58,7 @@ StarRocksMetrics::StarRocksMetrics() : _metrics(_s_registry_name) {
     REGISTER_STARROCKS_METRIC(load_add_chunks_duration_us);
     REGISTER_STARROCKS_METRIC(load_add_chunk_total);
     REGISTER_STARROCKS_METRIC(load_add_chunk_write_tablets_total);
+    REGISTER_STARROCKS_METRIC(load_add_chunk_wait_memtable_duration_us);
     REGISTER_STARROCKS_METRIC(load_add_chunk_latch_duration_us);
     REGISTER_STARROCKS_METRIC(load_add_chunk_duration_us);
     REGISTER_STARROCKS_METRIC(load_add_chunk_eos_total);
