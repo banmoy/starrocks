@@ -45,6 +45,8 @@ namespace brpc {
 
 DECLARE_uint64(max_body_size);
 DECLARE_int64(socket_max_unwritten_bytes);
+DECLARE_int32(event_dispatcher_num);
+DECLARE_bool(socket_keepalive);
 
 } // namespace brpc
 
@@ -161,6 +163,8 @@ void start_be(const std::vector<StorePath>& paths, bool as_cn) {
     // Start brpc server
     brpc::FLAGS_max_body_size = config::brpc_max_body_size;
     brpc::FLAGS_socket_max_unwritten_bytes = config::brpc_socket_max_unwritten_bytes;
+    brpc::FLAGS_event_dispatcher_num = config::brpc_event_dispatcher_num;
+    brpc::FLAGS_socket_keepalive = config::brpc_socket_keepalive;
     auto brpc_server = std::make_unique<brpc::Server>();
 
     BackendInternalServiceImpl<PInternalService> internal_service(exec_env);

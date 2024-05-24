@@ -1182,4 +1182,7 @@ CONF_mInt64(pk_dump_interval_seconds, "3600"); // 1 hour
 
 // whether enable query profile for queries initiated by spark or flink
 CONF_mBool(enable_profile_for_external_plan, "false");
+
+CONF_Int32(brpc_event_dispatcher_num, "1");
+CONF_Bool(brpc_socket_keepalive, "false");
 } // namespace starrocks::config
