@@ -63,6 +63,8 @@ import java.util.List;
 public class LoadAction extends RestBaseAction {
     private static final Logger LOG = LogManager.getLogger(LoadAction.class);
 
+    protected static final String GROUP_COMMIT = "group_commit";
+
     public LoadAction(ActionController controller) {
         super(controller);
     }
@@ -115,6 +117,25 @@ public class LoadAction extends RestBaseAction {
             warehouseName = request.getRequest().headers().get(WAREHOUSE_KEY);
         }
 
+        TNetworkAddress redirectAddr;
+        if (request.getRequest().headers().contains(GROUP_COMMIT)) {
+            redirectAddr = GlobalStateMgr.getCurrentState().getGroupCommitMgr().getRedirectBe(
+                    dbName, tableName, request.getRequest().headers());
+            if (redirectAddr == null) {
+                throw new DdlException(
+                        String.format(
+                                "Can't find redirect address for group commit %s.%s", dbName, tableName));
+            }
+        } else {
+            redirectAddr = selectRedirectAddr(warehouseName);
+        }
+
+        LOG.info("redirect load action to destination={}, db: {}, tbl: {}, label: {}, warehouse: {}",
+                redirectAddr.toString(), dbName, tableName, label, warehouseName);
+        redirectTo(request, response, redirectAddr);
+    }
+
+    private static TNetworkAddress selectRedirectAddr(String warehouseName) throws DdlException {
         // Choose a backend sequentially, or choose a cn in shared_data mode
         List<Long> nodeIds = new ArrayList<>();
         if (RunMode.isSharedDataMode()) {
@@ -141,11 +162,7 @@ public class LoadAction extends RestBaseAction {
             throw new DdlException("No backend or compute node alive.");
         }
 
-        TNetworkAddress redirectAddr = new TNetworkAddress(node.getHost(), node.getHttpPort());
-
-        LOG.info("redirect load action to destination={}, db: {}, tbl: {}, label: {}, warehouse: {}",
-                redirectAddr.toString(), dbName, tableName, label, warehouseName);
-        redirectTo(request, response, redirectAddr);
+        return new TNetworkAddress(node.getHost(), node.getHttpPort());
     }
 }
 

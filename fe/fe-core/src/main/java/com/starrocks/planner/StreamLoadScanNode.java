@@ -80,9 +80,11 @@ import org.apache.logging.log4j.Logger;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 
 import static com.starrocks.catalog.DefaultExpr.SUPPORTED_DEFAULT_FNS;
@@ -133,6 +135,8 @@ public class StreamLoadScanNode extends LoadScanNode {
     private ParamCreateContext paramCreateContext;
     private boolean nullExprInAutoIncrement;
 
+    private Set<String> candidateBes = new HashSet<>();
+
 
     // used to construct for streaming loading
     public StreamLoadScanNode(TUniqueId loadId, PlanNodeId id, TupleDescriptor tupleDesc, Table dstTable, StreamLoadInfo streamLoadInfo) {
@@ -173,6 +177,10 @@ public class StreamLoadScanNode extends LoadScanNode {
 
     public void setNeedAssignBE(boolean needAssignBE) {
         this.needAssignBE = needAssignBE;
+    }
+
+    public void setCandidateBes(Set<String> candidateBes) {
+        this.candidateBes = new HashSet<>(candidateBes);
     }
 
     public boolean nullExprInAutoIncrement() {
@@ -253,7 +261,10 @@ public class StreamLoadScanNode extends LoadScanNode {
     private void assignBackends() throws UserException {
         backends = Lists.newArrayList();
         for (Backend be : GlobalStateMgr.getCurrentState().getNodeMgr().getClusterInfo().getIdToBackend().values()) {
-            if (be.isAvailable()) {
+            if (!be.isAvailable()) {
+                continue;
+            }
+            if (!candidateBes.isEmpty() && candidateBes.contains(be.getHost())) {
                 backends.add(be);
             }
         }

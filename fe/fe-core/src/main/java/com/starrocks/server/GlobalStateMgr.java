@@ -140,6 +140,7 @@ import com.starrocks.load.ExportChecker;
 import com.starrocks.load.ExportMgr;
 import com.starrocks.load.InsertOverwriteJobMgr;
 import com.starrocks.load.Load;
+import com.starrocks.load.groupcommit.GroupCommitMgr;
 import com.starrocks.load.loadv2.LoadEtlChecker;
 import com.starrocks.load.loadv2.LoadJobScheduler;
 import com.starrocks.load.loadv2.LoadLoadingChecker;
@@ -487,6 +488,7 @@ public class GlobalStateMgr {
     private final Authorizer authorizer;
     private final DDLStmtExecutor ddlStmtExecutor;
     private final ShowExecutor showExecutor;
+    private final GroupCommitMgr groupCommitMgr;
 
     public NodeMgr getNodeMgr() {
         return nodeMgr;
@@ -567,6 +569,10 @@ public class GlobalStateMgr {
 
     public RefreshDictionaryCacheTaskDaemon getRefreshDictionaryCacheTaskDaemon() {
         return refreshDictionaryCacheTaskDaemon;
+    }
+
+    public GroupCommitMgr getGroupCommitMgr() {
+        return groupCommitMgr;
     }
 
     private static class SingletonHolder {
@@ -774,6 +780,7 @@ public class GlobalStateMgr {
         this.ddlStmtExecutor = new DDLStmtExecutor(DDLStmtExecutor.StmtExecutorVisitor.getInstance());
         this.showExecutor = new ShowExecutor(ShowExecutor.ShowExecutorVisitor.getInstance());
         this.temporaryTableCleaner = new TemporaryTableCleaner();
+        this.groupCommitMgr = new GroupCommitMgr();
     }
 
     public static void destroyCheckpoint() {

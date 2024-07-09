@@ -1805,6 +1805,16 @@ struct TGetKeysResponse {
     1: optional list<binary> key_metas;
 }
 
+struct TGroupCommitNotifyDataRequest {
+    1: optional string db;
+    2: optional string table;
+    3: optional string host;
+}
+
+struct TGroupCommitNotifyDataResponse {
+    1: optional bool ok;
+}
+
 service FrontendService {
     TGetDbsResult getDbNames(1:TGetDbsParams params)
     TGetTablesResult getTableNames(1:TGetTablesParams params)
@@ -1916,5 +1926,7 @@ service FrontendService {
     TGetTemporaryTablesInfoResponse getTemporaryTablesInfo(1: TGetTemporaryTablesInfoRequest request)
 
     TReportFragmentFinishResponse reportFragmentFinish(TReportFragmentFinishParams request)
+
+    TGroupCommitNotifyDataResponse groupCommitNotifyData(1: TGroupCommitNotifyDataRequest request)
 }
 

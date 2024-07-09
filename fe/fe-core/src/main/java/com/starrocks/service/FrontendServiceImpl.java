@@ -234,6 +234,8 @@ import com.starrocks.thrift.TGetUserPrivsParams;
 import com.starrocks.thrift.TGetUserPrivsResult;
 import com.starrocks.thrift.TGetWarehousesRequest;
 import com.starrocks.thrift.TGetWarehousesResponse;
+import com.starrocks.thrift.TGroupCommitNotifyDataRequest;
+import com.starrocks.thrift.TGroupCommitNotifyDataResponse;
 import com.starrocks.thrift.TImmutablePartitionRequest;
 import com.starrocks.thrift.TImmutablePartitionResult;
 import com.starrocks.thrift.TIsMethodSupportedRequest;
@@ -1793,6 +1795,16 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         } finally {
             locker.unLockTablesWithIntensiveDbLock(db, Lists.newArrayList(table.getId()), LockType.READ);
         }
+    }
+
+    @Override
+    public TGroupCommitNotifyDataResponse groupCommitNotifyData(TGroupCommitNotifyDataRequest request)
+            throws TException {
+        GlobalStateMgr.getCurrentState().getGroupCommitMgr().notifyBeData(
+                request.getDb(), request.getTable(), request.getHost());
+        TGroupCommitNotifyDataResponse response = new TGroupCommitNotifyDataResponse();
+        response.setOk(true);
+        return response;
     }
 
     @Override

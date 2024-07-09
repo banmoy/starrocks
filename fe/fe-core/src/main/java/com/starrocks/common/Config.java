@@ -3071,4 +3071,15 @@ public class Config extends ConfigBase {
     // backuped table is colocated
     @ConfField(mutable = true)
     public static boolean enable_colocate_restore = false;
+
+    public static int group_commit_executor_threads_num = 4096;
+
+    @ConfField(mutable = true)
+    public static int group_commit_interval_ms = 1000;
+
+    @ConfField(mutable = true)
+    public static int group_commit_num_candidate_bes = 4;
+
+    @ConfField(mutable = true)
+    public static int group_commit_publish_time_ms = 5000;
 }

@@ -74,6 +74,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -141,6 +142,7 @@ public class LoadPlanner {
     private Boolean missAutoIncrementColumn = Boolean.FALSE;
 
     private String mergeConditionStr;
+    private Set<String> candidateBes = new HashSet<>();
 
     public LoadPlanner(long loadJobId, TUniqueId loadId, long txnId, long dbId, OlapTable destTable,
                        boolean strictMode, String timezone, long timeoutS,
@@ -250,6 +252,10 @@ public class LoadPlanner {
 
     public void setJsonOptions(LoadJob.JSONOptions options) {
         this.jsonOptions = options;
+    }
+
+    public void setCandidateBes(Set<String> candidateBes) {
+        this.candidateBes = new HashSet<>(candidateBes);
     }
 
     public void plan() throws UserException {
