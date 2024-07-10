@@ -132,6 +132,7 @@ public class GroupCommitLoadExecutor implements Runnable {
                 label, streamLoadInfo.getTimeout());
         loadPlanner.setWarehouseId(streamLoadInfo.getWarehouseId());
         loadPlanner.setCandidateBes(candidateBes);
+        loadPlanner.setActiveTimeMs(Config.group_commit_interval_ms);
         loadPlanner.plan();
 
         long deadlineMs = System.currentTimeMillis() + timeoutMs;

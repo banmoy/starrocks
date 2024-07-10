@@ -51,8 +51,13 @@ namespace starrocks {
 // Data in pip is stored in chunks.
 class StreamLoadPipe : public MessageBodySink {
 public:
-    StreamLoadPipe(size_t max_buffered_bytes = 1024 * 1024, size_t min_chunk_size = 64 * 1024)
-            : _max_buffered_bytes(max_buffered_bytes), _min_chunk_size(min_chunk_size) {}
+    StreamLoadPipe(size_t max_buffered_bytes = 1024 * 1024, size_t min_chunk_size = 64 * 1024,
+                   int64_t active_time_ms = -1)
+            : _max_buffered_bytes(max_buffered_bytes),
+              _min_chunk_size(min_chunk_size),
+              _active_time_ns(active_time_ms * 1000000) {
+        _start_time_ns = MonotonicNanos();
+    }
     ~StreamLoadPipe() override = default;
 
     Status append(ByteBufferPtr&& buf) override;
@@ -92,11 +97,19 @@ private:
     // and there is no need to acquire the lock again in the function
     Status _push_front_unlocked(const ByteBufferPtr& buf);
 
+    void _check_active_time() {
+        if (_active_time_ns > 0 && (_start_time_ns + _active_time_ns >= MonotonicNanos())) {
+            _finished = true;
+        }
+    }
+
     // Blocking queue
     std::mutex _lock;
     size_t _buffered_bytes{0};
     size_t _max_buffered_bytes;
     size_t _min_chunk_size;
+    int64_t _active_time_ns;
+    int64_t _start_time_ns;
     std::deque<ByteBufferPtr> _buf_queue;
     std::condition_variable _put_cond;
     std::condition_variable _get_cond;

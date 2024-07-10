@@ -280,6 +280,7 @@ struct TBrokerScanRange {
     3: required list<Types.TNetworkAddress> broker_addresses
     // used for channel stream load only
     4: optional i32 channel_id
+    5: optional i32 active_time_ms;
 }
 
 // Es scan range

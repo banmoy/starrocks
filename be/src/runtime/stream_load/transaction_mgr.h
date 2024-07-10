@@ -91,8 +91,9 @@ public:
 
     Status create_channel_context(ExecEnv* exec_env, const string& label, int channel_id, const string& db_name,
                                   const string& table_name, TFileFormatType::type format, StreamLoadContext*& ctx,
-                                  const TUniqueId& load_id, long txn_id) {
-        auto pipe = std::make_shared<StreamLoadPipe>();
+                                  const TUniqueId& load_id, long txn_id, int32_t active_time_ms = -1) {
+        auto pipe = std::make_shared<StreamLoadPipe>(config::stream_load_pipe_buffer_bytes,
+                                                     config::stream_load_pipe_chunk_bytes, active_time_ms);
         RETURN_IF_ERROR(exec_env->load_stream_mgr()->put(load_id, pipe));
         ctx = new StreamLoadContext(exec_env, load_id);
         if (ctx == nullptr) {

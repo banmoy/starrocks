@@ -34,6 +34,7 @@
 
 #include "runtime/stream_load/stream_load_pipe.h"
 
+#include "common/config.h"
 #include "util/alignment.h"
 #include "util/compression/compression_utils.h"
 
@@ -45,6 +46,11 @@ Status StreamLoadPipe::append(ByteBufferPtr&& buf) {
         if (_cancelled) {
             return _err_st;
         }
+
+        if (_finished) {
+            return Status::CapacityLimitExceed("Stream load pipe is finished");
+        }
+
         // if _buf_queue is empty, we append this buf without size check
         _put_cond.wait(l, [&]() {
             return _cancelled || _buf_queue.empty() || _buffered_bytes + buf->remaining() <= _max_buffered_bytes;
@@ -109,8 +115,9 @@ StatusOr<ByteBufferPtr> StreamLoadPipe::read() {
 
 StatusOr<ByteBufferPtr> StreamLoadPipe::no_block_read() {
     std::unique_lock<std::mutex> l(_lock);
+    _check_active_time();
 
-    _get_cond.wait_for(l, std::chrono::milliseconds(100),
+    _get_cond.wait_for(l, std::chrono::microseconds(config::stream_load_pipe_block_us),
                        [&]() { return _cancelled || _finished || !_buf_queue.empty(); });
 
     // cancelled

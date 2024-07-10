@@ -561,6 +561,10 @@ Status FragmentExecutor::_prepare_stream_load_pipe(ExecEnv* exec_env, const Unif
             for (const auto& scan_range : iter2->second) {
                 const TBrokerScanRange& broker_scan_range = scan_range.scan_range.broker_scan_range;
                 int channel_id = broker_scan_range.channel_id;
+                int32_t active_time_ms = -1;
+                if (broker_scan_range.__isset.active_time_ms) {
+                    active_time_ms = broker_scan_range.active_time_ms;
+                }
                 const string& label = broker_scan_range.params.label;
                 const string& db_name = broker_scan_range.params.db_name;
                 const string& table_name = broker_scan_range.params.table_name;
@@ -569,7 +573,8 @@ Status FragmentExecutor::_prepare_stream_load_pipe(ExecEnv* exec_env, const Unif
                 long txn_id = broker_scan_range.params.txn_id;
                 StreamLoadContext* ctx = nullptr;
                 RETURN_IF_ERROR(exec_env->stream_context_mgr()->create_channel_context(
-                        exec_env, label, channel_id, db_name, table_name, format, ctx, load_id, txn_id));
+                        exec_env, label, channel_id, db_name, table_name, format, ctx, load_id, txn_id,
+                        active_time_ms));
                 DeferOp op([&] {
                     if (ctx->unref()) {
                         delete ctx;

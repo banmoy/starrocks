@@ -136,7 +136,7 @@ public class StreamLoadScanNode extends LoadScanNode {
     private boolean nullExprInAutoIncrement;
 
     private Set<String> candidateBes = new HashSet<>();
-
+    private int activeTimeMs = -1;
 
     // used to construct for streaming loading
     public StreamLoadScanNode(TUniqueId loadId, PlanNodeId id, TupleDescriptor tupleDesc, Table dstTable, StreamLoadInfo streamLoadInfo) {
@@ -181,6 +181,10 @@ public class StreamLoadScanNode extends LoadScanNode {
 
     public void setCandidateBes(Set<String> candidateBes) {
         this.candidateBes = new HashSet<>(candidateBes);
+    }
+
+    public void setActiveTimeMs(int activeTimeMs) {
+        this.activeTimeMs = activeTimeMs;
     }
 
     public boolean nullExprInAutoIncrement() {
@@ -409,6 +413,7 @@ public class StreamLoadScanNode extends LoadScanNode {
             brokerScanRange.setBroker_addresses(Lists.newArrayList());
             if (needAssignBE) {
                 brokerScanRange.setChannel_id(curChannelId++);
+                brokerScanRange.setActive_time_ms(activeTimeMs);
             }
             TScanRangeLocations locations = new TScanRangeLocations();
             TScanRange scanRange = new TScanRange();

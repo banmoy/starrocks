@@ -143,6 +143,7 @@ public class LoadPlanner {
 
     private String mergeConditionStr;
     private Set<String> candidateBes = new HashSet<>();
+    private int activeTimeMs = -1;
 
     public LoadPlanner(long loadJobId, TUniqueId loadId, long txnId, long dbId, OlapTable destTable,
                        boolean strictMode, String timezone, long timeoutS,
@@ -256,6 +257,10 @@ public class LoadPlanner {
 
     public void setCandidateBes(Set<String> candidateBes) {
         this.candidateBes = new HashSet<>(candidateBes);
+    }
+
+    public void setActiveTimeMs(int activeTimeMs) {
+        this.activeTimeMs = activeTimeMs;
     }
 
     public void plan() throws UserException {
@@ -416,6 +421,8 @@ public class LoadPlanner {
             StreamLoadScanNode streamScanNode = new StreamLoadScanNode(loadId, new PlanNodeId(0), tupleDesc,
                     destTable, streamLoadInfo, dbName, label, parallelInstanceNum, txnId, warehouseId);
             streamScanNode.setNeedAssignBE(true);
+            streamScanNode.setCandidateBes(candidateBes);
+            streamScanNode.setActiveTimeMs(activeTimeMs);
             streamScanNode.setUseVectorizedLoad(true);
             streamScanNode.init(analyzer);
             streamScanNode.finalizeStats(analyzer);
