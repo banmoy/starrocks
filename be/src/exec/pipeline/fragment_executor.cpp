@@ -555,6 +555,7 @@ Status FragmentExecutor::_prepare_stream_load_pipe(ExecEnv* exec_env, const Unif
     if (!iter2->second[0].scan_range.broker_scan_range.__isset.channel_id) {
         return Status::OK();
     }
+    bool group_commit = false;
     std::vector<StreamLoadContext*> stream_load_contexts;
     for (; iter != scan_range_map.end(); iter++) {
         for (; iter2 != iter->second.end(); iter2++) {
@@ -575,6 +576,7 @@ Status FragmentExecutor::_prepare_stream_load_pipe(ExecEnv* exec_env, const Unif
                 RETURN_IF_ERROR(exec_env->stream_context_mgr()->create_channel_context(
                         exec_env, label, channel_id, db_name, table_name, format, ctx, load_id, txn_id,
                         active_time_ms));
+                ctx->fragment_instance_id = request.fragment_instance_id();
                 DeferOp op([&] {
                     if (ctx->unref()) {
                         delete ctx;
@@ -582,10 +584,13 @@ Status FragmentExecutor::_prepare_stream_load_pipe(ExecEnv* exec_env, const Unif
                 });
                 RETURN_IF_ERROR(exec_env->stream_context_mgr()->put_channel_context(label, channel_id, ctx));
                 stream_load_contexts.push_back(ctx);
+                if (active_time_ms > 0) {
+                    group_commit = true;
+                }
             }
         }
     }
-    _fragment_ctx->set_stream_load_contexts(stream_load_contexts);
+    _fragment_ctx->set_stream_load_contexts(stream_load_contexts, group_commit);
     return Status::OK();
 }
 

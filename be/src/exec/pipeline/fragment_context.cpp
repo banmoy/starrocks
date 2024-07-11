@@ -24,6 +24,7 @@
 #include "runtime/client_cache.h"
 #include "runtime/data_stream_mgr.h"
 #include "runtime/exec_env.h"
+#include "runtime/stream_load/group_commit_mgr.h"
 #include "runtime/stream_load/stream_load_context.h"
 #include "runtime/stream_load/transaction_mgr.h"
 #include "util/threadpool.h"
@@ -211,9 +212,40 @@ Status FragmentContext::prepare_all_pipelines() {
     return Status::OK();
 }
 
-void FragmentContext::set_stream_load_contexts(const std::vector<StreamLoadContext*>& contexts) {
+void FragmentContext::set_stream_load_contexts(const std::vector<StreamLoadContext*>& contexts, bool group_commit) {
     _stream_load_contexts = std::move(contexts);
     _channel_stream_load = true;
+    _group_commit = group_commit;
+    if (_group_commit) {
+        for (auto* context : contexts) {
+            auto status_or =
+                    _runtime_state->exec_env()->group_commit_mgr()->get_table_group_commit(context->db, context->table);
+            if (!status_or.ok()) {
+                LOG(INFO) << "Can't find table group commit to register fragment context for db: " << context->db
+                          << ", table: " << context->table << ", status: " << status_or.status();
+            } else {
+                status_or.value()->register_stream_load_context(context);
+                LOG(INFO) << "Table group commit register fragment context for db: " << context->db
+                          << ", table: " << context->table;
+            }
+        }
+    }
+}
+
+void FragmentContext::_remove_channel_stream_load_context(StreamLoadContext* context) {
+    _runtime_state->exec_env()->stream_context_mgr()->remove_channel_context(context);
+    if (_group_commit) {
+        auto status_or =
+                _runtime_state->exec_env()->group_commit_mgr()->get_table_group_commit(context->db, context->table);
+        if (!status_or.ok()) {
+            LOG(INFO) << "Can't find table group commit to unregister fragment context for db: " << context->db
+                      << ", table: " << context->table << ", status: " << status_or.status();
+        } else {
+            status_or.value()->unregister_stream_load_context(context);
+            LOG(INFO) << "Table group commit unregister fragment context for db: " << context->db
+                      << ", table: " << context->table;
+        }
+    }
 }
 
 void FragmentContext::cancel(const Status& status) {
@@ -238,7 +270,7 @@ void FragmentContext::cancel(const Status& status) {
                 stream_load_context->body_sink->cancel(st);
             }
             if (_channel_stream_load) {
-                _runtime_state->exec_env()->stream_context_mgr()->remove_channel_context(stream_load_context);
+                _remove_channel_stream_load_context(stream_load_context);
             }
         }
         _stream_load_contexts.resize(0);
@@ -316,8 +348,7 @@ void FragmentContextManager::unregister(const TUniqueId& fragment_id) {
                     stream_load_context->body_sink->cancel(st);
                 }
                 if (it->second->_channel_stream_load) {
-                    it->second->_runtime_state->exec_env()->stream_context_mgr()->remove_channel_context(
-                            stream_load_context);
+                    it->second->_remove_channel_stream_load_context(stream_load_context);
                 }
             }
             it->second->_stream_load_contexts.resize(0);

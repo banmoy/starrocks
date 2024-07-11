@@ -74,6 +74,7 @@
 #include "runtime/runtime_filter_cache.h"
 #include "runtime/runtime_filter_worker.h"
 #include "runtime/small_file_mgr.h"
+#include "runtime/stream_load/group_commit_mgr.h"
 #include "runtime/stream_load/load_stream_mgr.h"
 #include "runtime/stream_load/stream_load_executor.h"
 #include "runtime/stream_load/transaction_mgr.h"
@@ -481,6 +482,17 @@ Status ExecEnv::init(const std::vector<StorePath>& store_paths, bool as_cn) {
     _stream_context_mgr = new StreamContextMgr();
     _transaction_mgr = new TransactionMgr(this);
 
+    std::unique_ptr<ThreadPool> group_commit_thread_pool;
+    RETURN_IF_ERROR(ThreadPoolBuilder("group_commit")
+                            .set_min_threads(config::group_commit_thread_pool_num_min)
+                            .set_max_threads(config::group_commit_thread_pool_num_max)
+                            .set_max_queue_size(INT32_MAX)
+                            .set_idle_timeout(MonoDelta::FromMilliseconds(10000))
+                            .build(&group_commit_thread_pool));
+    auto group_commit_executor =
+            std::make_unique<bthreads::ThreadPoolExecutor>(group_commit_thread_pool.release(), kTakesOwnership);
+    _group_commit_mgr = new GroupCommitMgr(std::move(group_commit_executor));
+
     _routine_load_task_executor = new RoutineLoadTaskExecutor(this);
     RETURN_IF_ERROR(_routine_load_task_executor->init());
 
@@ -662,6 +674,10 @@ void ExecEnv::stop() {
         _stream_mgr->close();
     }
 
+    if (_group_commit_mgr) {
+        _group_commit_mgr->stop();
+    }
+
     if (_routine_load_task_executor) {
         _routine_load_task_executor->stop();
     }
@@ -683,6 +699,7 @@ void ExecEnv::destroy() {
     SAFE_DELETE(_profile_report_worker);
     SAFE_DELETE(_heartbeat_flags);
     SAFE_DELETE(_small_file_mgr);
+    SAFE_DELETE(_group_commit_mgr);
     SAFE_DELETE(_transaction_mgr);
     SAFE_DELETE(_stream_context_mgr);
     SAFE_DELETE(_routine_load_task_executor);

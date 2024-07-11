@@ -63,6 +63,7 @@
 #include "runtime/fragment_mgr.h"
 #include "runtime/load_path_mgr.h"
 #include "runtime/plan_fragment_executor.h"
+#include "runtime/stream_load/group_commit_mgr.h"
 #include "runtime/stream_load/load_stream_mgr.h"
 #include "runtime/stream_load/stream_load_context.h"
 #include "runtime/stream_load/stream_load_executor.h"
@@ -154,7 +155,7 @@ void StreamLoadAction::handle(HttpRequest* req) {
 
     // status already set to fail
     if (ctx->status.ok()) {
-        ctx->status = _handle(ctx);
+        ctx->status = ctx->group_commit ? _group_commit_handle(ctx) : _handle(ctx);
         if (!ctx->status.ok() && !ctx->status.is_publish_timeout()) {
             LOG(WARNING) << "Fail to handle streaming load, id=" << ctx->id << " errmsg=" << ctx->status.message()
                          << " " << ctx->brief();
@@ -213,22 +214,42 @@ Status StreamLoadAction::_handle(StreamLoadContext* ctx) {
     return Status::OK();
 }
 
+Status StreamLoadAction::_group_commit_handle(StreamLoadContext* ctx) {
+    ctx->handle_start_ts = MonotonicNanos();
+    if (ctx->body_bytes > 0 && ctx->receive_bytes != ctx->body_bytes) {
+        LOG(WARNING) << "receive body don't equal with body bytes, body_bytes=" << ctx->body_bytes
+                     << ", receive_bytes=" << ctx->receive_bytes << ", id=" << ctx->id;
+        return Status::InternalError("receive body don't equal with body bytes");
+    }
+
+    if (ctx->buffer != nullptr && ctx->buffer->pos > 0) {
+        ctx->buffer->flip();
+        auto status_or = _exec_env->group_commit_mgr()->get_table_group_commit(ctx->db, ctx->table);
+        if (!status_or.ok()) {
+            LOG(ERROR) << "Can't find table group commit, db: " << ctx->db << ", table: " << ctx->table
+                       << ", status: " << status_or.status();
+            return Status::InternalError("Can't find table group commit, " + status_or.status().to_string());
+        }
+        RETURN_IF_ERROR(status_or.value()->append_load(ctx));
+        ctx->buffer = nullptr;
+    }
+    ctx->handle_end_ts = MonotonicNanos();
+    return Status::OK();
+}
+
 int StreamLoadAction::on_header(HttpRequest* req) {
     streaming_load_current_processing.increment(1);
 
     auto* ctx = new StreamLoadContext(_exec_env);
     ctx->ref();
     req->set_handler_ctx(ctx);
+    ctx->receive_header_start_ts = MonotonicNanos();
 
     ctx->load_type = TLoadType::MANUAL_LOAD;
     ctx->load_src_type = TLoadSourceType::RAW;
 
     ctx->db = req->param(HTTP_DB_KEY);
     ctx->table = req->param(HTTP_TABLE_KEY);
-    ctx->label = req->header(HTTP_LABEL_KEY);
-    if (ctx->label.empty()) {
-        ctx->label = generate_uuid_string();
-    }
 
     if (config::enable_http_stream_load_limit && !ctx->check_and_set_http_limiter(_http_concurrent_limiter)) {
         LOG(WARNING) << "income streaming load request hit limit." << ctx->brief() << ", db=" << ctx->db
@@ -248,7 +269,19 @@ int StreamLoadAction::on_header(HttpRequest* req) {
         LOG(INFO) << "streaming load request: " << req->debug_string();
     }
 
-    auto st = _on_header(req, ctx);
+    auto group_commit = req->param("group_commit");
+    Status st;
+    if (group_commit.empty()) {
+        ctx->label = req->header(HTTP_LABEL_KEY);
+        if (ctx->label.empty()) {
+            ctx->label = generate_uuid_string();
+        }
+        st = _on_header(req, ctx);
+    } else {
+        ctx->group_commit = true;
+        st = _on_group_commit_header(req, ctx);
+    }
+
     if (!st.ok()) {
         ctx->status = st;
         if (ctx->need_rollback) {
@@ -263,6 +296,7 @@ int StreamLoadAction::on_header(HttpRequest* req) {
         streaming_load_current_processing.increment(-1);
         return -1;
     }
+    ctx->receive_header_end_ts = MonotonicNanos();
     return 0;
 }
 
@@ -339,10 +373,84 @@ Status StreamLoadAction::_on_header(HttpRequest* http_req, StreamLoadContext* ct
     return _process_put(http_req, ctx);
 }
 
+Status StreamLoadAction::_on_group_commit_header(HttpRequest* http_req, StreamLoadContext* ctx) {
+    // auth information
+    if (!parse_basic_auth(*http_req, &ctx->auth)) {
+        LOG(WARNING) << "parse basic authorization failed." << ctx->brief();
+        return Status::InternalError("no valid Basic authorization");
+    }
+    // check content length
+    ctx->body_bytes = 0;
+    size_t max_body_bytes = config::streaming_load_max_mb * 1024 * 1024;
+    if (!http_req->header(HttpHeaders::CONTENT_LENGTH).empty()) {
+        ctx->body_bytes = std::stol(http_req->header(HttpHeaders::CONTENT_LENGTH));
+        if (ctx->body_bytes > max_body_bytes) {
+            std::stringstream ss;
+            ss << "body size " << ctx->body_bytes << " exceed limit: " << max_body_bytes << ", " << ctx->brief()
+               << ". You can increase the limit by setting streaming_load_max_mb in be.conf.";
+            LOG(WARNING) << ss.str();
+            return Status::InternalError(ss.str());
+        }
+
+        if (ctx->format == TFileFormatType::FORMAT_JSON) {
+            // Allocate buffer in advance, since the json payload cannot be parsed in stream mode.
+            // For efficiency reasons, simdjson requires a string with a few bytes (simdjson::SIMDJSON_PADDING) at the end.
+            ctx->buffer = ByteBuffer::allocate(ctx->body_bytes + simdjson::SIMDJSON_PADDING);
+        }
+    } else {
+#ifndef BE_TEST
+        evhttp_connection_set_max_body_size(evhttp_request_get_connection(http_req->get_evhttp_request()),
+                                            max_body_bytes);
+#endif
+    }
+    // get format of this put
+    if (http_req->header(HTTP_FORMAT_KEY).empty()) {
+        ctx->format = TFileFormatType::FORMAT_CSV_PLAIN;
+    } else {
+        ctx->format = parse_format(http_req->header(HTTP_FORMAT_KEY));
+        if (ctx->format == TFileFormatType::FORMAT_UNKNOWN) {
+            std::stringstream ss;
+            ss << "unknown data format, format=" << http_req->header(HTTP_FORMAT_KEY);
+            return Status::InternalError(ss.str());
+        }
+
+        if (ctx->format == TFileFormatType::FORMAT_JSON) {
+            size_t max_body_bytes = config::streaming_load_max_batch_size_mb * 1024 * 1024;
+            auto ignore_json_size = boost::iequals(http_req->header(HTTP_IGNORE_JSON_SIZE), "true");
+            if (!ignore_json_size && ctx->body_bytes > max_body_bytes) {
+                std::stringstream ss;
+                ss << "The size of this batch exceed the max size [" << max_body_bytes << "]  of json type data "
+                   << " data [ " << ctx->body_bytes
+                   << " ]. Set ignore_json_size to skip the check, although it may lead huge memory consuming.";
+                return Status::InternalError(ss.str());
+            }
+        }
+    }
+
+    if (!http_req->header(HTTP_TIMEOUT).empty()) {
+        StringParser::ParseResult parse_result = StringParser::PARSE_SUCCESS;
+        const auto& timeout = http_req->header(HTTP_TIMEOUT);
+        auto timeout_second =
+                StringParser::string_to_unsigned_int<int32_t>(timeout.c_str(), timeout.length(), &parse_result);
+        if (UNLIKELY(parse_result != StringParser::PARSE_SUCCESS)) {
+            return Status::InvalidArgument("Invalid timeout format");
+        }
+        ctx->timeout_second = timeout_second;
+    }
+
+    ctx->use_streaming = is_format_support_streaming(ctx->format);
+
+    return Status::OK();
+}
+
 void StreamLoadAction::on_chunk_data(HttpRequest* req) {
     auto* ctx = (StreamLoadContext*)req->handler_ctx();
     if (ctx == nullptr || !ctx->status.ok()) {
         return;
+    }
+
+    if (ctx->receive_chunk_start_ts == 0) {
+        ctx->receive_chunk_start_ts = MonotonicNanos();
     }
 
     SCOPED_THREAD_LOCAL_MEM_TRACKER_SETTER(ctx->instance_mem_tracker.get());
@@ -395,6 +503,7 @@ void StreamLoadAction::on_chunk_data(HttpRequest* req) {
         ctx->total_receive_bytes += remove_bytes;
     }
     ctx->total_received_data_cost_nanos += (MonotonicNanos() - start_read_data_time);
+    ctx->receive_chunk_end_ts = MonotonicNanos();
 }
 
 void StreamLoadAction::free_handler_ctx(void* param) {

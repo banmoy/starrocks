@@ -64,7 +64,9 @@ public:
     void free_handler_ctx(void* ctx) override;
 
 private:
+    Status _on_group_commit_header(HttpRequest* http_req, StreamLoadContext* ctx);
     Status _on_header(HttpRequest* http_req, StreamLoadContext* ctx);
+    Status _group_commit_handle(StreamLoadContext* ctx);
     Status _handle(StreamLoadContext* ctx);
     Status _data_saved_path(HttpRequest* req, std::string* file_path);
     Status _execute_plan_fragment(StreamLoadContext* ctx);

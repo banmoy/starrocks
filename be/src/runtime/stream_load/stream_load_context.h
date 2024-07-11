@@ -162,6 +162,8 @@ public:
 
     std::string to_json() const;
 
+    std::string to_group_commit_json() const;
+
     std::string to_resp_json(const std::string& txn_op, const Status& st) const;
 
     // return the brief info of this context.
@@ -199,6 +201,7 @@ public:
     std::string db;
     std::string table;
     std::string label;
+    bool group_commit = false;
     // optional
     double max_filter_ratio = 0.0;
     int32_t timeout_second = -1;
@@ -266,6 +269,13 @@ public:
 
     int32_t idle_timeout_sec = -1;
     int channel_id = -1;
+    UniqueId fragment_instance_id;
+    int64_t receive_header_start_ts = 0;
+    int64_t receive_header_end_ts = 0;
+    int64_t receive_chunk_start_ts = 0;
+    int64_t receive_chunk_end_ts = 0;
+    int64_t handle_start_ts = 0;
+    int64_t handle_end_ts = 0;
 
     // buffer for reading data from ev_buffer
     static constexpr size_t kDefaultBufferSize = 64 * 1024;

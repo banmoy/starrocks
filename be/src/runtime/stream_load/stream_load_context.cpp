@@ -36,6 +36,8 @@
 
 #include <fmt/format.h>
 
+#include "util/uid_util.h"
+
 namespace starrocks {
 
 std::string StreamLoadContext::to_resp_json(const std::string& txn_op, const Status& st) const {
@@ -126,6 +128,10 @@ std::string StreamLoadContext::to_resp_json(const std::string& txn_op, const Sta
 }
 
 std::string StreamLoadContext::to_json() const {
+    if (group_commit) {
+        return to_group_commit_json();
+    }
+
     rapidjson::StringBuffer s;
     rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(s);
 
@@ -196,6 +202,65 @@ std::string StreamLoadContext::to_json() const {
         writer.Key("RejectedRecordPath");
         writer.String(rejected_record_path.c_str());
     }
+    writer.EndObject();
+    return s.GetString();
+}
+
+std::string StreamLoadContext::to_group_commit_json() const {
+    rapidjson::StringBuffer s;
+    rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(s);
+
+    writer.StartObject();
+    // txn id
+    writer.Key("TxnId");
+    writer.Int64(txn_id);
+
+    // label
+    writer.Key("Label");
+    writer.String(label.c_str());
+
+    writer.Key("Host");
+    writer.String(BackendOptions::get_localhost().c_str());
+
+    writer.Key("FragmentId");
+    writer.String(print_id(fragment_instance_id).c_str());
+
+    // status
+    writer.Key("Status");
+    switch (status.code()) {
+    case TStatusCode::OK:
+        writer.String("Success");
+        break;
+    default:
+        writer.String("Fail");
+        break;
+    }
+    // msg
+    writer.Key("Message");
+    if (status.ok()) {
+        writer.String("OK");
+    } else {
+        std::string_view msg = status.message();
+        writer.String(msg.data(), msg.size());
+    }
+
+    writer.Key("LoadBytes");
+    writer.Int64(receive_bytes);
+    writer.Key("LoadTimeMs");
+    writer.Int64((handle_end_ts - receive_header_start_ts) / 1000000);
+    writer.Key("HeaderTimeMs");
+    writer.Int64((receive_header_end_ts - receive_header_start_ts) / 1000000);
+    writer.Key("ChunkBlockTimeMs");
+    writer.Int64((receive_chunk_start_ts - receive_header_end_ts) / 1000000);
+    writer.Key("ChunkTimeMs");
+    writer.Int64((receive_chunk_end_ts - receive_chunk_start_ts) / 1000000);
+    writer.Key("ReadDataTimeMs");
+    writer.Int64(total_received_data_cost_nanos / 1000000);
+    writer.Key("HandleBlockTimeMs");
+    writer.Int64((handle_start_ts - receive_chunk_end_ts) / 1000000);
+    writer.Key("HandleTimeMs");
+    writer.Int64((handle_end_ts - handle_start_ts) / 1000000);
+
     writer.EndObject();
     return s.GetString();
 }
