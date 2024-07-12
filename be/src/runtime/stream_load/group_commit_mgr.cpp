@@ -149,7 +149,7 @@ void TableGroupCommit::_send_rpc_request() {
 
 StatusOr<TableGroupCommitSharedPtr> GroupCommitMgr::get_table_group_commit(const std::string& db,
                                                                            const std::string& table) {
-    TableId table_id = std::make_pair(db, table);
+    TableMeta table_id = std::make_pair(db, table);
     {
         std::shared_lock<std::shared_mutex> lock(_mutex);
         auto it = _tables.find(table_id);

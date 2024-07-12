@@ -42,7 +42,7 @@ struct pair_hash {
         return hash1 ^ (hash2 << 1);
     }
 };
-using TableId = std::pair<std::string, std::string>;
+using TableMeta = std::pair<std::string, std::string>;
 
 using BThreadCountDownLatch = GenericCountDownLatch<bthread::Mutex, bthread::ConditionVariable>;
 
@@ -98,7 +98,7 @@ public:
 private:
     std::unique_ptr<bthreads::ThreadPoolExecutor> _executor;
     std::shared_mutex _mutex;
-    std::unordered_map<TableId, TableGroupCommitSharedPtr, pair_hash> _tables;
+    std::unordered_map<TableMeta, TableGroupCommitSharedPtr, pair_hash> _tables;
 };
 
 } // namespace starrocks
