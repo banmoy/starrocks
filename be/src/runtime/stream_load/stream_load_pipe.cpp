@@ -37,18 +37,21 @@
 #include "common/config.h"
 #include "util/alignment.h"
 #include "util/compression/compression_utils.h"
+#include "util/stack_util.h"
 
 namespace starrocks {
 
 Status StreamLoadPipe::append(ByteBufferPtr&& buf) {
     if (buf != nullptr && buf->has_remaining()) {
         std::unique_lock<std::mutex> l(_lock);
-        if (_cancelled) {
-            return _err_st;
-        }
 
         if (_finished) {
             return Status::CapacityLimitExceed("Stream load pipe is finished");
+        }
+
+        if (_cancelled) {
+            // _err_st can be Status::OK event if it's cancelled
+            return Status::Cancelled("Stream load pipe is cancelled, reason: " + _err_st.to_string());
         }
 
         // if _buf_queue is empty, we append this buf without size check
@@ -63,6 +66,10 @@ Status StreamLoadPipe::append(ByteBufferPtr&& buf) {
         _buf_queue.emplace_back(std::move(buf));
         _num_buffer.fetch_add(1, std::memory_order_release);
         _get_cond.notify_one();
+    } else {
+        if (config::enable_stream_load_verbose_log) {
+            LOG(INFO) << "Stream load pipe append empty buffer";
+        }
     }
     return Status::OK();
 }

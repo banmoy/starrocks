@@ -38,12 +38,14 @@
 #include <deque>
 #include <mutex>
 
+#include "common/config.h"
 #include "gen_cpp/Types_types.h"
 #include "io/input_stream.h"
 #include "runtime/message_body_sink.h"
 #include "util/bit_util.h"
 #include "util/byte_buffer.h"
 #include "util/compression/stream_compression.h"
+#include "util/uid_util.h"
 
 namespace starrocks {
 
@@ -105,12 +107,15 @@ private:
 
     void _check_active_time() {
         auto current_ns = MonotonicNanos();
-        if (!_finished && _active_time_ns > 0 && (_start_time_ns + _active_time_ns >= current_ns)) {
+        if (!_finished && _active_time_ns > 0 && (_start_time_ns + _active_time_ns <= current_ns)) {
             _finished = true;
-            LOG(INFO) << "Stream load pipe is finished, txn_id: " << _txn_id << ", label: " << _label
-                      << ", fragment_id: " << _fragment_id
-                      << ", active_time_ms: " << (current_ns - _start_time_ns) / 1000000
-                      << ", num_buffer: " << _num_buffer.load(std::memory_order_relaxed);
+            if (config::enable_stream_load_verbose_log) {
+                LOG(INFO) << "Stream load pipe is finished, txn_id: " << _txn_id << ", label: " << _label
+                          << ", fragment_id: " << print_id(_fragment_id) << ", start_time_ns: " << _start_time_ns
+                          << ", expect_active_time_ns: " << _active_time_ns
+                          << ", actual_active_time_ns: " << (current_ns - _start_time_ns)
+                          << ", num_buffer: " << _num_buffer.load(std::memory_order_relaxed);
+            }
         }
     }
 

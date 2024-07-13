@@ -223,13 +223,13 @@ void FragmentContext::set_stream_load_contexts(const std::vector<StreamLoadConte
             if (!status_or.ok()) {
                 LOG(INFO) << "Can't find table group commit to register fragment context for db: " << context->db
                           << ", table: " << context->table << ", txn_id: " << context->txn_id
-                          << ", label: " << context->label << ", fragment: " << context->fragment_instance_id
+                          << ", label: " << context->label << ", fragment: " << print_id(context->fragment_instance_id)
                           << ", status: " << status_or.status();
             } else {
                 status_or.value()->register_stream_load_context(context);
                 LOG(INFO) << "Table group commit register fragment context for db: " << context->db
                           << ", table: " << context->table << ", txn_id: " << context->txn_id
-                          << ", label: " << context->label << ", fragment: " << context->fragment_instance_id;
+                          << ", label: " << context->label << ", fragment: " << print_id(context->fragment_instance_id);
             }
         }
     }
@@ -242,13 +242,13 @@ void FragmentContext::_remove_channel_stream_load_context(StreamLoadContext* con
         if (!status_or.ok()) {
             LOG(INFO) << "Can't find table group commit to unregister fragment context for db: " << context->db
                       << ", table: " << context->table << ", txn_id: " << context->txn_id
-                      << ", label: " << context->label << ", fragment: " << context->fragment_instance_id
+                      << ", label: " << context->label << ", fragment: " << print_id(context->fragment_instance_id)
                       << ", status: " << status_or.status();
         } else {
             status_or.value()->unregister_stream_load_context(context);
             LOG(INFO) << "Table group commit unregister fragment context for db: " << context->db
                       << ", table: " << context->table << ", txn_id: " << context->txn_id
-                      << ", label: " << context->label << ", fragment: " << context->fragment_instance_id;
+                      << ", label: " << context->label << ", fragment: " << print_id(context->fragment_instance_id);
         }
     }
     // remove after unregistering from group commit to avoid the context is deleted by remove

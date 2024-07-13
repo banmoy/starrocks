@@ -45,28 +45,27 @@ void TableGroupCommit::register_stream_load_context(StreamLoadContext* ctx) {
     _new_contexts.emplace(ctx);
     _cv_for_new_contexts.notify_one();
     LOG(INFO) << "Register group commit load, db: " << ctx->db << ", table: " << ctx->table
-              << ", txn_id: " << ctx->txn_id << ", label: " << ctx->label << ", fragment: " << ctx->fragment_instance_id
-              << ", active_time_ms: " << ctx->active_time_ms;
+              << ", txn_id: " << ctx->txn_id << ", label: " << ctx->label
+              << ", fragment: " << print_id(ctx->fragment_instance_id) << ", active_time_ms: " << ctx->active_time_ms;
 }
 
 void TableGroupCommit::unregister_stream_load_context(StreamLoadContext* ctx) {
     // TODO unregister from _loading_contexts
-    bool find = false;
+    bool found = false;
     {
         std::unique_lock<std::mutex> lock(_mutex_for_new_contexts);
         if (_new_contexts.erase(ctx)) {
-            find = true;
+            found = true;
         }
     }
-    // TODO unregister loads in _unregister_contexts
-    if (find) {
+    if (found) {
         if (ctx->unref()) {
             delete ctx;
         }
     }
     LOG(INFO) << "Unregister group commit load, db: " << ctx->db << ", table: " << ctx->table
-              << ", txn_id: " << ctx->txn_id << ", label: " << ctx->label << ", fragment: " << ctx->fragment_instance_id
-              << ", active_time_ms: " << ctx->active_time_ms;
+              << ", txn_id: " << ctx->txn_id << ", label: " << ctx->label
+              << ", fragment: " << print_id(ctx->fragment_instance_id) << ", found: " << found;
 }
 
 Status TableGroupCommit::append_load(StreamLoadContext* ctx) {
@@ -86,7 +85,7 @@ Status TableGroupCommit::append_load(StreamLoadContext* ctx) {
     if (config::enable_stream_load_verbose_log) {
         LOG(INFO) << "finish to append load to group commit, db: " << ctx->db << ", table: " << ctx->table
                   << ", id: " << ctx->id << ", txn_id: " << ctx->txn_id << ", label: " << ctx->label
-                  << ", fragment: " << ctx->fragment_instance_id;
+                  << ", fragment: " << print_id(ctx->fragment_instance_id);
     }
     return ctx->status;
 }
@@ -139,14 +138,14 @@ Status TableGroupCommit::_do_append_load(StreamLoadContext* load_ctx) {
             if (config::enable_stream_load_verbose_log) {
                 LOG(INFO) << "finish to send buffer to pipe, db: " << load_ctx->db << ", table: " << load_ctx->table
                           << ", id: " << load_ctx->id << ", txn_id: " << context->txn_id
-                          << ", label: " << context->label << ", fragment: " << context->fragment_instance_id;
+                          << ", label: " << context->label << ", fragment: " << print_id(context->fragment_instance_id);
             }
             break;
         }
         if (config::enable_stream_load_verbose_log) {
             LOG(INFO) << "fail to send buffer to pipe, db: " << load_ctx->db << ", table: " << load_ctx->table
                       << ", id: " << load_ctx->id << ", txn_id: " << context->txn_id << ", label: " << context->label
-                      << ", fragment: " << context->fragment_instance_id << ", status: " << st;
+                      << ", fragment: " << print_id(context->fragment_instance_id) << ", status: " << st;
         }
         _useless_contexts.emplace(context);
         load_ctx->buffer = buffer;
@@ -158,10 +157,16 @@ void TableGroupCommit::_clean_useless_contexts() {
     if (!_useless_contexts.empty()) {
         for (auto* ctx : _useless_contexts) {
             _loading_contexts.erase(ctx);
+            if (config::enable_stream_load_verbose_log) {
+                LOG(INFO) << "Clean useless group commit load, db: " << ctx->db << ", table: " << ctx->table
+                          << ", txn_id: " << ctx->txn_id << ", label: " << ctx->label
+                          << ", fragment: " << print_id(ctx->fragment_instance_id);
+            }
             if (ctx->unref()) {
                 delete ctx;
             }
         }
+        _useless_contexts.clear();
     }
 }
 

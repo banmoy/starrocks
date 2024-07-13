@@ -270,7 +270,7 @@ public:
     int32_t idle_timeout_sec = -1;
     int channel_id = -1;
     int32_t active_time_ms = -1;
-    UniqueId fragment_instance_id;
+    TUniqueId fragment_instance_id;
     int64_t receive_header_start_ts = 0;
     int64_t receive_header_end_ts = 0;
     int64_t receive_chunk_start_ts = 0;
