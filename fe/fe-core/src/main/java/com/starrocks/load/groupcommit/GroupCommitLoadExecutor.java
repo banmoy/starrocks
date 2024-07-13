@@ -55,6 +55,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static com.baidu.jprotobuf.pbrpc.client.DynamicProtobufRpcProxy.TIMEOUT_KEY;
 import static com.starrocks.common.ErrorCode.ERR_NO_PARTITIONS_HAVE_DATA_LOAD;
@@ -69,32 +71,51 @@ public class GroupCommitLoadExecutor implements Runnable {
     private final String label;
     private final HttpHeaders headers;
     private final Set<String> candidateBes;
+    private final int activeTimeMs;
     private final long id;
     private final TUniqueId loadId;
     private final long timeoutMs;
     private long txnId = -1;
     private Coordinator coord;
-    private long numRowsNormal;
-    private long numRowsAbnormal;
-    private long numRowsUnselected;
-    private long numLoadBytesTotal;
-    private String trackingUrl;
-    private long beforeLoadTimeMs;
-    private long endTimeMs;
+    private final long createTimeMs;
+    private long beginTxnTimeMs;
+    private long beginExecPlanTimeMs;
+    private long beginCoordinatorExecTimeMs;
+    private final AtomicLong beginCoordinatorJoinTimeMs = new AtomicLong(-1);
+    private long beginCommitTimeMs;
+    private long finishTimeMs;
+    private final AtomicBoolean failed = new AtomicBoolean(false);
 
-    public GroupCommitLoadExecutor(
-            TableGroupCommit groupCommit, String dbName, String tableName, String label,
-            HttpHeaders headers, Set<String> candidateBes) {
+    public GroupCommitLoadExecutor(TableGroupCommit groupCommit, String dbName, String tableName, String label,
+            HttpHeaders headers, Set<String> candidateBes, int activeTimeMs) {
         this.groupCommit = groupCommit;
         this.dbName = dbName;
         this.tableName = tableName;
         this.label = label;
         this.headers = headers;
         this.candidateBes = candidateBes;
+        this.activeTimeMs = activeTimeMs;
         this.id = GlobalStateMgr.getCurrentState().getNextId();
         UUID uuid = UUID.randomUUID();
         this.loadId = new TUniqueId(uuid.getMostSignificantBits(), uuid.getLeastSignificantBits());
         this.timeoutMs = getTimeoutMs();
+        this.createTimeMs = System.currentTimeMillis();
+    }
+
+    public String getLabel() {
+        return label;
+    }
+
+    public long getActiveTimeMs() {
+        return activeTimeMs;
+    }
+
+    public boolean isActive(String beHost) {
+        if (!candidateBes.contains(beHost) || failed.get()) {
+            return false;
+        }
+        return beginCoordinatorJoinTimeMs.get() <= 0
+                || beginCoordinatorJoinTimeMs.get() + activeTimeMs <= System.currentTimeMillis();
     }
 
     @Override
@@ -104,15 +125,16 @@ public class GroupCommitLoadExecutor implements Runnable {
             executePlan();
         } catch (Exception e) {
             rollbackTxn();
-            LOG.error("Failed to execute group commit load for {}.{}, label: {}, txnId: {}",
-                    dbName, tableName, label, txnId, e);
+            failed.set(true);
+            LOG.error("Failed to execute group commit load, db: {}, table: {}, label: {}, txnId: {}", dbName, tableName,
+                    label, txnId, e);
         } finally {
-            groupCommit.removeLabel(label);
+            groupCommit.removeLoad(label);
         }
     }
 
     private void executePlan() throws Exception {
-        beforeLoadTimeMs = System.currentTimeMillis();
+        beginExecPlanTimeMs = System.currentTimeMillis();
         Database db = GlobalStateMgr.getCurrentState().getDb(dbName);
         OlapTable table;
         Locker locker = new Locker();
@@ -132,15 +154,22 @@ public class GroupCommitLoadExecutor implements Runnable {
                 label, streamLoadInfo.getTimeout());
         loadPlanner.setWarehouseId(streamLoadInfo.getWarehouseId());
         loadPlanner.setCandidateBes(candidateBes);
-        loadPlanner.setActiveTimeMs(Config.group_commit_interval_ms);
+        loadPlanner.setActiveTimeMs(activeTimeMs);
         loadPlanner.plan();
 
         long deadlineMs = System.currentTimeMillis() + timeoutMs;
         coord = new DefaultCoordinator.Factory().createStreamLoadScheduler(loadPlanner);
+        long numRowsNormal;
+        long numRowsAbnormal;
+        long numRowsUnselected;
+        long numLoadBytesTotal;
+        String trackingUrl;
         try {
             QeProcessorImpl.INSTANCE.registerQuery(loadId, coord);
+            this.beginCoordinatorExecTimeMs = System.currentTimeMillis();
             coord.exec();
 
+            this.beginCoordinatorJoinTimeMs.set(System.currentTimeMillis());
             int waitSecond = (int) ((deadlineMs - System.currentTimeMillis()) / 1000);
             if (coord.join(waitSecond)) {
                 Status status = coord.getExecStatus();
@@ -148,10 +177,10 @@ public class GroupCommitLoadExecutor implements Runnable {
                 if (loadCounters == null || loadCounters.get(LoadEtlTask.DPP_NORMAL_ALL) == null) {
                     throw new LoadException(ERR_NO_PARTITIONS_HAVE_DATA_LOAD.formatErrorMsg());
                 }
-                this.numRowsNormal = Long.parseLong(loadCounters.get(LoadEtlTask.DPP_NORMAL_ALL));
-                this.numRowsAbnormal = Long.parseLong(loadCounters.get(LoadEtlTask.DPP_ABNORMAL_ALL));
-                this.numRowsUnselected = Long.parseLong(loadCounters.get(LoadJob.UNSELECTED_ROWS));
-                this.numLoadBytesTotal = Long.parseLong(loadCounters.get(LoadJob.LOADED_BYTES));
+                numRowsNormal = Long.parseLong(loadCounters.get(LoadEtlTask.DPP_NORMAL_ALL));
+                numRowsAbnormal = Long.parseLong(loadCounters.get(LoadEtlTask.DPP_ABNORMAL_ALL));
+                numRowsUnselected = Long.parseLong(loadCounters.get(LoadJob.UNSELECTED_ROWS));
+                numLoadBytesTotal = Long.parseLong(loadCounters.get(LoadJob.LOADED_BYTES));
 
                 if (numRowsNormal == 0) {
                     throw new LoadException(ERR_NO_PARTITIONS_HAVE_DATA_LOAD.formatErrorMsg());
@@ -161,7 +190,7 @@ public class GroupCommitLoadExecutor implements Runnable {
                     collectProfile();
                 }
 
-                this.trackingUrl = coord.getTrackingUrl();
+                trackingUrl = coord.getTrackingUrl();
                 if (!status.ok()) {
                     throw new LoadException(status.getErrorMsg());
                 }
@@ -172,21 +201,40 @@ public class GroupCommitLoadExecutor implements Runnable {
             throw new UserException(e.getMessage());
         }
 
+        this.beginCommitTimeMs = System.currentTimeMillis();
         List<TabletCommitInfo> commitInfos = TabletCommitInfo.fromThrift(coord.getCommitInfos());
         List<TabletFailInfo> failInfos = TabletFailInfo.fromThrift(coord.getFailInfos());
-        endTimeMs = System.currentTimeMillis();
         StreamLoadTxnCommitAttachment txnCommitAttachment = new StreamLoadTxnCommitAttachment(
-                beforeLoadTimeMs, beforeLoadTimeMs, beforeLoadTimeMs, beforeLoadTimeMs, endTimeMs,
-                numRowsNormal, numRowsAbnormal, numRowsUnselected, numLoadBytesTotal, trackingUrl);
+                0, 0, 0, 0, 0, numRowsNormal, numRowsAbnormal, numRowsUnselected, numLoadBytesTotal, trackingUrl);
         boolean publishResult = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().commitAndPublishTransaction(
                 db, txnId, commitInfos, failInfos, Config.group_commit_publish_time_ms, txnCommitAttachment);
-        LOG.info("Finish group commit for {}.{}, label: {}, txn_id: {}, publish result: {}",
-                dbName, tableName, label, txnId, publishResult);
+        this.finishTimeMs = System.currentTimeMillis();
+        LOG.info("Finish group commit, db: {}, table: {}, label: {}, txn_id: {}, publish result: {}, {}", dbName,
+                tableName, label, txnId, publishResult, calculateTime());
+    }
+
+    private String calculateTime() {
+        StringBuilder builder = new StringBuilder();
+        builder.append("createTimeMs: ").append(createTimeMs);
+        builder.append(", beginTxnTimeMs: ").append(beginTxnTimeMs);
+        builder.append(", beginExecPlanTimeMs: ").append(beginExecPlanTimeMs);
+        builder.append(", beginCoordinatorExecTimeMs: ").append(beginCoordinatorExecTimeMs);
+        builder.append(", beginCoordinatorJoinTimeMs: ").append(beginCoordinatorJoinTimeMs.get());
+        builder.append(", beginCommitTimeMs: ").append(beginCommitTimeMs);
+        builder.append(", finishTimeMs: ").append(finishTimeMs);
+        builder.append(", totalCostMs: ").append(finishTimeMs - createTimeMs);
+        builder.append(", waitExecuteCostMs: ").append(beginTxnTimeMs - createTimeMs);
+        builder.append(", beginTxnCostMs: ").append(beginExecPlanTimeMs - beginTxnTimeMs);
+        builder.append(", buildPlanCostMs: ").append(beginCoordinatorExecTimeMs - beginExecPlanTimeMs);
+        builder.append(", deliverPlanCostMs: ").append(beginCoordinatorJoinTimeMs.get() - beginCoordinatorExecTimeMs);
+        builder.append(", execPlanCostMs: ").append(beginCommitTimeMs - beginCoordinatorJoinTimeMs.get());
+        builder.append(", commitTxnCostMs: ").append(finishTimeMs - beginCommitTimeMs);
+        return builder.toString();
     }
 
     public void collectProfile() {
         long currentTimestamp = System.currentTimeMillis();
-        long totalTimeMs = currentTimestamp - beforeLoadTimeMs;
+        long totalTimeMs = currentTimestamp - createTimeMs;
 
         // For the usage scenarios of flink cdc or routine load,
         // the frequency of stream load maybe very high, resulting in many profiles,
@@ -200,7 +248,7 @@ public class GroupCommitLoadExecutor implements Runnable {
         RuntimeProfile profile = new RuntimeProfile("Load");
         RuntimeProfile summaryProfile = new RuntimeProfile("Summary");
         summaryProfile.addInfoString(ProfileManager.QUERY_ID, DebugUtil.printId(loadId));
-        summaryProfile.addInfoString(ProfileManager.START_TIME, TimeUtils.longToTimeString(beforeLoadTimeMs));
+        summaryProfile.addInfoString(ProfileManager.START_TIME, TimeUtils.longToTimeString(createTimeMs));
 
         summaryProfile.addInfoString(ProfileManager.END_TIME, TimeUtils.longToTimeString(System.currentTimeMillis()));
         summaryProfile.addInfoString(ProfileManager.TOTAL_TIME, DebugUtil.getPrettyStringMs(totalTimeMs));
@@ -232,6 +280,7 @@ public class GroupCommitLoadExecutor implements Runnable {
     }
 
     private void beginTxn() throws Exception {
+        this.beginTxnTimeMs = System.currentTimeMillis();
         long timeoutMs = getTimeoutMs();
         Database db = GlobalStateMgr.getCurrentState().getDb(dbName);
         OlapTable table;

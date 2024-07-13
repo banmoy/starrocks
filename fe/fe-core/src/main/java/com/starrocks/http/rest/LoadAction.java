@@ -122,9 +122,7 @@ public class LoadAction extends RestBaseAction {
             redirectAddr = GlobalStateMgr.getCurrentState().getGroupCommitMgr().getRedirectBe(
                     dbName, tableName, request.getRequest().headers());
             if (redirectAddr == null) {
-                throw new DdlException(
-                        String.format(
-                                "Can't find redirect address for group commit %s.%s", dbName, tableName));
+                throw new DdlException("Can't find redirect address for group commit");
             }
         } else {
             redirectAddr = selectRedirectAddr(warehouseName);

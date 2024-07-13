@@ -44,16 +44,16 @@ public class GroupCommitMgr {
     public TNetworkAddress getRedirectBe(String db, String table, HttpHeaders headers) {
         TableGroupCommit tableGroupCommit = getOrCreateTableGroupCommit(new TableId(db, table), headers);
         TNetworkAddress address = tableGroupCommit.getRedirectBe();
-        LOG.debug("Redirect stream load from {}.{} to {}", db, table, address);
+        LOG.debug("Redirect stream load for group commit, db: {}, table: {}, address: {}", db, table, address);
         return address;
     }
 
     public void notifyBeData(String dbName, String tableName, String beHost) {
+        LOG.debug("Receive group commit notify, db: {}, table: {}, be: {}", dbName, tableName, beHost);
         TableGroupCommit tableGroupCommit = getOrCreateTableGroupCommit(new TableId(dbName, tableName), null);
         if (tableGroupCommit != null) {
             tableGroupCommit.notifyBeData(beHost);
         }
-        LOG.debug("Receive data notify from {}.{} to {}", dbName, tableName, beHost);
     }
 
     private TableGroupCommit getOrCreateTableGroupCommit(TableId tableId, HttpHeaders headers) {
@@ -72,6 +72,7 @@ public class GroupCommitMgr {
                 tableGroupCommit = new TableGroupCommit(tableId, headers, threadPoolExecutor);
                 tableGroupCommitMap.put(tableId, tableGroupCommit);
                 tableGroupCommit.init();
+                LOG.info("Create table group commit, db: {}, table: {}", tableId.getDbName(), tableId.getTableName());
             }
         } finally {
             lock.writeLock().unlock();

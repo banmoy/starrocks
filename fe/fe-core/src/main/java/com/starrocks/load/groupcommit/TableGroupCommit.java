@@ -34,8 +34,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
@@ -47,16 +47,18 @@ public class TableGroupCommit {
     private final HttpHeaders headers;
     private final ThreadPoolExecutor threadPoolExecutor;
     private final ReentrantReadWriteLock lock;
-    private final Map<String, GroupCommitTxn> runningTxns;
+    private final Map<String, GroupCommitLoadExecutor> runningLoads;
     private List<TNetworkAddress> candidateCoordinatorBEs;
+    private final AtomicLong nextBeIndex;
 
     public TableGroupCommit(TableId tableId, HttpHeaders headers, ThreadPoolExecutor threadPoolExecutor) {
         this.tableId = tableId;
         this.headers = headers;
         this.threadPoolExecutor = threadPoolExecutor;
         this.lock = new ReentrantReadWriteLock();
-        this.runningTxns = new HashMap<>();
+        this.runningLoads = new HashMap<>();
         this.candidateCoordinatorBEs = new ArrayList<>();
+        this.nextBeIndex = new AtomicLong(0);
     }
 
     public void init() {
@@ -85,30 +87,30 @@ public class TableGroupCommit {
                     .getClusterInfo().getBackendOrComputeNode(nodeIds.get(i));
             candidateCoordinatorBEs.add(new TNetworkAddress(node.getHost(), node.getHttpPort()));
         }
-        LOG.info("Init group commit for table {}.{}, candidate BE: {}",
-                tableId.getDbName(), tableId.getTableName(), candidateCoordinatorBEs);
+        LOG.info("Init table group commit, db: {}, table: {}, candidate BEs: {}", tableId.getDbName(),
+                tableId.getTableName(), candidateCoordinatorBEs);
     }
 
     public TNetworkAddress getRedirectBe() {
-        lock.readLock().lock();
-        try {
-            if (candidateCoordinatorBEs.isEmpty()) {
-                return null;
-            }
-            int index = ThreadLocalRandom.current().nextInt(candidateCoordinatorBEs.size());
-            return candidateCoordinatorBEs.get(index);
-        } finally {
-            lock.readLock().unlock();
+        // TODO protect candidateCoordinatorBEs if it changes
+        if (candidateCoordinatorBEs.isEmpty()) {
+            return null;
         }
+        int index = (int) (nextBeIndex.incrementAndGet() % candidateCoordinatorBEs.size());
+        return candidateCoordinatorBEs.get(index);
     }
 
     public void notifyBeData(String beHost) {
         lock.readLock().lock();
         try {
-            for (GroupCommitTxn txn : runningTxns.values()) {
-                if (txn.isOpen(beHost)) {
-                    LOG.info("{} notify to have data, and this should belong to txn_id: {}", beHost, txn.label);
+            for (GroupCommitLoadExecutor loadExecutor : runningLoads.values()) {
+                if (loadExecutor.isActive(beHost)) {
+                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),
+                            tableId.getTableName(), loadExecutor.getLabel(), beHost);
                     return;
+                } else {
+                    LOG.info("Inactive txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),
+                            tableId.getTableName(), loadExecutor.getLabel(), beHost);
                 }
             }
         } finally {
@@ -117,34 +119,37 @@ public class TableGroupCommit {
 
         lock.writeLock().lock();
         try {
-            for (GroupCommitTxn txn : runningTxns.values()) {
-                if (txn.isOpen(beHost)) {
-                    LOG.info("{} notify to have data, and this should belong to txn_id: {}", beHost, txn.label);
+            for (GroupCommitLoadExecutor loadExecutor : runningLoads.values()) {
+                if (loadExecutor.isActive(beHost)) {
+                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),
+                            tableId.getTableName(), loadExecutor.getLabel(), beHost);
                     return;
+                } else {
+                    LOG.info("Inactive txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),
+                            tableId.getTableName(), loadExecutor.getLabel(), beHost);
                 }
             }
 
             Set<String> bes = getBes();
             bes.add(beHost);
             String label = "group_" + DebugUtil.printId(UUIDUtil.toTUniqueId(UUID.randomUUID()));
-            GroupCommitLoadExecutor loadExecutor = new GroupCommitLoadExecutor(
-                    this, tableId.getDbName(), tableId.getTableName(), label, headers, bes);
-            long startTimeMs = System.currentTimeMillis();
-            GroupCommitTxn groupCommitTxn = new GroupCommitTxn(label, startTimeMs,
-                    startTimeMs + Config.group_commit_interval_ms, bes, loadExecutor);
-            runningTxns.put(label, groupCommitTxn);
+            GroupCommitLoadExecutor loadExecutor = new GroupCommitLoadExecutor(this, tableId.getDbName(),
+                    tableId.getTableName(), label, headers, bes, Config.group_commit_interval_ms);
+            runningLoads.put(label, loadExecutor);
+            LOG.info("Create group commit load, db: {}, table: {}, label: {}, BEs: {}, activeTimeMs: {}, ",
+                    tableId.getDbName(), tableId.getTableName(), label, bes, loadExecutor.getActiveTimeMs());
             threadPoolExecutor.execute(loadExecutor);
-            LOG.info("Create group commit load for {}.{}, label: {}, BEs: {}, startTimeMs: {}, groupEndTimeMs: {}",
-                    tableId.getDbName(), tableId.getTableName(), label, bes, startTimeMs, groupCommitTxn.groupEndTimeMs);
         } finally {
             lock.writeLock().unlock();
         }
     }
 
-    public void removeLabel(String label) {
+    public void removeLoad(String label) {
         lock.writeLock().lock();
         try {
-            runningTxns.remove(label);
+            runningLoads.remove(label);
+            LOG.info("Remove group commit load, db: {}, table: {}, label: {}", tableId.getDbName(),
+                    tableId.getTableName(), label);
         } finally {
             lock.writeLock().unlock();
         }
@@ -153,29 +158,5 @@ public class TableGroupCommit {
     private Set<String> getBes() {
         return candidateCoordinatorBEs.stream().map(TNetworkAddress::getHostname)
                 .collect(Collectors.toSet());
-    }
-
-    public static class GroupCommitTxn {
-        private final String label;
-        private final long startTimeMs;
-        private final long groupEndTimeMs;
-        private final Set<String> coordinatorBEs;
-        GroupCommitLoadExecutor loadExecutor;
-
-        public GroupCommitTxn(String label, long startTimeMs, long groupEndTimeMs,
-                              Set<String> coordinatorBEs, GroupCommitLoadExecutor loadExecutor) {
-            this.label = label;
-            this.startTimeMs = startTimeMs;
-            this.groupEndTimeMs = groupEndTimeMs;
-            this.coordinatorBEs = coordinatorBEs;
-            this.loadExecutor = loadExecutor;
-        }
-
-        public boolean isOpen(String beHost) {
-            if (!coordinatorBEs.contains(beHost)) {
-                return false;
-            }
-            return System.currentTimeMillis() < groupEndTimeMs;
-        }
     }
 }
