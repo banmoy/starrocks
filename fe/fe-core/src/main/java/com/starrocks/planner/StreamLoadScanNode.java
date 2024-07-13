@@ -268,7 +268,7 @@ public class StreamLoadScanNode extends LoadScanNode {
             if (!be.isAvailable()) {
                 continue;
             }
-            if (!candidateBes.isEmpty() && candidateBes.contains(be.getHost())) {
+            if (candidateBes.isEmpty() || candidateBes.contains(be.getHost())) {
                 backends.add(be);
             }
         }
