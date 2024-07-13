@@ -61,6 +61,7 @@ Status StreamLoadPipe::append(ByteBufferPtr&& buf) {
         }
         _buffered_bytes += buf->remaining();
         _buf_queue.emplace_back(std::move(buf));
+        _num_buffer.fetch_add(1, std::memory_order_release);
         _get_cond.notify_one();
     }
     return Status::OK();

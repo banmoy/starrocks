@@ -215,6 +215,9 @@ Status StreamLoadAction::_handle(StreamLoadContext* ctx) {
 }
 
 Status StreamLoadAction::_group_commit_handle(StreamLoadContext* ctx) {
+    if (config::enable_stream_load_verbose_log) {
+        LOG(INFO) << "handle group commit, db: " << ctx->db << ", table: " << ctx->table << ", id: " << ctx->id;
+    }
     ctx->handle_start_ts = MonotonicNanos();
     if (ctx->body_bytes > 0 && ctx->receive_bytes != ctx->body_bytes) {
         LOG(WARNING) << "receive body don't equal with body bytes, body_bytes=" << ctx->body_bytes
@@ -269,7 +272,7 @@ int StreamLoadAction::on_header(HttpRequest* req) {
         LOG(INFO) << "streaming load request: " << req->debug_string();
     }
 
-    auto group_commit = req->param("group_commit");
+    auto group_commit = req->header("group_commit");
     Status st;
     if (group_commit.empty()) {
         ctx->label = req->header(HTTP_LABEL_KEY);
@@ -278,6 +281,10 @@ int StreamLoadAction::on_header(HttpRequest* req) {
         }
         st = _on_header(req, ctx);
     } else {
+        if (config::enable_stream_load_verbose_log) {
+            LOG(INFO) << "receive group commit header, db: " << ctx->db << ", table: " << ctx->table
+                      << ", id: " << ctx->id;
+        }
         ctx->group_commit = true;
         st = _on_group_commit_header(req, ctx);
     }
@@ -515,7 +522,9 @@ void StreamLoadAction::free_handler_ctx(void* param) {
     if (ctx->body_sink != nullptr) {
         ctx->body_sink->cancel(Status::Cancelled("Cancelled"));
     }
-    _exec_env->load_stream_mgr()->remove(ctx->id);
+    if (!ctx->group_commit) {
+        _exec_env->load_stream_mgr()->remove(ctx->id);
+    }
     if (ctx->unref()) {
         delete ctx;
     }

@@ -60,6 +60,12 @@ public:
     }
     ~StreamLoadPipe() override = default;
 
+    void set_context(int64_t txn_id, const std::string& label, const TUniqueId& fragment_id) {
+        _txn_id = txn_id;
+        _label = label;
+        _fragment_id = fragment_id;
+    }
+
     Status append(ByteBufferPtr&& buf) override;
 
     Status append(const char* data, size_t size) override;
@@ -98,8 +104,13 @@ private:
     Status _push_front_unlocked(const ByteBufferPtr& buf);
 
     void _check_active_time() {
-        if (_active_time_ns > 0 && (_start_time_ns + _active_time_ns >= MonotonicNanos())) {
+        auto current_ns = MonotonicNanos();
+        if (!_finished && _active_time_ns > 0 && (_start_time_ns + _active_time_ns >= current_ns)) {
             _finished = true;
+            LOG(INFO) << "Stream load pipe is finished, txn_id: " << _txn_id << ", label: " << _label
+                      << ", fragment_id: " << _fragment_id
+                      << ", active_time_ms: " << (current_ns - _start_time_ns) / 1000000
+                      << ", num_buffer: " << _num_buffer.load(std::memory_order_relaxed);
         }
     }
 
@@ -121,6 +132,11 @@ private:
     ByteBufferPtr _write_buf;
     ByteBufferPtr _read_buf;
     Status _err_st = Status::OK();
+
+    std::atomic<int32_t> _num_buffer{0};
+    int64_t _txn_id;
+    std::string _label;
+    TUniqueId _fragment_id;
 };
 
 class StreamLoadPipeReader {

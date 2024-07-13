@@ -576,7 +576,8 @@ Status FragmentExecutor::_prepare_stream_load_pipe(ExecEnv* exec_env, const Unif
                 RETURN_IF_ERROR(exec_env->stream_context_mgr()->create_channel_context(
                         exec_env, label, channel_id, db_name, table_name, format, ctx, load_id, txn_id,
                         active_time_ms));
-                ctx->fragment_instance_id = request.fragment_instance_id();
+                down_cast<StreamLoadPipe*>(ctx->body_sink.get())
+                        ->set_context(txn_id, label, request.fragment_instance_id());
                 DeferOp op([&] {
                     if (ctx->unref()) {
                         delete ctx;

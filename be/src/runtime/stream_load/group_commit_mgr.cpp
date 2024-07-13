@@ -14,6 +14,8 @@
 
 #include "runtime/stream_load/group_commit_mgr.h"
 
+#include <utility>
+
 #include "agent/master_info.h"
 #include "gen_cpp/FrontendService.h"
 #include "runtime/client_cache.h"
@@ -22,39 +24,70 @@
 
 namespace starrocks {
 
-TableGroupCommit::TableGroupCommit(const std::string& db, const std::string& table,
-                                   bthreads::ThreadPoolExecutor* executor)
-        : _db(db), _table(table), _executor(executor) {}
+TableGroupCommit::TableGroupCommit(std::string db, const std::string& table, bthreads::ThreadPoolExecutor* executor)
+        : _db(std::move(db)), _table(table), _executor(executor) {}
 
 Status TableGroupCommit::init() {
     bthread::ExecutionQueueOptions opts;
     opts.executor = _executor;
     if (int r = bthread::execution_queue_start(&_queue_id, &opts, _execute, this); r != 0) {
-        return Status::InternalError(fmt::format("fail to create bthread execution queue: {}", r));
+        LOG(ERROR) << "Fail to start execution queue for table group commit, db: " << _db << ", table: " << _table
+                   << ", result: " << r;
+        return Status::InternalError(fmt::format("fail to start bthread execution queue: {}", r));
     }
+    LOG(INFO) << "Init table group commit, db: " << _db << ", table: " << _table;
     return Status::OK();
 }
 
-void TableGroupCommit::register_stream_load_context(StreamLoadContext* context) {
+void TableGroupCommit::register_stream_load_context(StreamLoadContext* ctx) {
+    ctx->ref();
     std::unique_lock<std::mutex> lock(_mutex_for_new_contexts);
-    _new_contexts.emplace(context);
+    _new_contexts.emplace(ctx);
+    _cv_for_new_contexts.notify_one();
+    LOG(INFO) << "Register group commit load, db: " << ctx->db << ", table: " << ctx->table
+              << ", txn_id: " << ctx->txn_id << ", label: " << ctx->label << ", fragment: " << ctx->fragment_instance_id
+              << ", active_time_ms: " << ctx->active_time_ms;
 }
 
-void TableGroupCommit::unregister_stream_load_context(StreamLoadContext* context) {
+void TableGroupCommit::unregister_stream_load_context(StreamLoadContext* ctx) {
     // TODO unregister from _loading_contexts
-    std::unique_lock<std::mutex> lock(_mutex_for_new_contexts);
-    _new_contexts.erase(context);
+    bool find = false;
+    {
+        std::unique_lock<std::mutex> lock(_mutex_for_new_contexts);
+        if (_new_contexts.erase(ctx)) {
+            find = true;
+        }
+    }
+    // TODO unregister loads in _unregister_contexts
+    if (find) {
+        if (ctx->unref()) {
+            delete ctx;
+        }
+    }
+    LOG(INFO) << "Unregister group commit load, db: " << ctx->db << ", table: " << ctx->table
+              << ", txn_id: " << ctx->txn_id << ", label: " << ctx->label << ", fragment: " << ctx->fragment_instance_id
+              << ", active_time_ms: " << ctx->active_time_ms;
 }
 
 Status TableGroupCommit::append_load(StreamLoadContext* ctx) {
+    if (config::enable_stream_load_verbose_log) {
+        LOG(INFO) << "start to append load to group commit, db: " << ctx->db << ", table: " << ctx->table
+                  << ", id: " << ctx->id;
+    }
     auto count_down_latch = BThreadCountDownLatch(1);
     Task task{.create_time_ns = MonotonicNanos(), .load_ctx = ctx, .latch = &count_down_latch};
     int r = bthread::execution_queue_execute(_queue_id, task);
     if (r != 0) {
-        LOG(WARNING) << "Fail to add task to execution queue for " << _db << "." << _table << ": " << r;
+        LOG(WARNING) << "Fail to add load to execution queue, db: " << ctx->db << ", table: " << ctx->table
+                     << ", id: " << ctx->id;
         return Status::InternalError("Failed to append load to group commit execution queue");
     }
     count_down_latch.wait();
+    if (config::enable_stream_load_verbose_log) {
+        LOG(INFO) << "finish to append load to group commit, db: " << ctx->db << ", table: " << ctx->table
+                  << ", id: " << ctx->id << ", txn_id: " << ctx->txn_id << ", label: " << ctx->label
+                  << ", fragment: " << ctx->fragment_instance_id;
+    }
     return ctx->status;
 }
 
@@ -71,38 +104,65 @@ int TableGroupCommit::_execute(void* meta, bthread::TaskIterator<Task>& iter) {
 }
 
 Status TableGroupCommit::_try_append_load(StreamLoadContext* load_ctx) {
+    int total_retries = 5;
     int num_retries = 0;
     Status st;
     do {
+        if (config::enable_stream_load_verbose_log) {
+            LOG(INFO) << "try to append load, db: " << load_ctx->db << ", table: " << load_ctx->table
+                      << ", id: " << load_ctx->id << ", num_retries: " << num_retries;
+        }
         st = _do_append_load(load_ctx);
+        _clean_useless_contexts();
         if (st.ok()) {
             return st;
         }
         _request_group_commit_load();
         num_retries += 1;
-    } while (num_retries < 5);
+    } while (num_retries < total_retries);
+    if (config::enable_stream_load_verbose_log) {
+        LOG(INFO) << "fail to append load after retries " << total_retries << ", db: " << load_ctx->db
+                  << ", table: " << load_ctx->table << ", id: " << load_ctx->id;
+    }
     return Status::InternalError("Can't append load after 5 retries, last status: " + st.to_string());
 }
 
 Status TableGroupCommit::_do_append_load(StreamLoadContext* load_ctx) {
     ByteBufferPtr buffer = load_ctx->buffer;
-    Status st = Status::CapacityLimitExceed("no candidates group commit loads");
+    Status st = Status::CapacityLimitExceed("no candidate group commit loads");
     for (auto* context : _loading_contexts) {
         st = context->body_sink->append(std::move(load_ctx->buffer));
         if (st.ok()) {
             load_ctx->txn_id = context->txn_id;
             load_ctx->label = context->label;
             load_ctx->fragment_instance_id = context->fragment_instance_id;
+            if (config::enable_stream_load_verbose_log) {
+                LOG(INFO) << "finish to send buffer to pipe, db: " << load_ctx->db << ", table: " << load_ctx->table
+                          << ", id: " << load_ctx->id << ", txn_id: " << context->txn_id
+                          << ", label: " << context->label << ", fragment: " << context->fragment_instance_id;
+            }
             break;
+        }
+        if (config::enable_stream_load_verbose_log) {
+            LOG(INFO) << "fail to send buffer to pipe, db: " << load_ctx->db << ", table: " << load_ctx->table
+                      << ", id: " << load_ctx->id << ", txn_id: " << context->txn_id << ", label: " << context->label
+                      << ", fragment: " << context->fragment_instance_id << ", status: " << st;
         }
         _useless_contexts.emplace(context);
         load_ctx->buffer = buffer;
     }
-    if (!_useless_contexts.empty()) {
-        _loading_contexts.erase(_useless_contexts.begin(), _useless_contexts.end());
-        _useless_contexts.clear();
-    }
     return st;
+}
+
+void TableGroupCommit::_clean_useless_contexts() {
+    if (!_useless_contexts.empty()) {
+        for (auto* ctx : _useless_contexts) {
+            _loading_contexts.erase(ctx);
+            if (ctx->unref()) {
+                delete ctx;
+            }
+        }
+    }
 }
 
 void TableGroupCommit::_request_group_commit_load() {
@@ -144,7 +204,33 @@ void TableGroupCommit::_send_rpc_request() {
                 client->groupCommitNotifyData(response, request);
             },
             config::group_commit_thrift_rpc_timeout_ms);
-    LOG(INFO) << "Request group commit load for " << _db << "." << _table << ", st: " << st;
+    LOG(INFO) << "Request group commit load, db: " << _db << ", table: " << _table << ", st: " << st;
+}
+
+void TableGroupCommit::stop() {
+    if (_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+    bool expect = false;
+    if (_stopped.compare_exchange_strong(expect, true, std::memory_order_acq_rel) &&
+        _queue_id.value != kInvalidQueueId) {
+        int r = bthread::execution_queue_stop(_queue_id);
+        LOG_IF(WARNING, r != 0) << "Fail to stop execution queue, db: " << _db << ", table: " << _table
+                                << ", result: " << r;
+        r = bthread::execution_queue_join(_queue_id);
+        LOG_IF(WARNING, r != 0) << "Fail to join execution queue db: " << _db << ", table: " << _table
+                                << ", result: " << r;
+
+        std::unordered_set<StreamLoadContext*> ctxs;
+        ctxs.insert(_loading_contexts.begin(), _loading_contexts.end());
+        ctxs.insert(_useless_contexts.begin(), _useless_contexts.end());
+        for (auto* ctx : ctxs) {
+            if (ctx->unref()) {
+                delete ctx;
+            }
+        }
+        LOG(INFO) << "Stop table group commit, db: " << _db << ", table: " << _table;
+    }
 }
 
 StatusOr<TableGroupCommitSharedPtr> GroupCommitMgr::get_table_group_commit(const std::string& db,
@@ -159,6 +245,10 @@ StatusOr<TableGroupCommitSharedPtr> GroupCommitMgr::get_table_group_commit(const
     }
 
     std::unique_lock<std::shared_mutex> lock(_mutex);
+    if (_stopped) {
+        return Status::InternalError("GroupCommitMgr is stopped");
+    }
+
     auto it = _tables.find(table_id);
     if (it != _tables.end()) {
         return it->second;
@@ -170,11 +260,22 @@ StatusOr<TableGroupCommitSharedPtr> GroupCommitMgr::get_table_group_commit(const
         return Status::InternalError("Fail to init table group commit, " + st.to_string());
     }
     _tables.emplace(table_id, table_group_commit);
+    LOG(INFO) << "Create table group commit, db: " << db << ", table: " << table;
     return table_group_commit;
 }
 
 void GroupCommitMgr::stop() {
-    // TODO
+    {
+        std::unique_lock<std::shared_mutex> lock(_mutex);
+        if (_stopped) {
+            return;
+        }
+        _stopped = true;
+    }
+
+    for (auto it : _tables) {
+        it.second->stop();
+    }
 }
 
 } // namespace starrocks

@@ -48,13 +48,14 @@ using BThreadCountDownLatch = GenericCountDownLatch<bthread::Mutex, bthread::Con
 
 struct Task {
     int64_t create_time_ns;
+    bool unregister{false};
     StreamLoadContext* load_ctx;
     BThreadCountDownLatch* latch;
 };
 
 class TableGroupCommit {
 public:
-    explicit TableGroupCommit(const std::string& db, const std::string& table, bthreads::ThreadPoolExecutor* executor);
+    explicit TableGroupCommit(std::string db, const std::string& table, bthreads::ThreadPoolExecutor* executor);
 
     Status init();
 
@@ -63,11 +64,14 @@ public:
 
     Status append_load(StreamLoadContext* ctx);
 
+    void stop();
+
 private:
     static int _execute(void* meta, bthread::TaskIterator<Task>& iter);
 
     Status _try_append_load(StreamLoadContext* ctx);
     Status _do_append_load(StreamLoadContext* ctx);
+    void _clean_useless_contexts();
     void _request_group_commit_load();
     void _send_rpc_request();
 
@@ -84,6 +88,7 @@ private:
     // Undocemented rule of bthread that -1(0xFFFFFFFFFFFFFFFF) is an invalid ExecutionQueueId
     constexpr static uint64_t kInvalidQueueId = (uint64_t)-1;
     bthread::ExecutionQueueId<Task> _queue_id{kInvalidQueueId};
+    std::atomic<bool> _stopped{false};
 };
 using TableGroupCommitSharedPtr = std::shared_ptr<TableGroupCommit>;
 
@@ -99,6 +104,7 @@ private:
     std::unique_ptr<bthreads::ThreadPoolExecutor> _executor;
     std::shared_mutex _mutex;
     std::unordered_map<TableMeta, TableGroupCommitSharedPtr, pair_hash> _tables;
+    bool _stopped{false};
 };
 
 } // namespace starrocks

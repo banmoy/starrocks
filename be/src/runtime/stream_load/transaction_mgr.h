@@ -116,6 +116,7 @@ public:
 
         ctx->body_sink = pipe;
         ctx->txn_id = txn_id;
+        ctx->active_time_ms = active_time_ms;
 
         return Status::OK();
     }
