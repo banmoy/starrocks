@@ -272,19 +272,19 @@ int StreamLoadAction::on_header(HttpRequest* req) {
         LOG(INFO) << "streaming load request: " << req->debug_string();
     }
 
+    ctx->label = req->header(HTTP_LABEL_KEY);
     auto group_commit = req->header("group_commit");
+    if (config::enable_stream_load_verbose_log) {
+        LOG(INFO) << "receive group commit header, db: " << ctx->db << ", table: " << ctx->table
+                  << ", user label: " << ctx->label << ", id: " << ctx->id;
+    }
     Status st;
     if (group_commit.empty()) {
-        ctx->label = req->header(HTTP_LABEL_KEY);
         if (ctx->label.empty()) {
             ctx->label = generate_uuid_string();
         }
         st = _on_header(req, ctx);
     } else {
-        if (config::enable_stream_load_verbose_log) {
-            LOG(INFO) << "receive group commit header, db: " << ctx->db << ", table: " << ctx->table
-                      << ", id: " << ctx->id;
-        }
         ctx->group_commit = true;
         st = _on_group_commit_header(req, ctx);
     }

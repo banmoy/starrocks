@@ -109,7 +109,7 @@ public:
         ctx->label = label;
         ctx->channel_id = channel_id;
 
-        ctx->start_nanos = UnixSeconds();
+        ctx->start_nanos = MonotonicNanos();
         ctx->last_active_ts = ctx->start_nanos;
         ctx->need_rollback = false;
         ctx->format = format;

@@ -135,10 +135,13 @@ Status TableGroupCommit::_do_append_load(StreamLoadContext* load_ctx) {
             load_ctx->txn_id = context->txn_id;
             load_ctx->label = context->label;
             load_ctx->fragment_instance_id = context->fragment_instance_id;
+            int64_t left_time_ms = context->active_time_ms - (MonotonicNanos() - context->start_nanos) / 1000000;
+            load_ctx->left_time_ms = std::max((int64_t)0, left_time_ms);
             if (config::enable_stream_load_verbose_log) {
                 LOG(INFO) << "finish to send buffer to pipe, db: " << load_ctx->db << ", table: " << load_ctx->table
                           << ", id: " << load_ctx->id << ", txn_id: " << context->txn_id
-                          << ", label: " << context->label << ", fragment: " << print_id(context->fragment_instance_id);
+                          << ", label: " << context->label << ", fragment: " << print_id(context->fragment_instance_id)
+                          << ", left_time_ms: " << load_ctx->left_time_ms;
             }
             break;
         }

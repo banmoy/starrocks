@@ -225,6 +225,9 @@ std::string StreamLoadContext::to_group_commit_json() const {
     writer.Key("FragmentId");
     writer.String(print_id(fragment_instance_id).c_str());
 
+    writer.Key("LeftTimeMs");
+    writer.Int64(left_time_ms);
+
     // status
     writer.Key("Status");
     switch (status.code()) {

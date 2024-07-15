@@ -60,7 +60,7 @@ Status StreamLoadPipe::append(ByteBufferPtr&& buf) {
         });
 
         if (_cancelled) {
-            return _err_st;
+            return Status::Cancelled("Stream load pipe is cancelled, reason: " + _err_st.to_string());
         }
         _buffered_bytes += buf->remaining();
         _buf_queue.emplace_back(std::move(buf));

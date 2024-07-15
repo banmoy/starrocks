@@ -202,6 +202,7 @@ public:
     std::string table;
     std::string label;
     bool group_commit = false;
+    int64_t left_time_ms = -1;
     // optional
     double max_filter_ratio = 0.0;
     int32_t timeout_second = -1;
