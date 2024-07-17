@@ -263,6 +263,14 @@ std::string StreamLoadContext::to_group_commit_json() const {
     writer.Int64((handle_start_ts - receive_chunk_end_ts) / 1000000);
     writer.Key("HandleTimeMs");
     writer.Int64((handle_end_ts - handle_start_ts) / 1000000);
+    writer.Key("GroupCommitPendingMs");
+    writer.Int64((start_append_load_ts - handle_start_ts) / 1000000);
+    writer.Key("GroupCommitAppendMs");
+    writer.Int64((finish_append_load_ts - start_append_load_ts - wait_group_commit_time_ns) / 1000000);
+    writer.Key("GroupCommitWaitLoadMs");
+    writer.Int64(wait_group_commit_time_ns / 1000000);
+    writer.Key("GroupCommitRequestLoadCount");
+    writer.Int64(group_commit_request_load_num);
 
     writer.EndObject();
     return s.GetString();

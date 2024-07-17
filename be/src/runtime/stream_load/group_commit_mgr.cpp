@@ -20,6 +20,7 @@
 #include "gen_cpp/FrontendService.h"
 #include "runtime/client_cache.h"
 #include "stream_load_context.h"
+#include "util/runtime_profile.h"
 #include "util/thrift_rpc_helper.h"
 
 namespace starrocks {
@@ -103,10 +104,11 @@ int TableGroupCommit::_execute(void* meta, bthread::TaskIterator<Task>& iter) {
 }
 
 Status TableGroupCommit::_try_append_load(StreamLoadContext* load_ctx) {
-    int total_retries = 5;
     int num_retries = 0;
     Status st;
-    do {
+    load_ctx->start_append_load_ts = MonotonicNanos();
+    int64_t wait_group_commit_time_ns = 0;
+    while (num_retries <= config::group_commit_request_load_retry_num) {
         if (config::enable_stream_load_verbose_log) {
             LOG(INFO) << "try to append load, db: " << load_ctx->db << ", table: " << load_ctx->table
                       << ", id: " << load_ctx->id << ", num_retries: " << num_retries;
@@ -114,16 +116,26 @@ Status TableGroupCommit::_try_append_load(StreamLoadContext* load_ctx) {
         st = _do_append_load(load_ctx);
         _clean_useless_contexts();
         if (st.ok()) {
-            return st;
+            break;
         }
-        _request_group_commit_load();
+        {
+            SCOPED_RAW_TIMER(&wait_group_commit_time_ns);
+            _request_group_commit_load(load_ctx->label);
+        }
         num_retries += 1;
-    } while (num_retries < total_retries);
-    if (config::enable_stream_load_verbose_log) {
-        LOG(INFO) << "fail to append load after retries " << total_retries << ", db: " << load_ctx->db
-                  << ", table: " << load_ctx->table << ", id: " << load_ctx->id;
     }
-    return Status::InternalError("Can't append load after 5 retries, last status: " + st.to_string());
+    load_ctx->group_commit_request_load_num = num_retries;
+    load_ctx->finish_append_load_ts = MonotonicNanos();
+    load_ctx->wait_group_commit_time_ns = wait_group_commit_time_ns;
+    if (st.ok()) {
+        return st;
+    }
+    if (config::enable_stream_load_verbose_log) {
+        LOG(INFO) << "fail to append load after retries " << num_retries << ", db: " << load_ctx->db
+                  << ", table: " << load_ctx->table << ", id: " << load_ctx->id << ", status: " << st.to_string();
+    }
+    return Status::InternalError(
+            fmt::format("Can't append load after {} retries, last status: {}", num_retries, st.to_string()));
 }
 
 Status TableGroupCommit::_do_append_load(StreamLoadContext* load_ctx) {
@@ -173,7 +185,7 @@ void TableGroupCommit::_clean_useless_contexts() {
     }
 }
 
-void TableGroupCommit::_request_group_commit_load() {
+void TableGroupCommit::_request_group_commit_load(const std::string& user_label) {
     {
         std::unique_lock<std::mutex> lock(_mutex_for_new_contexts);
         if (!_new_contexts.empty()) {
@@ -182,7 +194,7 @@ void TableGroupCommit::_request_group_commit_load() {
             return;
         }
     }
-    _send_rpc_request();
+    _send_rpc_request(user_label);
     {
         std::unique_lock<std::mutex> lock(_mutex_for_new_contexts);
         if (!_new_contexts.empty()) {
@@ -190,7 +202,7 @@ void TableGroupCommit::_request_group_commit_load() {
             _new_contexts.clear();
             return;
         }
-        _cv_for_new_contexts.wait_for(lock, std::chrono::milliseconds(config::group_commit_wait_load_ms),
+        _cv_for_new_contexts.wait_for(lock, std::chrono::milliseconds(config::group_commit_request_load_interval_ms),
                                       [&]() { return !_new_contexts.empty(); });
         if (!_new_contexts.empty()) {
             _loading_contexts.insert(_new_contexts.begin(), _new_contexts.end());
@@ -199,12 +211,13 @@ void TableGroupCommit::_request_group_commit_load() {
     }
 }
 
-void TableGroupCommit::_send_rpc_request() {
+void TableGroupCommit::_send_rpc_request(const std::string& user_label) {
     TNetworkAddress master_addr = get_master_address();
     TGroupCommitNotifyDataRequest request;
     request.__set_db(_db);
     request.__set_table(_table);
     request.__set_host(BackendOptions::get_localhost());
+    request.__set_user_label(user_label);
     TGroupCommitNotifyDataResponse response;
     Status st = ThriftRpcHelper::rpc<FrontendServiceClient>(
             master_addr.hostname, master_addr.port,
@@ -212,7 +225,8 @@ void TableGroupCommit::_send_rpc_request() {
                 client->groupCommitNotifyData(response, request);
             },
             config::group_commit_thrift_rpc_timeout_ms);
-    LOG(INFO) << "Request group commit load, db: " << _db << ", table: " << _table << ", st: " << st;
+    LOG(INFO) << "Request group commit load, db: " << _db << ", table: " << _table << ", user: " << user_label
+              << ", st: " << st;
 }
 
 void TableGroupCommit::stop() {

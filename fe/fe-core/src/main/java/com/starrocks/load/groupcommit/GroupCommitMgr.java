@@ -48,11 +48,12 @@ public class GroupCommitMgr {
         return address;
     }
 
-    public void notifyBeData(String dbName, String tableName, String beHost) {
-        LOG.debug("Receive group commit notify, db: {}, table: {}, be: {}", dbName, tableName, beHost);
+    public void notifyBeData(String dbName, String tableName, String beHost, String userLabel) {
+        LOG.debug("Receive group commit notify, db: {}, table: {}, be: {}, userLabel: {}",
+                dbName, tableName, beHost, userLabel);
         TableGroupCommit tableGroupCommit = getOrCreateTableGroupCommit(new TableId(dbName, tableName), null);
         if (tableGroupCommit != null) {
-            tableGroupCommit.notifyBeData(beHost);
+            tableGroupCommit.notifyBeData(beHost, userLabel);
         }
     }
 

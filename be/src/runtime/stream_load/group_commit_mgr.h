@@ -72,8 +72,8 @@ private:
     Status _try_append_load(StreamLoadContext* ctx);
     Status _do_append_load(StreamLoadContext* ctx);
     void _clean_useless_contexts();
-    void _request_group_commit_load();
-    void _send_rpc_request();
+    void _request_group_commit_load(const std::string& user_label);
+    void _send_rpc_request(const std::string& user_label);
 
     std::string _db;
     std::string _table;

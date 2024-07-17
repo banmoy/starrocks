@@ -277,7 +277,11 @@ public:
     int64_t receive_chunk_start_ts = 0;
     int64_t receive_chunk_end_ts = 0;
     int64_t handle_start_ts = 0;
+    int64_t start_append_load_ts = 0;
+    int64_t finish_append_load_ts = 0;
     int64_t handle_end_ts = 0;
+    int64_t wait_group_commit_time_ns = 0;
+    int64_t group_commit_request_load_num = 0;
 
     // buffer for reading data from ev_buffer
     static constexpr size_t kDefaultBufferSize = 64 * 1024;

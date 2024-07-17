@@ -100,18 +100,18 @@ public class TableGroupCommit {
         return candidateCoordinatorBEs.get(index);
     }
 
-    public void notifyBeData(String beHost) {
+    public void notifyBeData(String beHost, String userLabel) {
         lock.readLock().lock();
         try {
             for (GroupCommitLoadExecutor loadExecutor : runningLoads.values()) {
                 if (loadExecutor.isActive(beHost)) {
-                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {}, leftActiveMs: {}",
-                            tableId.getDbName(), tableId.getTableName(), loadExecutor.getLabel(),
-                            beHost, loadExecutor.leftActiveMs());
+                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {}, leftActiveMs: {}," +
+                            " user: {}", tableId.getDbName(), tableId.getTableName(), loadExecutor.getLabel(),
+                            beHost, loadExecutor.leftActiveMs(), userLabel);
                     return;
                 } else {
-                    LOG.info("Inactive txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),
-                            tableId.getTableName(), loadExecutor.getLabel(), beHost);
+                    LOG.info("Inactive txn, db: {}, table: {}, label: {}, be: {}, user: {}",
+                            tableId.getDbName(), tableId.getTableName(), loadExecutor.getLabel(), beHost, userLabel);
                 }
             }
         } finally {
@@ -122,13 +122,13 @@ public class TableGroupCommit {
         try {
             for (GroupCommitLoadExecutor loadExecutor : runningLoads.values()) {
                 if (loadExecutor.isActive(beHost)) {
-                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {},  leftActiveMs: {}",
-                            tableId.getDbName(), tableId.getTableName(), loadExecutor.getLabel(),
-                            beHost, loadExecutor.leftActiveMs());
+                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {},  leftActiveMs: {}," +
+                            " user: {}", tableId.getDbName(), tableId.getTableName(), loadExecutor.getLabel(),
+                            beHost, loadExecutor.leftActiveMs(), userLabel);
                     return;
                 } else {
-                    LOG.info("Inactive txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),
-                            tableId.getTableName(), loadExecutor.getLabel(), beHost);
+                    LOG.info("Inactive txn, db: {}, table: {}, label: {}, be: {}, user: {}",
+                            tableId.getDbName(), tableId.getTableName(), loadExecutor.getLabel(), beHost, userLabel);
                 }
             }
 

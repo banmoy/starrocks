@@ -1809,6 +1809,7 @@ struct TGroupCommitNotifyDataRequest {
     1: optional string db;
     2: optional string table;
     3: optional string host;
+    4: optional string user_label;
 }
 
 struct TGroupCommitNotifyDataResponse {

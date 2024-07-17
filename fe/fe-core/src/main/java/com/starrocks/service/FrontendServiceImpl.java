@@ -1801,7 +1801,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     public TGroupCommitNotifyDataResponse groupCommitNotifyData(TGroupCommitNotifyDataRequest request)
             throws TException {
         GlobalStateMgr.getCurrentState().getGroupCommitMgr().notifyBeData(
-                request.getDb(), request.getTable(), request.getHost());
+                request.getDb(), request.getTable(), request.getHost(), request.getUser_label());
         TGroupCommitNotifyDataResponse response = new TGroupCommitNotifyDataResponse();
         response.setOk(true);
         return response;
