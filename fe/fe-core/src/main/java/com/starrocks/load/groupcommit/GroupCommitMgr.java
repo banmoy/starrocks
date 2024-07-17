@@ -70,8 +70,8 @@ public class GroupCommitMgr {
             tableGroupCommit = tableGroupCommitMap.get(tableId);
             if (tableGroupCommit == null) {
                 tableGroupCommit = new TableGroupCommit(tableId, headers, threadPoolExecutor);
-                tableGroupCommitMap.put(tableId, tableGroupCommit);
                 tableGroupCommit.init();
+                tableGroupCommitMap.put(tableId, tableGroupCommit);
                 LOG.info("Create table group commit, db: {}, table: {}", tableId.getDbName(), tableId.getTableName());
             }
         } finally {
