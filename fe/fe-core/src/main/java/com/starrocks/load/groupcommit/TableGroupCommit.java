@@ -105,8 +105,9 @@ public class TableGroupCommit {
         try {
             for (GroupCommitLoadExecutor loadExecutor : runningLoads.values()) {
                 if (loadExecutor.isActive(beHost)) {
-                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),
-                            tableId.getTableName(), loadExecutor.getLabel(), beHost);
+                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {}, leftActiveMs: {}",
+                            tableId.getDbName(), tableId.getTableName(), loadExecutor.getLabel(),
+                            beHost, loadExecutor.leftActiveMs());
                     return;
                 } else {
                     LOG.info("Inactive txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),
@@ -121,8 +122,9 @@ public class TableGroupCommit {
         try {
             for (GroupCommitLoadExecutor loadExecutor : runningLoads.values()) {
                 if (loadExecutor.isActive(beHost)) {
-                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),
-                            tableId.getTableName(), loadExecutor.getLabel(), beHost);
+                    LOG.info("Find active txn, db: {}, table: {}, label: {}, be: {},  leftActiveMs: {}",
+                            tableId.getDbName(), tableId.getTableName(), loadExecutor.getLabel(),
+                            beHost, loadExecutor.leftActiveMs());
                     return;
                 } else {
                     LOG.info("Inactive txn, db: {}, table: {}, label: {}, be: {}", tableId.getDbName(),

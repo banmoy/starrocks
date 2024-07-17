@@ -115,7 +115,12 @@ public class GroupCommitLoadExecutor implements Runnable {
             return false;
         }
         return beginCoordinatorJoinTimeMs.get() <= 0
-                || beginCoordinatorJoinTimeMs.get() + activeTimeMs <= System.currentTimeMillis();
+                || beginCoordinatorJoinTimeMs.get() + activeTimeMs >= System.currentTimeMillis();
+    }
+
+    public long leftActiveMs() {
+        return beginCoordinatorJoinTimeMs.get() <= 0 ? activeTimeMs :
+                beginCoordinatorJoinTimeMs.get() + activeTimeMs - System.currentTimeMillis();
     }
 
     @Override
