@@ -246,6 +246,7 @@ int StreamLoadAction::on_header(HttpRequest* req) {
     auto* ctx = new StreamLoadContext(_exec_env);
     ctx->ref();
     req->set_handler_ctx(ctx);
+    ctx->receive_header_unix_ms = UnixMillis();
     ctx->receive_header_start_ts = MonotonicNanos();
 
     ctx->load_type = TLoadType::MANUAL_LOAD;
@@ -386,6 +387,18 @@ Status StreamLoadAction::_on_group_commit_header(HttpRequest* http_req, StreamLo
         LOG(WARNING) << "parse basic authorization failed." << ctx->brief();
         return Status::InternalError("no valid Basic authorization");
     }
+
+    if (!http_req->header("client_time_ms").empty()) {
+        StringParser::ParseResult parse_result = StringParser::PARSE_SUCCESS;
+        const auto& value = http_req->header("client_time_ms");
+        auto client_time_ms =
+                StringParser::string_to_unsigned_int<int64_t>(value.c_str(), value.length(), &parse_result);
+        if (UNLIKELY(parse_result != StringParser::PARSE_SUCCESS)) {
+            return Status::InvalidArgument("Invalid client time: " + value);
+        }
+        ctx->client_time_ms = client_time_ms;
+    }
+
     // check content length
     ctx->body_bytes = 0;
     size_t max_body_bytes = config::streaming_load_max_mb * 1024 * 1024;

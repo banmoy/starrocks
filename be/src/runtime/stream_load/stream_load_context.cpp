@@ -249,6 +249,8 @@ std::string StreamLoadContext::to_group_commit_json() const {
 
     writer.Key("LoadBytes");
     writer.Int64(receive_bytes);
+    writer.Key("ClientConnectionTimeMs");
+    writer.Int64(receive_header_unix_ms - client_time_ms);
     writer.Key("LoadTimeMs");
     writer.Int64((handle_end_ts - receive_header_start_ts) / 1000000);
     writer.Key("HeaderTimeMs");

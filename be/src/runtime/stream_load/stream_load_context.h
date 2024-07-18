@@ -244,6 +244,7 @@ public:
     int64_t write_data_cost_nanos = 0;
     int64_t begin_txn_ts = 0;
     int64_t last_active_ts = 0;
+    int64_t client_time_ms = 0;
 
     std::string error_url;
     std::string rejected_record_path;
@@ -272,6 +273,7 @@ public:
     int channel_id = -1;
     int32_t active_time_ms = -1;
     TUniqueId fragment_instance_id;
+    int64_t receive_header_unix_ms = 0;
     int64_t receive_header_start_ts = 0;
     int64_t receive_header_end_ts = 0;
     int64_t receive_chunk_start_ts = 0;
