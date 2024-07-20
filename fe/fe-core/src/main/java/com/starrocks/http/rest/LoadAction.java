@@ -59,6 +59,7 @@ import org.apache.logging.log4j.Logger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.StringJoiner;
 
 public class LoadAction extends RestBaseAction {
     private static final Logger LOG = LogManager.getLogger(LoadAction.class);
@@ -121,6 +122,19 @@ public class LoadAction extends RestBaseAction {
         if (request.getRequest().headers().contains(GROUP_COMMIT)) {
             redirectAddr = GlobalStateMgr.getCurrentState().getGroupCommitMgr().getRedirectBe(
                     dbName, tableName, request.getRequest().headers());
+            if (request.getRequest().headers().contains("meta")) {
+                List<TNetworkAddress> allBes =
+                        GlobalStateMgr.getCurrentState().getGroupCommitMgr().getAllRedirectBes(dbName, tableName);
+                String result = "";
+                if (allBes != null && !allBes.isEmpty()) {
+                    StringJoiner joiner = new StringJoiner(";");
+                    allBes.forEach(addr -> joiner.add(addr.getHostname() + ":" + addr.getPort()));
+                    result = joiner.toString();
+                }
+                sendResult(request, response, new GroupCommitBeMetas(result));
+                return;
+            }
+
             if (redirectAddr == null) {
                 throw new DdlException("Can't find redirect address for group commit");
             }
@@ -161,6 +175,14 @@ public class LoadAction extends RestBaseAction {
         }
 
         return new TNetworkAddress(node.getHost(), node.getHttpPort());
+    }
+
+    private static class GroupCommitBeMetas extends RestBaseResult {
+        private String beAddressList;
+
+        public GroupCommitBeMetas(String beAddressList) {
+            this.beAddressList = beAddressList;
+        }
     }
 }
 

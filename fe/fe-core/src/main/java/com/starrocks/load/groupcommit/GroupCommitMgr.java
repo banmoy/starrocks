@@ -21,6 +21,7 @@ import io.netty.handler.codec.http.HttpHeaders;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -46,6 +47,11 @@ public class GroupCommitMgr {
         TNetworkAddress address = tableGroupCommit.getRedirectBe();
         LOG.debug("Redirect stream load for group commit, db: {}, table: {}, address: {}", db, table, address);
         return address;
+    }
+
+    public List<TNetworkAddress> getAllRedirectBes(String db, String table) {
+        TableGroupCommit tableGroupCommit = getOrCreateTableGroupCommit(new TableId(db, table), null);
+        return tableGroupCommit == null ? null : tableGroupCommit.getAllRedirectBes();
     }
 
     public void notifyBeData(String dbName, String tableName, String beHost, String userLabel) {

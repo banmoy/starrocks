@@ -91,6 +91,10 @@ public class TableGroupCommit {
                 tableId.getTableName(), candidateCoordinatorBEs);
     }
 
+    public List<TNetworkAddress> getAllRedirectBes() {
+        return new ArrayList<>(candidateCoordinatorBEs);
+    }
+
     public TNetworkAddress getRedirectBe() {
         // TODO protect candidateCoordinatorBEs if it changes
         if (candidateCoordinatorBEs.isEmpty()) {
