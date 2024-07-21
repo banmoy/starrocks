@@ -123,15 +123,26 @@ public class LoadAction extends RestBaseAction {
             redirectAddr = GlobalStateMgr.getCurrentState().getGroupCommitMgr().getRedirectBe(
                     dbName, tableName, request.getRequest().headers());
             if (request.getRequest().headers().contains("meta")) {
-                List<TNetworkAddress> allBes =
-                        GlobalStateMgr.getCurrentState().getGroupCommitMgr().getAllRedirectBes(dbName, tableName);
-                String result = "";
-                if (allBes != null && !allBes.isEmpty()) {
+                List<TNetworkAddress> httpAddresses =
+                        GlobalStateMgr.getCurrentState().getGroupCommitMgr().getRedirectHttpAddresses(
+                                dbName, tableName);
+                String httpAddressesStr = "";
+                if (httpAddresses != null && !httpAddresses.isEmpty()) {
                     StringJoiner joiner = new StringJoiner(";");
-                    allBes.forEach(addr -> joiner.add(addr.getHostname() + ":" + addr.getPort()));
-                    result = joiner.toString();
+                    httpAddresses.forEach(addr -> joiner.add(addr.getHostname() + ":" + addr.getPort()));
+                    httpAddressesStr = joiner.toString();
                 }
-                sendResult(request, response, new GroupCommitBeMetas(result));
+
+                List<TNetworkAddress> brpcAddresses =
+                        GlobalStateMgr.getCurrentState().getGroupCommitMgr().getRedirectBrpcAddresses(
+                                dbName, tableName);
+                String brpcAddressesStr = "";
+                if (brpcAddresses != null && !brpcAddresses.isEmpty()) {
+                    StringJoiner joiner = new StringJoiner(";");
+                    brpcAddresses.forEach(addr -> joiner.add(addr.getHostname() + ":" + addr.getPort()));
+                    brpcAddressesStr = joiner.toString();
+                }
+                sendResult(request, response, new GroupCommitBeMetas(httpAddressesStr, brpcAddressesStr));
                 return;
             }
 
@@ -178,10 +189,12 @@ public class LoadAction extends RestBaseAction {
     }
 
     private static class GroupCommitBeMetas extends RestBaseResult {
-        private String beAddressList;
+        private String httpAddresses;
+        private String brpcAddresses;
 
-        public GroupCommitBeMetas(String beAddressList) {
-            this.beAddressList = beAddressList;
+        public GroupCommitBeMetas(String httpAddresses, String brpcAddresses) {
+            this.httpAddresses = httpAddresses;
+            this.brpcAddresses = brpcAddresses;
         }
     }
 }

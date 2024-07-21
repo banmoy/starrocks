@@ -49,6 +49,7 @@ public class TableGroupCommit {
     private final ReentrantReadWriteLock lock;
     private final Map<String, GroupCommitLoadExecutor> runningLoads;
     private List<TNetworkAddress> candidateCoordinatorBEs;
+    private List<TNetworkAddress> brpcAddresses;
     private final AtomicLong nextBeIndex;
 
     public TableGroupCommit(TableId tableId, HttpHeaders headers, ThreadPoolExecutor threadPoolExecutor) {
@@ -58,6 +59,7 @@ public class TableGroupCommit {
         this.lock = new ReentrantReadWriteLock();
         this.runningLoads = new HashMap<>();
         this.candidateCoordinatorBEs = new ArrayList<>();
+        this.brpcAddresses = new ArrayList<>();
         this.nextBeIndex = new AtomicLong(0);
     }
 
@@ -86,13 +88,18 @@ public class TableGroupCommit {
             ComputeNode node = GlobalStateMgr.getCurrentState().getNodeMgr()
                     .getClusterInfo().getBackendOrComputeNode(nodeIds.get(i));
             candidateCoordinatorBEs.add(new TNetworkAddress(node.getHost(), node.getHttpPort()));
+            brpcAddresses.add(new TNetworkAddress(node.getHost(), node.getBrpcPort()));
         }
         LOG.info("Init table group commit, db: {}, table: {}, candidate BEs: {}", tableId.getDbName(),
                 tableId.getTableName(), candidateCoordinatorBEs);
     }
 
-    public List<TNetworkAddress> getAllRedirectBes() {
+    public List<TNetworkAddress> getRedirectHttpAddresses() {
         return new ArrayList<>(candidateCoordinatorBEs);
+    }
+
+    public List<TNetworkAddress> getRedirectBrpcAddresses() {
+        return new ArrayList<>(brpcAddresses);
     }
 
     public TNetworkAddress getRedirectBe() {

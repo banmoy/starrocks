@@ -49,9 +49,14 @@ public class GroupCommitMgr {
         return address;
     }
 
-    public List<TNetworkAddress> getAllRedirectBes(String db, String table) {
+    public List<TNetworkAddress> getRedirectHttpAddresses(String db, String table) {
         TableGroupCommit tableGroupCommit = getOrCreateTableGroupCommit(new TableId(db, table), null);
-        return tableGroupCommit == null ? null : tableGroupCommit.getAllRedirectBes();
+        return tableGroupCommit == null ? null : tableGroupCommit.getRedirectHttpAddresses();
+    }
+
+    public List<TNetworkAddress> getRedirectBrpcAddresses(String db, String table) {
+        TableGroupCommit tableGroupCommit = getOrCreateTableGroupCommit(new TableId(db, table), null);
+        return tableGroupCommit == null ? null : tableGroupCommit.getRedirectBrpcAddresses();
     }
 
     public void notifyBeData(String dbName, String tableName, String beHost, String userLabel) {
