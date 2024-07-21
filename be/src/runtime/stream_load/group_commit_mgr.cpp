@@ -14,12 +14,17 @@
 
 #include "runtime/stream_load/group_commit_mgr.h"
 
+#include <brpc/controller.h>
+
 #include <utility>
 
 #include "agent/master_info.h"
 #include "gen_cpp/FrontendService.h"
+#include "gen_cpp/internal_service.pb.h"
 #include "runtime/client_cache.h"
+#include "runtime/exec_env.h"
 #include "stream_load_context.h"
+#include "util/defer_op.h"
 #include "util/runtime_profile.h"
 #include "util/thrift_rpc_helper.h"
 
@@ -298,6 +303,70 @@ void GroupCommitMgr::stop() {
     for (auto it : _tables) {
         it.second->stop();
     }
+}
+
+void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, const PGroupCommitLoadRequest* request,
+                                  PGroupCommitLoadResponse* response) {
+    auto* ctx = new StreamLoadContext(exec_env);
+    ctx->ref();
+    DeferOp defer([&]() {
+        ctx->buffer = nullptr;
+        if (ctx->unref()) {
+            delete ctx;
+        }
+    });
+    ctx->load_type = TLoadType::MANUAL_LOAD;
+    ctx->load_src_type = TLoadSourceType::RAW;
+    ctx->db = request->db();
+    ctx->table = request->table();
+    ctx->label = request->user_label();
+    ctx->group_commit = true;
+    ctx->client_time_ms = request->client_time_ms();
+    ctx->format = TFileFormatType::FORMAT_JSON;
+    ctx->timeout_second = request->timeout();
+    ctx->use_streaming = true;
+
+    if (request->has_data()) {
+        ctx->body_bytes = request->data().size();
+        ctx->buffer = ByteBuffer::allocate(ctx->body_bytes);
+        ctx->buffer->put_bytes(request->data().data(), ctx->body_bytes);
+        ctx->receive_bytes += ctx->body_bytes;
+        ctx->total_receive_bytes += ctx->body_bytes;
+        ctx->buffer->flip();
+    } else {
+        butil::IOBuf& io_buf = cntl->request_attachment();
+        ctx->buffer = ByteBuffer::allocate(ctx->body_bytes);
+        io_buf.copy_to(ctx->buffer->ptr, io_buf.size());
+        ctx->buffer->pos += io_buf.size();
+        ctx->body_bytes = io_buf.size();
+        ctx->receive_bytes += ctx->body_bytes;
+        ctx->total_receive_bytes += ctx->body_bytes;
+        ctx->buffer->flip();
+    }
+    auto status_or = exec_env->group_commit_mgr()->get_table_group_commit(ctx->db, ctx->table);
+    if (!status_or.ok()) {
+        LOG(ERROR) << "Can't find table group commit, db: " << ctx->db << ", table: " << ctx->table
+                   << ", status: " << status_or.status();
+        response->set_status("Fail");
+        response->set_message("Can't find table group commit, " + status_or.status().to_string());
+        return;
+    }
+    auto st = status_or.value()->append_load(ctx);
+    if (!st.ok()) {
+        LOG(ERROR) << "Can't append group commit load, db: " << ctx->db << ", table: " << ctx->table
+                   << ", status: " << st;
+        response->set_status("Fail");
+        response->set_message("Can't append group commit load, " + st.to_string());
+        return;
+    }
+
+    response->set_txn_id(ctx->txn_id);
+    response->set_label(ctx->label);
+    response->set_host(BackendOptions::get_localhost());
+    response->set_fragment_id(print_id(ctx->fragment_instance_id));
+    response->set_left_time_ms(ctx->left_time_ms);
+    response->set_status("Success");
+    response->set_message("OK");
 }
 
 } // namespace starrocks

@@ -73,6 +73,7 @@
 #include "runtime/result_buffer_mgr.h"
 #include "runtime/routine_load/routine_load_task_executor.h"
 #include "runtime/runtime_filter_worker.h"
+#include "runtime/stream_load/group_commit_mgr.h"
 #include "runtime/types.h"
 #include "service/brpc.h"
 #include "storage/dictionary_cache_manager.h"
@@ -1237,6 +1238,16 @@ void PInternalServiceImplBase<T>::exec_short_circuit(google::protobuf::RpcContro
     st.to_protobuf(response->mutable_status());
     uint64_t elapsed_time_ns = watch.elapsed_time();
     StarRocksMetrics::instance()->short_circuit_request_duration_us.increment(elapsed_time_ns / 1000);
+}
+
+template <typename T>
+void PInternalServiceImplBase<T>::group_commit_load(google::protobuf::RpcController* cntl_base,
+                                                    const PGroupCommitLoadRequest* request,
+                                                    PGroupCommitLoadResponse* response,
+                                                    google::protobuf::Closure* done) {
+    ClosureGuard closure_guard(done);
+    auto* cntl = static_cast<brpc::Controller*>(cntl_base);
+    GroupCommitMgr::execute_load(_exec_env, cntl, request, response);
 }
 
 template class PInternalServiceImplBase<PInternalService>;

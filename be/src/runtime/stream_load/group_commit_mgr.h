@@ -29,8 +29,15 @@
 #include "util/countdown_latch.h"
 #include "util/time.h"
 
+namespace brpc {
+class Controller;
+}
+
 namespace starrocks {
 
+class ExecEnv;
+class PGroupCommitLoadRequest;
+class PGroupCommitLoadResponse;
 class StreamLoadContext;
 class Status;
 
@@ -99,6 +106,9 @@ public:
     StatusOr<TableGroupCommitSharedPtr> get_table_group_commit(const std::string& db, const std::string& table);
 
     void stop();
+
+    static void execute_load(ExecEnv* exec_env, brpc::Controller* cntl, const PGroupCommitLoadRequest* request,
+                             PGroupCommitLoadResponse* response);
 
 private:
     std::unique_ptr<bthreads::ThreadPoolExecutor> _executor;
