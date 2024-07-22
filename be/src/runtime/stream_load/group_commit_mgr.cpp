@@ -336,7 +336,7 @@ void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, con
     } else {
         butil::IOBuf& io_buf = cntl->request_attachment();
         ctx->buffer = ByteBuffer::allocate(io_buf.size());
-        io_buf.copy_to(ctx->buffer->ptr, io_buf.size());
+        io_buf.cutn(ctx->buffer->ptr, io_buf.size());
         ctx->buffer->pos += io_buf.size();
         ctx->body_bytes = io_buf.size();
         ctx->receive_bytes += ctx->body_bytes;
