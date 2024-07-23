@@ -655,6 +655,15 @@ message PGroupCommitLoadResponse {
   optional int64 left_time_ms = 5;
   optional string status = 6;
   optional string message = 7;
+  optional int64 network_cost_ms = 8;
+  optional int64 load_cost_ms = 9;
+  optional int64 copy_data_ms = 10;
+  optional int64 group_commit_ms = 11;
+  optional int64 pending_ms = 12;
+  optional int64 wait_plan_ms = 13;
+  optional int64 append_ms = 14;
+  optional int32 request_plan_num = 15;
+  optional int64 finish_ts = 16;
 }
 
 // NOTE(zc): If you want to add new method here,

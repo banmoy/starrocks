@@ -307,6 +307,10 @@ void GroupCommitMgr::stop() {
 
 void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, const PGroupCommitLoadRequest* request,
                                   PGroupCommitLoadResponse* response) {
+    if (config::enable_stream_load_verbose_log) {
+        LOG(INFO) << "Receive load request, " << request->DebugString() << ", size: " << cntl->request_attachment().size();
+    }
+
     auto* ctx = new StreamLoadContext(exec_env);
     ctx->ref();
     DeferOp defer([&]() {
@@ -325,6 +329,8 @@ void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, con
     ctx->format = TFileFormatType::FORMAT_JSON;
     ctx->timeout_second = request->timeout();
     ctx->use_streaming = true;
+    ctx->receive_header_unix_ms = UnixMillis();
+    ctx->start_nanos = MonotonicNanos();
 
     if (request->has_data()) {
         ctx->body_bytes = request->data().size();
@@ -343,6 +349,7 @@ void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, con
         ctx->total_receive_bytes += ctx->body_bytes;
         ctx->buffer->flip();
     }
+    ctx->receive_chunk_end_ts = MonotonicNanos();
     auto status_or = exec_env->group_commit_mgr()->get_table_group_commit(ctx->db, ctx->table);
     if (!status_or.ok()) {
         LOG(ERROR) << "Can't find table group commit, db: " << ctx->db << ", table: " << ctx->table
@@ -351,6 +358,7 @@ void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, con
         response->set_message("Can't find table group commit, " + status_or.status().to_string());
         return;
     }
+    ctx->handle_start_ts = MonotonicNanos();
     auto st = status_or.value()->append_load(ctx);
     if (!st.ok()) {
         LOG(ERROR) << "Can't append group commit load, db: " << ctx->db << ", table: " << ctx->table
@@ -359,6 +367,7 @@ void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, con
         response->set_message("Can't append group commit load, " + st.to_string());
         return;
     }
+    ctx->handle_end_ts = MonotonicNanos();
 
     response->set_txn_id(ctx->txn_id);
     response->set_label(ctx->label);
@@ -367,6 +376,20 @@ void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, con
     response->set_left_time_ms(ctx->left_time_ms);
     response->set_status("Success");
     response->set_message("OK");
+    response->set_network_cost_ms(ctx->receive_header_unix_ms - ctx->client_time_ms);
+    response->set_load_cost_ms((ctx->handle_end_ts - ctx->start_nanos) / 1000000);
+    response->set_copy_data_ms((ctx->receive_chunk_end_ts - ctx->start_nanos) / 1000000);
+    response->set_group_commit_ms((ctx->handle_end_ts - ctx->handle_start_ts) / 1000000);
+    response->set_pending_ms((ctx->start_append_load_ts - ctx->handle_start_ts) / 1000000);
+    response->set_wait_plan_ms(ctx->wait_group_commit_time_ns / 1000000);
+    response->set_append_ms((ctx->finish_append_load_ts - ctx->start_append_load_ts - ctx->wait_group_commit_time_ns) /
+                            1000000);
+    response->set_request_plan_num(ctx->group_commit_request_load_num);
+    response->set_finish_ts(UnixMillis());
+
+    if (config::enable_stream_load_verbose_log) {
+        LOG(INFO) << "Finish load, " << response->DebugString();
+    }
 }
 
 } // namespace starrocks
