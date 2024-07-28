@@ -204,6 +204,8 @@ public class GroupCommitLoadExecutor implements Runnable {
             }
         } catch (Exception e) {
             throw new UserException(e.getMessage());
+        } finally {
+            QeProcessorImpl.INSTANCE.unregisterQuery(loadId);
         }
 
         this.beginCommitTimeMs = System.currentTimeMillis();
