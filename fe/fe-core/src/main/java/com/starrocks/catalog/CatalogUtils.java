@@ -17,6 +17,7 @@ package com.starrocks.catalog;
 import com.google.common.collect.Sets;
 import com.starrocks.analysis.LiteralExpr;
 import com.starrocks.common.AnalysisException;
+import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
 import com.starrocks.common.ErrorCode;
 import com.starrocks.common.ErrorReport;
@@ -374,6 +375,10 @@ public class CatalogUtils {
     }
 
     public static int calPhysicalPartitionBucketNum() {
+        if (Config.force_partition_bucket_num > 0) {
+            return Config.force_partition_bucket_num;
+        }
+
         int backendNum = GlobalStateMgr.getCurrentState().getNodeMgr().getClusterInfo().getBackendIds().size();
 
         if (RunMode.isSharedDataMode()) {

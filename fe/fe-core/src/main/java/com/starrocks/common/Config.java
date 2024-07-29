@@ -3082,4 +3082,7 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true)
     public static int group_commit_publish_time_ms = 5000;
+
+    @ConfField(mutable = true)
+    public static int force_partition_bucket_num = -1;
 }
