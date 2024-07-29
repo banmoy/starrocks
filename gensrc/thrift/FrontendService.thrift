@@ -1816,6 +1816,15 @@ struct TGroupCommitNotifyDataResponse {
     1: optional bool ok;
 }
 
+struct TGetLabelStateRequest {
+    1: optional list<string> dbs;
+    2: optional list<string> labels;
+}
+
+struct TGetLabelStateResponse {
+    1: optional list<string> status;
+}
+
 service FrontendService {
     TGetDbsResult getDbNames(1:TGetDbsParams params)
     TGetTablesResult getTableNames(1:TGetTablesParams params)
@@ -1929,5 +1938,6 @@ service FrontendService {
     TReportFragmentFinishResponse reportFragmentFinish(TReportFragmentFinishParams request)
 
     TGroupCommitNotifyDataResponse groupCommitNotifyData(1: TGroupCommitNotifyDataRequest request)
+    TGetLabelStateResponse getLabelState(1: TGetLabelStateRequest request)
 }
 

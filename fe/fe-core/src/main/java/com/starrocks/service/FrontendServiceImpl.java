@@ -200,6 +200,8 @@ import com.starrocks.thrift.TGetGrantsToRolesOrUserRequest;
 import com.starrocks.thrift.TGetGrantsToRolesOrUserResponse;
 import com.starrocks.thrift.TGetKeysRequest;
 import com.starrocks.thrift.TGetKeysResponse;
+import com.starrocks.thrift.TGetLabelStateRequest;
+import com.starrocks.thrift.TGetLabelStateResponse;
 import com.starrocks.thrift.TGetLoadTxnStatusRequest;
 import com.starrocks.thrift.TGetLoadTxnStatusResult;
 import com.starrocks.thrift.TGetLoadsParams;
@@ -320,6 +322,7 @@ import com.starrocks.transaction.TransactionNotFoundException;
 import com.starrocks.transaction.TransactionState;
 import com.starrocks.transaction.TransactionState.TxnCoordinator;
 import com.starrocks.transaction.TransactionState.TxnSourceType;
+import com.starrocks.transaction.TransactionStatus;
 import com.starrocks.transaction.TxnCommitAttachment;
 import com.starrocks.warehouse.Warehouse;
 import org.apache.commons.lang3.StringUtils;
@@ -1804,6 +1807,25 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 request.getDb(), request.getTable(), request.getHost(), request.getUser_label());
         TGroupCommitNotifyDataResponse response = new TGroupCommitNotifyDataResponse();
         response.setOk(true);
+        return response;
+    }
+
+    @Override
+    public TGetLabelStateResponse getLabelState(TGetLabelStateRequest request) throws TException {
+        TGetLabelStateResponse response = new TGetLabelStateResponse();
+        for (int i = 0; i < request.getDbsSize(); i++) {
+            String dbName = request.dbs.get(i);
+            String label = request.labels.get(i);
+
+            Database db = GlobalStateMgr.getCurrentState().getDb(dbName);
+            if (db == null) {
+                response.addToStatus(TransactionStatus.UNKNOWN.toString());
+                continue;
+            }
+            String status = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
+                    .getLabelStatus(db.getId(), label).toString();
+            response.addToStatus(status);
+        }
         return response;
     }
 
