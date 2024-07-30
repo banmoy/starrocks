@@ -1380,8 +1380,8 @@ CONF_mBool(enable_core_file_size_optimization, "true");
 
 CONF_mInt32(group_commit_thread_pool_num_min, "0");
 CONF_mInt32(group_commit_thread_pool_num_max, "300");
-CONF_mInt32(group_commit_request_load_interval_ms, "100");
-CONF_mInt32(group_commit_request_load_retry_num, "5");
+CONF_mInt32(group_commit_request_load_interval_ms, "500");
+CONF_mInt32(group_commit_request_load_retry_num, "10");
 CONF_mInt32(group_commit_thrift_rpc_timeout_ms, "10000");
 CONF_mInt32(stream_load_pipe_buffer_bytes, "1073741824");
 CONF_mInt32(stream_load_pipe_chunk_bytes, "65536");
