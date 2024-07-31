@@ -114,8 +114,11 @@ public class PartitionStatistics {
         }
     }
 
-    public void setCompactionScore(@Nullable Quantiles compactionScore) {
-        adjustPunishFactor(compactionScore);
+    public void setCompactionScore(@Nullable Quantiles compactionScore, boolean isLoad) {
+        if (!isLoad) {
+            // compaction score might not change before and after load, so do not update punish factor
+            adjustPunishFactor(compactionScore);
+        }
         this.compactionScore = compactionScore;
     }
 

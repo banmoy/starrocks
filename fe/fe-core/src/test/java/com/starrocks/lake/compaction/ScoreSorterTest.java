@@ -28,19 +28,19 @@ public class ScoreSorterTest {
     public void test() {
         List<PartitionStatistics> statisticsList = new ArrayList<>();
         PartitionStatistics statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 3));
-        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(0.0, 0.0, 0.0)));
+        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(0.0, 0.0, 0.0)), false /* isLoad */);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 6));
-        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(1.1, 1.1, 1.2)));
+        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(1.1, 1.1, 1.2)), false /* isLoad */);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 4));
-        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(0.99, 0.99, 0.99)));
+        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(0.99, 0.99, 0.99)), false /* isLoad */);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 5));
-        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(1.0, 1.0)));
+        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(1.0, 1.0)), false /* isLoad */);
         statisticsList.add(statistics);
 
         ScoreSorter sorter = new ScoreSorter();
@@ -57,11 +57,11 @@ public class ScoreSorterTest {
     public void testPriority() {
         List<PartitionStatistics> statisticsList = new ArrayList<>();
         PartitionStatistics statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 3));
-        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(0.0, 0.0, 0.0)));
+        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(0.0, 0.0, 0.0)), false /* isLoad */);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 4));
-        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(1.1, 1.1, 1.2)));
+        statistics.setCompactionScore(Quantiles.compute(Arrays.asList(1.1, 1.1, 1.2)), false /* isLoad */);
         statisticsList.add(statistics);
 
         ScoreSorter sorter = new ScoreSorter();

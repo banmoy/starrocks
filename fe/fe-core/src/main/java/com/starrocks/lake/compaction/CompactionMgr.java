@@ -99,7 +99,7 @@ public class CompactionMgr implements MemoryTrackable {
                 v = new PartitionStatistics(partition);
             }
             v.setCurrentVersion(currentVersion);
-            v.setCompactionScore(compactionScore);
+            v.setCompactionScore(compactionScore, true /* isLoad */);
             if (v.getCompactionVersion() == null) {
                 v.setCompactionVersion(new PartitionVersion(0, versionTime));
             }
@@ -119,7 +119,7 @@ public class CompactionMgr implements MemoryTrackable {
             }
             v.setCurrentVersion(compactionVersion);
             v.setCompactionVersion(compactionVersion);
-            v.setCompactionScore(compactionScore);
+            v.setCompactionScore(compactionScore, false /* isLoad */);
             return v;
         });
         if (LOG.isDebugEnabled()) {

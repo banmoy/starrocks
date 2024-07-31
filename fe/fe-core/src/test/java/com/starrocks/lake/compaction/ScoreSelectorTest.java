@@ -38,19 +38,19 @@ public class ScoreSelectorTest {
     public void test() {
         List<PartitionStatistics> statisticsList = new ArrayList<>();
         PartitionStatistics statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 3));
-        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(0.0)));
+        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(0.0)), false /* isLoad */);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 4));
-        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(0.99)));
+        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(0.99)), false /* isLoad */);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 5));
-        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(1.0)));
+        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(1.0)), false /* isLoad */);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 6));
-        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(1.1)));
+        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(1.1)), false /* isLoad */);
         statisticsList.add(statistics);
 
         List<PartitionStatistics> targetList = selector.select(statisticsList, new HashSet<Long>());
@@ -63,21 +63,21 @@ public class ScoreSelectorTest {
     public void testPriority() {
         List<PartitionStatistics> statisticsList = new ArrayList<>();
         PartitionStatistics statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 3));
-        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(0.0)));
+        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(0.0)), false /* isLoad */);
         statistics.setPriority(PartitionStatistics.CompactionPriority.MANUAL_COMPACT);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 4));
-        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(0.99)));
+        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(0.99)), false /* isLoad */);
         statistics.setPriority(PartitionStatistics.CompactionPriority.MANUAL_COMPACT);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 5));
-        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(1.0)));
+        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(1.0)), false /* isLoad */);
         statisticsList.add(statistics);
 
         statistics = new PartitionStatistics(new PartitionIdentifier(1, 2, 6));
-        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(1.1)));
+        statistics.setCompactionScore(Quantiles.compute(Collections.singleton(1.1)), false /* isLoad */);
         statisticsList.add(statistics);
 
         List<PartitionStatistics> targetList = selector.select(statisticsList, new HashSet<Long>());

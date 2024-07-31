@@ -41,20 +41,30 @@ public class PartitionStatisticsTest {
     @Test
     public void testPunishFactor() {
         PartitionStatistics statistics = new PartitionStatistics(new PartitionIdentifier(100, 200, 300));
+        // test compaction
         Quantiles q1 = new Quantiles(1.0, 2.0, 3.0);
-        statistics.setCompactionScore(q1);
+        statistics.setCompactionScore(q1, false /* isLoad */);
         assertEquals(1, statistics.getPunishFactor());
 
         Quantiles q2 = new Quantiles(1.0, 2.0, 3.0);
-        statistics.setCompactionScore(q2);
+        statistics.setCompactionScore(q2, false /* isLoad */);
         assertEquals(2, statistics.getPunishFactor());
 
         Quantiles q3 = new Quantiles(1.0, 2.0, 3.0);
-        statistics.setCompactionScore(q3);
+        statistics.setCompactionScore(q3, false /* isLoad */);
         assertEquals(4, statistics.getPunishFactor());
 
         Quantiles q4 = new Quantiles(1.0, 1.0, 2.0);
-        statistics.setCompactionScore(q4);
+        statistics.setCompactionScore(q4, false /* isLoad */);
+        assertEquals(1, statistics.getPunishFactor());
+
+        // test load
+        Quantiles q5 = new Quantiles(1.0, 2.0, 3.0);
+        statistics.setCompactionScore(q5, true /* isLoad */);
+        assertEquals(1, statistics.getPunishFactor());
+
+        Quantiles q6 = new Quantiles(1.0, 2.0, 3.0);
+        statistics.setCompactionScore(q6, true /* isLoad */);
         assertEquals(1, statistics.getPunishFactor());
     }
 }
