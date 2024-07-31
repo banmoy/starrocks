@@ -308,7 +308,8 @@ void GroupCommitMgr::stop() {
 void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, const PGroupCommitLoadRequest* request,
                                   PGroupCommitLoadResponse* response) {
     if (config::enable_stream_load_verbose_log) {
-        LOG(INFO) << "Receive load request, " << request->DebugString() << ", size: " << cntl->request_attachment().size();
+        LOG(INFO) << "Receive load request, " << request->DebugString()
+                  << ", size: " << cntl->request_attachment().size();
     }
 
     auto* ctx = new StreamLoadContext(exec_env);
@@ -356,6 +357,7 @@ void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, con
                    << ", status: " << status_or.status();
         response->set_status("Fail");
         response->set_message("Can't find table group commit, " + status_or.status().to_string());
+        response->set_host(BackendOptions::get_localhost());
         return;
     }
     ctx->handle_start_ts = MonotonicNanos();
@@ -365,6 +367,17 @@ void GroupCommitMgr::execute_load(ExecEnv* exec_env, brpc::Controller* cntl, con
                    << ", status: " << st;
         response->set_status("Fail");
         response->set_message("Can't append group commit load, " + st.to_string());
+        response->set_host(BackendOptions::get_localhost());
+        response->set_network_cost_ms(ctx->receive_header_unix_ms - ctx->client_time_ms);
+        response->set_load_cost_ms((ctx->handle_end_ts - ctx->start_nanos) / 1000000);
+        response->set_copy_data_ms((ctx->receive_chunk_end_ts - ctx->start_nanos) / 1000000);
+        response->set_group_commit_ms((ctx->handle_end_ts - ctx->handle_start_ts) / 1000000);
+        response->set_pending_ms((ctx->start_append_load_ts - ctx->handle_start_ts) / 1000000);
+        response->set_wait_plan_ms(ctx->wait_group_commit_time_ns / 1000000);
+        response->set_append_ms(
+                (ctx->finish_append_load_ts - ctx->start_append_load_ts - ctx->wait_group_commit_time_ns) / 1000000);
+        response->set_request_plan_num(ctx->group_commit_request_load_num);
+        response->set_finish_ts(UnixMillis());
         return;
     }
     ctx->handle_end_ts = MonotonicNanos();
