@@ -74,6 +74,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -135,12 +136,18 @@ public class LoadPlanner {
     private TPartialUpdateMode partialUpdateMode = TPartialUpdateMode.ROW_MODE;
 
     private long warehouseId = WarehouseManager.DEFAULT_WAREHOUSE_ID;
+    private Set<Long> candidateBackendIds = new HashSet<>();
 
     private LoadJob.JSONOptions jsonOptions = new LoadJob.JSONOptions();
 
     private Boolean missAutoIncrementColumn = Boolean.FALSE;
 
     private String mergeConditionStr;
+
+    // Only valid for stream load
+    private boolean enableGroupCommit = false;
+    private int groupCommitIntervalMs = -1;
+    private Set<Long> groupCommitBackendIds = new HashSet<>();
 
     public LoadPlanner(long loadJobId, TUniqueId loadId, long txnId, long dbId, OlapTable destTable,
                        boolean strictMode, String timezone, long timeoutS,
@@ -237,6 +244,12 @@ public class LoadPlanner {
 
     public long getWarehouseId() {
         return warehouseId;
+    }
+
+    public void setGroupCommit(int groupCommitIntervalMs, Set<Long> groupCommitBackendIds) {
+        this.enableGroupCommit = true;
+        this.groupCommitIntervalMs = groupCommitIntervalMs;
+        this.groupCommitBackendIds.addAll(groupCommitBackendIds);
     }
 
     public void setPartialUpdateMode(TPartialUpdateMode mode) {
@@ -417,6 +430,9 @@ public class LoadPlanner {
             StreamLoadScanNode streamScanNode = new StreamLoadScanNode(loadId, new PlanNodeId(0), tupleDesc,
                     destTable, streamLoadInfo, dbName, label, parallelInstanceNum, txnId, warehouseId);
             streamScanNode.setNeedAssignBE(true);
+            if (enableGroupCommit) {
+                streamScanNode.setGroupCommit(groupCommitIntervalMs, groupCommitBackendIds);
+            }
             streamScanNode.setUseVectorizedLoad(true);
             streamScanNode.init(analyzer);
             streamScanNode.finalizeStats(analyzer);

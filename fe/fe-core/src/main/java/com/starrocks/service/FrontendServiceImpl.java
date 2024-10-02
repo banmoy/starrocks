@@ -104,6 +104,8 @@ import com.starrocks.lake.Utils;
 import com.starrocks.lake.compaction.CompactionMgr;
 import com.starrocks.leader.LeaderImpl;
 import com.starrocks.load.EtlJobType;
+import com.starrocks.load.groupcommit.RequestLoadResult;
+import com.starrocks.load.groupcommit.TableId;
 import com.starrocks.load.loadv2.LoadJob;
 import com.starrocks.load.loadv2.LoadMgr;
 import com.starrocks.load.loadv2.ManualLoadTxnCommitAttachment;
@@ -116,6 +118,7 @@ import com.starrocks.load.routineload.RLTaskTxnCommitAttachment;
 import com.starrocks.load.routineload.RoutineLoadJob;
 import com.starrocks.load.routineload.RoutineLoadMgr;
 import com.starrocks.load.streamload.StreamLoadInfo;
+import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.load.streamload.StreamLoadMgr;
 import com.starrocks.load.streamload.StreamLoadTask;
 import com.starrocks.metric.MetricRepo;
@@ -236,6 +239,8 @@ import com.starrocks.thrift.TGetUserPrivsParams;
 import com.starrocks.thrift.TGetUserPrivsResult;
 import com.starrocks.thrift.TGetWarehousesRequest;
 import com.starrocks.thrift.TGetWarehousesResponse;
+import com.starrocks.thrift.TGroupCommitLoadRequest;
+import com.starrocks.thrift.TGroupCommitLoadResult;
 import com.starrocks.thrift.TImmutablePartitionRequest;
 import com.starrocks.thrift.TImmutablePartitionResult;
 import com.starrocks.thrift.TIsMethodSupportedRequest;
@@ -1680,6 +1685,34 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         } finally {
             locker.unLockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(table.getId()), LockType.READ);
         }
+    }
+
+    @Override
+    public TGroupCommitLoadResult requestGroupCommitLoad(TGroupCommitLoadRequest request) throws TException {
+        TGroupCommitLoadResult result = new TGroupCommitLoadResult();
+        try {
+            checkPasswordAndLoadPriv(request.getUser(), request.getPasswd(), request.getDb(),
+                    request.getTbl(), request.getUser_ip());
+            TableId tableId = new TableId(request.getDb(), request.getTbl());
+            StreamLoadKvParams params = new StreamLoadKvParams(request.getParams());
+            RequestLoadResult loadResult = GlobalStateMgr.getCurrentState()
+                    .getGroupCommitMgr().requestLoad(tableId, params, request.getBackend_id(), request.getBackend_host());
+            result.setStatus(loadResult.getStatus());
+            if (loadResult.isOk()) {
+                result.setLabel(loadResult.getResult());
+            }
+        } catch (AuthenticationException authenticationException) {
+            TStatus status = new TStatus();
+            status.setStatus_code(TStatusCode.NOT_AUTHORIZED);
+            status.addToError_msgs(authenticationException.getMessage());
+            result.setStatus(status);
+        } catch (Throwable throwable) {
+            TStatus status = new TStatus();
+            status.setStatus_code(TStatusCode.UNKNOWN);
+            status.addToError_msgs(throwable.getMessage());
+            result.setStatus(status);
+        }
+        return result;
     }
 
     @Override

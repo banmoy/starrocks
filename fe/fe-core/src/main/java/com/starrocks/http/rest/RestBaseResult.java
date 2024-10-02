@@ -75,6 +75,13 @@ public class RestBaseResult {
         this.message = msg;
     }
 
+    public RestBaseResult(String code, ActionStatus status, String msg) {
+        code = code;
+        status = status;
+        this.msg = msg;
+        this.message = msg;
+    }
+
     public static RestBaseResult getOk() {
         return OK;
     }

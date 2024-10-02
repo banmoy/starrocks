@@ -3208,4 +3208,18 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true)
     public static double partition_hash_join_min_cardinality_rate = 0.3;
+
+    @ConfField(mutable = true)
+    public static boolean enable_group_commit = false;
+
+    @ConfField(mutable = true)
+    public static int group_commit_cleanup_check_interval_ms = 60000;
+
+    @ConfField(mutable = true)
+    public static int group_commit_be_assigner_schedule_interval_ms = 5000;
+
+    @ConfField(mutable = true)
+    public static double group_commit_balance_diff_ratio = 0.1;
+
+    public static int group_commit_load_executor_threads_num = 4096;
 }

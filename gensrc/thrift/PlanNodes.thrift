@@ -280,6 +280,9 @@ struct TBrokerScanRange {
     3: required list<Types.TNetworkAddress> broker_addresses
     // used for channel stream load only
     4: optional i32 channel_id
+    // available when this is a stream load in group commit mode
+    5: optional bool enable_group_commit
+    6: optional i32 group_commit_interval_ms
 }
 
 // Es scan range

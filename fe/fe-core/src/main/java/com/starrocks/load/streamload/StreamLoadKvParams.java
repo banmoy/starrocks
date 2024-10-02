@@ -32,6 +32,8 @@ import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_REP
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENCLOSE;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ESCAPE;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_FORMAT;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_GROUP_COMMIT_INTERVAL_MS;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_GROUP_COMMIT_PARALLEL;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_HEADER_LIST;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_JSONPATHS;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_JSONROOT;
@@ -333,6 +335,22 @@ public class StreamLoadKvParams implements StreamLoadParams {
             return Optional.empty();
         }
         return Optional.of(Boolean.parseBoolean(stripOuterArray));
+    }
+
+    public Optional<Integer> getGroupCommitIntervalMs() {
+        String intervalMs = params.get(HTTP_GROUP_COMMIT_INTERVAL_MS);
+        if (intervalMs == null) {
+            return Optional.empty();
+        }
+        return Optional.of(Integer.parseInt(intervalMs));
+    }
+
+    public Optional<Integer> getGroupCommitParallel() {
+        String parallel = params.get(HTTP_GROUP_COMMIT_PARALLEL);
+        if (parallel == null) {
+            return Optional.empty();
+        }
+        return Optional.of(Integer.parseInt(parallel));
     }
 
     @Override

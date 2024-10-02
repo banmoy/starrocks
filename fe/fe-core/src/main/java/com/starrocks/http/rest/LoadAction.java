@@ -40,6 +40,10 @@ import com.starrocks.http.ActionController;
 import com.starrocks.http.BaseRequest;
 import com.starrocks.http.BaseResponse;
 import com.starrocks.http.IllegalArgException;
+import com.starrocks.load.groupcommit.RequestCoordinatorBeResult;
+import com.starrocks.load.groupcommit.TableId;
+import com.starrocks.load.streamload.StreamLoadHttpHeader;
+import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.privilege.AccessDeniedException;
 import com.starrocks.privilege.PrivilegeType;
 import com.starrocks.qe.ConnectContext;
@@ -59,6 +63,7 @@ import org.apache.logging.log4j.Logger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 public class LoadAction extends RestBaseAction {
     private static final Logger LOG = LogManager.getLogger(LoadAction.class);
@@ -95,6 +100,12 @@ public class LoadAction extends RestBaseAction {
             throw new DdlException("There is no 100-continue header");
         }
 
+        boolean enableGroupCommit = "true".equalsIgnoreCase(
+                request.getRequest().headers().get(StreamLoadHttpHeader.HTTP_ENABLE_GROUP_COMMIT));
+        if (enableGroupCommit && redirectToLeader(request, response)) {
+            return;
+        }
+
         String dbName = request.getSingleParameter(DB_KEY);
         if (Strings.isNullOrEmpty(dbName)) {
             throw new DdlException("No database selected.");
@@ -105,10 +116,19 @@ public class LoadAction extends RestBaseAction {
             throw new DdlException("No table selected.");
         }
 
-        String label = request.getRequest().headers().get(LABEL_KEY);
-
         Authorizer.checkTableAction(ConnectContext.get().getCurrentUserIdentity(), ConnectContext.get().getCurrentRoleIds(),
                 dbName, tableName, PrivilegeType.INSERT);
+
+        if (!enableGroupCommit) {
+            processNormalStreamLoad(request, response, dbName, tableName);
+        } else {
+            processGroupCommitStreamLoad(request, response, dbName, tableName);
+        }
+    }
+
+    private void processNormalStreamLoad(
+            BaseRequest request, BaseResponse response, String dbName, String tableName) throws DdlException {
+        String label = request.getRequest().headers().get(LABEL_KEY);
 
         String warehouseName = WarehouseManager.DEFAULT_WAREHOUSE_NAME;
         if (request.getRequest().headers().contains(WAREHOUSE_KEY)) {
@@ -146,6 +166,35 @@ public class LoadAction extends RestBaseAction {
         LOG.info("redirect load action to destination={}, db: {}, tbl: {}, label: {}, warehouse: {}",
                 redirectAddr.toString(), dbName, tableName, label, warehouseName);
         redirectTo(request, response, redirectAddr);
+    }
+
+    private void processGroupCommitStreamLoad(
+            BaseRequest request, BaseResponse response, String dbName, String tableName) throws DdlException {
+        TableId tableId = new TableId(dbName, tableName);
+        StreamLoadKvParams params = StreamLoadKvParams.fromHttpHeaders(request.getRequest().headers());
+        RequestCoordinatorBeResult result = GlobalStateMgr.getCurrentState()
+                .getGroupCommitMgr().requestCoordinatorBEs(tableId, params);
+        if (!result.isOk()) {
+            GroupCommitResponseResult responseResult = new GroupCommitResponseResult(
+                    result.getStatus().status_code.name(), ActionStatus.FAILED,
+                    result.getStatus().error_msgs.get(0));
+            sendResult(request, response, responseResult);
+            return;
+        }
+
+        List<ComputeNode> nodes = result.getResult();
+        int index = ThreadLocalRandom.current().nextInt(nodes.size());
+        ComputeNode node = nodes.get(index);
+        TNetworkAddress redirectAddr = new TNetworkAddress(node.getHost(), node.getHttpPort());
+        LOG.info("redirect group commit load to destination={}, db: {}, tbl: {}", redirectAddr.toString(), dbName, tableName);
+        redirectTo(request, response, redirectAddr);
+    }
+
+    public static class GroupCommitResponseResult extends RestBaseResult {
+
+        public GroupCommitResponseResult(String code, ActionStatus status, String msg) {
+            super(code, status, msg);
+        }
     }
 }
 

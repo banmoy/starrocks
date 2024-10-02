@@ -280,6 +280,23 @@ public class StreamLoadInfo {
         return streamLoadInfo;
     }
 
+    public static StreamLoadInfo fromHttpStreamLoadRequest(TUniqueId id, long txnId, StreamLoadKvParams params)
+            throws UserException {
+        StreamLoadInfo streamLoadInfo = new StreamLoadInfo(id, txnId,
+                params.getFileType().orElse(TFileType.FILE_STREAM),
+                params.getFileFormatType().orElse(TFileFormatType.FORMAT_CSV_PLAIN));
+        streamLoadInfo.setOptionalFromStreamLoad(params);
+        String warehouseName = params.getWarehouse().orElse(null);
+        if (warehouseName != null) {
+            Warehouse warehouse = GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouse(warehouseName);
+            if (warehouse == null) {
+                throw new UserException(String.format("Warehouse [%s] does not exist", warehouseName));
+            }
+            streamLoadInfo.setWarehouseId(warehouse.getId());
+        }
+        return streamLoadInfo;
+    }
+
     public static StreamLoadInfo fromTStreamLoadPutRequest(TStreamLoadPutRequest request, Database db)
             throws UserException {
         StreamLoadThriftParams streamLoadParams = new StreamLoadThriftParams(request);

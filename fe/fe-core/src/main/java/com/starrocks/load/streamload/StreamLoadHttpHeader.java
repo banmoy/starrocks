@@ -55,6 +55,13 @@ public class StreamLoadHttpHeader {
     public static final String HTTP_JSONROOT = "json_root";
     public static final String HTTP_STRIP_OUTER_ARRAY = "strip_outer_array";
 
+
+    // Headers for group commit ==========================
+    public static final String HTTP_ENABLE_GROUP_COMMIT = "enable_group_commit";
+    public static final String HTTP_GROUP_COMMIT_ASYNC = "group_commit_async";
+    public static final String HTTP_GROUP_COMMIT_INTERVAL_MS = "group_commit_interval_ms";
+    public static final String HTTP_GROUP_COMMIT_PARALLEL = "group_commit_parallel";
+
     // A list of all headers. If add a new header, should also add it to the list.
     public static final List<String> HTTP_HEADER_LIST = Arrays.asList(
             HTTP_FORMAT, HTTP_COLUMNS, HTTP_WHERE, HTTP_COLUMN_SEPARATOR, HTTP_ROW_DELIMITER,
@@ -62,6 +69,7 @@ public class StreamLoadHttpHeader {
             HTTP_TIMEOUT, HTTP_PARTITIONS, HTTP_TEMP_PARTITIONS, HTTP_NEGATIVE, HTTP_STRICT_MODE,
             HTTP_TIMEZONE, HTTP_LOAD_MEM_LIMIT, HTTP_JSONPATHS, HTTP_JSONROOT, HTTP_STRIP_OUTER_ARRAY,
             HTTP_PARTIAL_UPDATE, HTTP_PARTIAL_UPDATE_MODE, HTTP_TRANSMISSION_COMPRESSION_TYPE, HTTP_LOAD_DOP,
-            HTTP_ENABLE_REPLICATED_STORAGE, HTTP_MERGE_CONDITION, HTTP_LOG_REJECTED_RECORD_NUM, HTTP_COMPRESSION
+            HTTP_ENABLE_REPLICATED_STORAGE, HTTP_MERGE_CONDITION, HTTP_LOG_REJECTED_RECORD_NUM, HTTP_COMPRESSION,
+            HTTP_ENABLE_GROUP_COMMIT, HTTP_GROUP_COMMIT_ASYNC, HTTP_GROUP_COMMIT_INTERVAL_MS, HTTP_GROUP_COMMIT_PARALLEL
     );
 }
