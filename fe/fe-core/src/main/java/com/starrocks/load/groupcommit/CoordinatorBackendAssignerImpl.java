@@ -19,6 +19,7 @@ import com.starrocks.common.ThreadPoolManager;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
 import com.starrocks.system.ComputeNode;
+import org.apache.arrow.util.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,9 +49,9 @@ import java.util.stream.Collectors;
 // 1. nodes changed
 // 2. unregister load
 // there is no need to balance for register load because we allocate node from the least workload
-public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
+public class CoordinatorBackendAssignerImpl implements CoordinatorBackendAssigner {
 
-    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorBeAssignerImpl.class);
+    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorBackendAssignerImpl.class);
 
     private static final int MIN_CHECK_INTERVAL_MS = 1000;
 
@@ -61,21 +62,23 @@ public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
     private final ExecutorService executorService;
 
     private final AtomicLong pendingDetectUnavailableNodesTask;
+    private final AtomicLong numScheduledTasks;
+    private final AtomicBoolean isPeriodicalScheduleRunning;
 
     // warehouse -> scheduling meta of this warehouse.
     // It's only ead/write in the single schedule thread
     private final Map<String, WarehouseScheduleMeta> warehouseScheduleMetas;
-
-    // TODO Loads that fail to schedule UNREGISTER_LOAD, and wait for garbage collection
     private final Map<Long, LoadMeta> loadWaitForGc;
 
-    public CoordinatorBeAssignerImpl() {
+    public CoordinatorBackendAssignerImpl() {
         this.registeredLoadMetas = new ConcurrentHashMap<>();
         this.scheduleTaskIdAllocator = new AtomicLong(0);
         this.scheduleTaskQueue = new PriorityBlockingQueue<>(32, ScheduleTaskComparator.INSTANCE);
         this.executorService = ThreadPoolManager.newDaemonCacheThreadPool(
                 1, "coordinator-be-assigner-scheduler", true);
         this.pendingDetectUnavailableNodesTask = new AtomicLong(0);
+        this.numScheduledTasks = new AtomicLong(0);
+        this.isPeriodicalScheduleRunning = new AtomicBoolean(false);
         this.warehouseScheduleMetas = new HashMap<>();
         this.loadWaitForGc = new ConcurrentHashMap<>();
     }
@@ -83,7 +86,7 @@ public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
     @Override
     public void start() {
         this.executorService.submit(this::runSchedule);
-        LOG.info("Start cooridnator be assigner");
+        LOG.info("Start coordinator be assigner");
     }
 
     private void runSchedule() {
@@ -108,13 +111,23 @@ public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
 
             if (task == null) {
                 long startTime = System.currentTimeMillis();
+                if (!isPeriodicalScheduleRunning.compareAndSet(false, true)) {
+                    continue;
+                }
                 try {
+                    Iterator<Map.Entry<Long, LoadMeta>> iterator = loadWaitForGc.entrySet().iterator();
+                    while (iterator.hasNext()) {
+                        runScheduleOnRegisterLoad(iterator.next().getValue());
+                        iterator.remove();
+                    }
                     periodicalCheckNodeChangedAndBalance();
                     LOG.debug("Success to execute periodical schedule, cost: {} ms",
                             System.currentTimeMillis() - startTime);
                 } catch (Throwable throwable) {
                     LOG.error("Failed to execute periodical schedule, cost: {} ms",
                             System.currentTimeMillis() - startTime, throwable);
+                } finally {
+                    isPeriodicalScheduleRunning.compareAndSet(true, false);
                 }
                 continue;
             }
@@ -133,6 +146,7 @@ public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
                 if (task.getScheduleType() == ScheduleType.DETECT_UNAVAILABLE_NODES) {
                     pendingDetectUnavailableNodesTask.decrementAndGet();
                 }
+                numScheduledTasks.incrementAndGet();
             }
         }
     }
@@ -162,7 +176,7 @@ public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
     }
 
     @Override
-    public List<ComputeNode> requestBe(long loadId) {
+    public List<ComputeNode> getBackends(long loadId) {
         LoadMeta meta = registeredLoadMetas.get(loadId);
         if (meta == null) {
             return null;
@@ -191,7 +205,7 @@ public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
                 }
             }
         }
-        if (availableNodes != null) {
+        if (unavailableNodes != null) {
             asyncScheduleOnDetectUnavailableNodes(meta, unavailableNodes);
         }
 
@@ -347,7 +361,8 @@ public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
         runScheduleIfNodeChanged(warehouseMeta);
     }
 
-    private void periodicalCheckNodeChangedAndBalance() {
+    @VisibleForTesting
+    void periodicalCheckNodeChangedAndBalance() {
         List<String> warehouseNames = new ArrayList<>(warehouseScheduleMetas.keySet());
         for (String name : warehouseNames) {
             WarehouseScheduleMeta warehouseMeta = warehouseScheduleMetas.get(name);
@@ -629,6 +644,31 @@ public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
         return nodes;
     }
 
+    @VisibleForTesting
+    long numScheduledTasks() {
+        return numScheduledTasks.get();
+    }
+
+    @VisibleForTesting
+    WarehouseScheduleMeta getWarehouseMeta(String warehouse) {
+        return warehouseScheduleMetas.get(warehouse);
+    }
+
+    @VisibleForTesting
+    void disablePeriodicalScheduleForTest() {
+        while (!isPeriodicalScheduleRunning.compareAndSet(false, true)) {
+        }
+    }
+
+    @VisibleForTesting
+    double currentLoadDiffRatio(String warehouse) {
+        WarehouseScheduleMeta whMeta = warehouseScheduleMetas.get(warehouse);
+        if (whMeta == null) {
+            return 0;
+        }
+        return calculateLoadDiffRatio(whMeta.sortedNodeMetaSet);
+    }
+
     enum ScheduleType {
         UNREGISTER_LOAD(0),
         DETECT_UNAVAILABLE_NODES(1),
@@ -747,7 +787,7 @@ public class CoordinatorBeAssignerImpl implements CoordinatorBeAssigner {
         final NavigableSet<NodeMeta> sortedNodeMetaSet;
 
         // load id -> LoadMeta. Loads that is being scheduled in nodeMetaMap. It may be not consistent
-        // with CoordinatorBeAssignerImpl.registeredLoadMetas because registerLoad()/unregisterLoad()
+        // with CoordinatorBackendAssignerImpl.registeredLoadMetas because registerLoad()/unregisterLoad()
         // will submit schedule tasks which will executed asynchronously
         final Map<Long, LoadMeta> schedulingLoadMetas;
         final AtomicBoolean needBalance;

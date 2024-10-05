@@ -55,6 +55,8 @@ import com.starrocks.thrift.TGetTablesInfoRequest;
 import com.starrocks.thrift.TGetTablesInfoResponse;
 import com.starrocks.thrift.TGetTablesParams;
 import com.starrocks.thrift.TGetTablesResult;
+import com.starrocks.thrift.TGroupCommitLoadRequest;
+import com.starrocks.thrift.TGroupCommitLoadResult;
 import com.starrocks.thrift.TImmutablePartitionRequest;
 import com.starrocks.thrift.TImmutablePartitionResult;
 import com.starrocks.thrift.TListMaterializedViewStatusResult;
@@ -100,6 +102,12 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_GROUP_COMMIT;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_GROUP_COMMIT_ASYNC;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_GROUP_COMMIT_INTERVAL_MS;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_GROUP_COMMIT_PARALLEL;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
@@ -137,7 +145,7 @@ public class FrontendServiceImplTest {
         FrontendServiceImpl impl = new FrontendServiceImpl(exeEnv);
         TImmutablePartitionRequest request = new TImmutablePartitionRequest();
         TImmutablePartitionResult partition = impl.updateImmutablePartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
     }
 
     private static ConnectContext connectContext;
@@ -311,34 +319,34 @@ public class FrontendServiceImplTest {
         TImmutablePartitionResult partition = impl.updateImmutablePartition(request);
         Table t = GlobalStateMgr.getCurrentState().getLocalMetastore().getTable(db.getFullName(), "v");
 
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
 
         request.setDb_id(db.getId());
         partition = impl.updateImmutablePartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
 
         request.setTable_id(t.getId());
         partition = impl.updateImmutablePartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
 
         request.setTable_id(table.getId());
         partition = impl.updateImmutablePartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
 
         request.setPartition_ids(partitionIds);
         partition = impl.updateImmutablePartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
 
         partitionIds.add(1L);
         request.setPartition_ids(partitionIds);
         partition = impl.updateImmutablePartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
 
         partitionIds = table.getPhysicalPartitions().stream()
                     .map(PhysicalPartition::getId).collect(Collectors.toList());
         request.setPartition_ids(partitionIds);
         partition = impl.updateImmutablePartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
     }
 
     @Test
@@ -355,19 +363,19 @@ public class FrontendServiceImplTest {
         request.setPartition_ids(partitionIds);
         TImmutablePartitionResult partition = impl.updateImmutablePartition(request);
 
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
-        Assert.assertEquals(2, table.getPhysicalPartitions().size());
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(2, table.getPhysicalPartitions().size());
 
         partition = impl.updateImmutablePartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
-        Assert.assertEquals(2, table.getPhysicalPartitions().size());
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(2, table.getPhysicalPartitions().size());
 
         partitionIds = table.getPhysicalPartitions().stream()
                     .map(PhysicalPartition::getId).collect(Collectors.toList());
         request.setPartition_ids(partitionIds);
         partition = impl.updateImmutablePartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
-        Assert.assertEquals(3, table.getPhysicalPartitions().size());
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(3, table.getPhysicalPartitions().size());
     }
 
     @Test
@@ -393,12 +401,12 @@ public class FrontendServiceImplTest {
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
 
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
         Partition p19900424 = table.getPartition("p19900424");
         Assert.assertNotNull(p19900424);
 
         partition = impl.createPartition(request);
-        Assert.assertEquals(1, partition.partitions.size());
+        assertEquals(1, partition.partitions.size());
     }
 
     @Test
@@ -426,7 +434,7 @@ public class FrontendServiceImplTest {
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
 
-        Assert.assertEquals(TStatusCode.RUNTIME_ERROR, partition.getStatus().getStatus_code());
+        assertEquals(TStatusCode.RUNTIME_ERROR, partition.getStatus().getStatus_code());
         ((OlapTable) table).setState(OlapTable.OlapTableState.NORMAL);
     }
 
@@ -455,7 +463,7 @@ public class FrontendServiceImplTest {
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
 
-        Assert.assertEquals(TStatusCode.RUNTIME_ERROR, partition.getStatus().getStatus_code());
+        assertEquals(TStatusCode.RUNTIME_ERROR, partition.getStatus().getStatus_code());
         ((OlapTable) table).setState(OlapTable.OlapTableState.NORMAL);
     }
 
@@ -478,7 +486,7 @@ public class FrontendServiceImplTest {
         TCreatePartitionResult partition = impl.createPartition(request);
         Config.thrift_server_max_worker_threads = 4096;
 
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.SERVICE_UNAVAILABLE);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.SERVICE_UNAVAILABLE);
     }
 
     @Test
@@ -499,7 +507,7 @@ public class FrontendServiceImplTest {
         };
 
         TLoadTxnBeginResult result = impl.loadTxnBegin(request);
-        Assert.assertEquals(result.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(result.getStatus().getStatus_code(), TStatusCode.OK);
     }
 
     @Test
@@ -525,12 +533,12 @@ public class FrontendServiceImplTest {
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
 
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
         Partition p19900424 = table.getPartition("p19900424");
         Assert.assertNotNull(p19900424);
 
         partition = impl.createPartition(request);
-        Assert.assertEquals(1, partition.partitions.size());
+        assertEquals(1, partition.partitions.size());
     }
 
     @Test
@@ -562,12 +570,12 @@ public class FrontendServiceImplTest {
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
 
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.OK);
         Partition p19891102 = table.getPartition("p19891102");
         Assert.assertNotNull(p19891102);
 
         partition = impl.createPartition(request);
-        Assert.assertEquals(2, partition.partitions.size());
+        assertEquals(2, partition.partitions.size());
     }
 
     @Test
@@ -605,12 +613,12 @@ public class FrontendServiceImplTest {
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
 
-        Assert.assertEquals(TStatusCode.OK, partition.getStatus().getStatus_code());
+        assertEquals(TStatusCode.OK, partition.getStatus().getStatus_code());
         Partition p199004 = table.getPartition("p199004");
         Assert.assertNotNull(p199004);
 
         partition = impl.createPartition(request);
-        Assert.assertEquals(2, partition.partitions.size());
+        assertEquals(2, partition.partitions.size());
     }
 
     @Test
@@ -642,13 +650,13 @@ public class FrontendServiceImplTest {
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
 
-        Assert.assertEquals(TStatusCode.OK, partition.getStatus().getStatus_code());
+        assertEquals(TStatusCode.OK, partition.getStatus().getStatus_code());
         Partition p00000101 = table.getPartition("p00000101");
         Assert.assertNotNull(p00000101);
         Partition p99991231 = table.getPartition("p99991231");
         Assert.assertNotNull(p99991231);
         partition = impl.createPartition(request);
-        Assert.assertEquals(2, partition.partitions.size());
+        assertEquals(2, partition.partitions.size());
     }
 
     @Test
@@ -670,7 +678,7 @@ public class FrontendServiceImplTest {
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
 
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
         Assert.assertTrue(partition.getStatus().getError_msgs().get(0).contains("max_partition_number_per_table"));
         Config.max_partition_number_per_table = 100000;
     }
@@ -700,12 +708,12 @@ public class FrontendServiceImplTest {
         request.setTable_id(table.getId());
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
-        Assert.assertEquals(TStatusCode.OK, partition.getStatus().getStatus_code());
+        assertEquals(TStatusCode.OK, partition.getStatus().getStatus_code());
 
         Config.max_partitions_in_one_batch = 1;
 
         partition = impl.createPartition(request);
-        Assert.assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
+        assertEquals(partition.getStatus().getStatus_code(), TStatusCode.RUNTIME_ERROR);
         Assert.assertTrue(partition.getStatus().getError_msgs().get(0).contains("max_partitions_in_one_batch"));
 
         Config.max_partitions_in_one_batch = 4096;
@@ -737,14 +745,14 @@ public class FrontendServiceImplTest {
         params.setCurrent_user_ident(tUserIdentity);
 
         TGetTablesResult result = impl.getTableNames(params);
-        Assert.assertEquals(17, result.tables.size());
+        assertEquals(17, result.tables.size());
     }
 
     @Test
     public void testListTableStatus() throws TException {
         FrontendServiceImpl impl = new FrontendServiceImpl(exeEnv);
         TListTableStatusResult result = impl.listTableStatus(buildListTableStatusParam());
-        Assert.assertEquals(7, result.tables.size());
+        assertEquals(7, result.tables.size());
     }
 
     @Test
@@ -769,7 +777,7 @@ public class FrontendServiceImplTest {
         FrontendServiceImpl impl = new FrontendServiceImpl(exeEnv);
         TListTableStatusResult result = impl.listTableStatus(buildListTableStatusParam());
         System.out.println(result.tables.stream().map(TTableStatus::getName).collect(Collectors.toList()));
-        Assert.assertEquals(8, result.tables.size());
+        assertEquals(8, result.tables.size());
         starRocksAssert.dropView("test.view11");
     }
 
@@ -796,12 +804,12 @@ public class FrontendServiceImplTest {
         request.setPartition_values(partitionValues);
         TCreatePartitionResult partition = impl.createPartition(request);
 
-        Assert.assertEquals(TStatusCode.OK, partition.getStatus().getStatus_code());
+        assertEquals(TStatusCode.OK, partition.getStatus().getStatus_code());
         Partition p1990042412 = table.getPartition("p1990042412");
         Assert.assertNotNull(p1990042412);
 
         partition = impl.createPartition(request);
-        Assert.assertEquals(1, partition.partitions.size());
+        assertEquals(1, partition.partitions.size());
     }
 
     @Test
@@ -809,9 +817,9 @@ public class FrontendServiceImplTest {
         Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb("test");
         Table table = GlobalStateMgr.getCurrentState().getLocalMetastore().getTable(db.getFullName(), "site_access_empty");
         Collection<Partition> partitions = table.getPartitions();
-        Assert.assertEquals(1, partitions.size());
+        assertEquals(1, partitions.size());
         String name = partitions.iterator().next().getName();
-        Assert.assertEquals(ExpressionRangePartitionInfo.AUTOMATIC_SHADOW_PARTITION_NAME, name);
+        assertEquals(ExpressionRangePartitionInfo.AUTOMATIC_SHADOW_PARTITION_NAME, name);
         Assert.assertTrue(name.startsWith(ExpressionRangePartitionInfo.SHADOW_PARTITION_PREFIX));
     }
 
@@ -956,8 +964,8 @@ public class FrontendServiceImplTest {
         request.setAuth_info(authInfo);
         TGetTablesInfoResponse response = impl.getTablesInfo(request);
         List<TTableInfo> tablesInfos = response.getTables_infos();
-        Assert.assertEquals(1, tablesInfos.size());
-        Assert.assertEquals("t1", tablesInfos.get(0).getTable_name());
+        assertEquals(1, tablesInfos.size());
+        assertEquals("t1", tablesInfos.get(0).getTable_name());
     }
 
     @Test
@@ -995,9 +1003,9 @@ public class FrontendServiceImplTest {
         List<TColumnDef> testDefaultValue = columnDefList.stream()
                     .filter(u -> u.getColumnDesc().getTableName().equalsIgnoreCase("test_default_value"))
                     .collect(Collectors.toList());
-        Assert.assertEquals(2, testDefaultValue.size());
-        Assert.assertEquals("CURRENT_TIMESTAMP", testDefaultValue.get(0).getColumnDesc().getColumnDefault());
-        Assert.assertEquals("2", testDefaultValue.get(1).getColumnDesc().getColumnDefault());
+        assertEquals(2, testDefaultValue.size());
+        assertEquals("CURRENT_TIMESTAMP", testDefaultValue.get(0).getColumnDesc().getColumnDefault());
+        assertEquals("2", testDefaultValue.get(1).getColumnDesc().getColumnDefault());
     }
 
     @Test
@@ -1032,7 +1040,7 @@ public class FrontendServiceImplTest {
         request.setPattern("ye$test");
         request.setDb("test_table");
         TGetTablesResult response = impl.getTableNames(request);
-        Assert.assertEquals(1, response.tables.size());
+        assertEquals(1, response.tables.size());
     }
 
     @Test
@@ -1069,7 +1077,7 @@ public class FrontendServiceImplTest {
         request.setDb("test_table");
         request.setType(TTableType.MATERIALIZED_VIEW);
         TListMaterializedViewStatusResult response = impl.listMaterializedViewStatus(request);
-        Assert.assertEquals(1, response.materialized_views.size());
+        assertEquals(1, response.materialized_views.size());
     }
 
     @Test
@@ -1088,17 +1096,17 @@ public class FrontendServiceImplTest {
         request.setTbl("non-site_access_day-tbl");
         request.setTxnId(100);
         TGetLoadTxnStatusResult result1 = impl.getLoadTxnStatus(request);
-        Assert.assertEquals(TTransactionStatus.UNKNOWN, result1.getStatus());
+        assertEquals(TTransactionStatus.UNKNOWN, result1.getStatus());
         request.setDb("test");
         TGetLoadTxnStatusResult result2 = impl.getLoadTxnStatus(request);
-        Assert.assertEquals(TTransactionStatus.UNKNOWN, result2.getStatus());
+        assertEquals(TTransactionStatus.UNKNOWN, result2.getStatus());
         request.setTxnId(transactionId);
         GlobalStateMgr.getCurrentState().setFrontendNodeType(FrontendNodeType.FOLLOWER);
         TGetLoadTxnStatusResult result3 = impl.getLoadTxnStatus(request);
-        Assert.assertEquals(TTransactionStatus.UNKNOWN, result3.getStatus());
+        assertEquals(TTransactionStatus.UNKNOWN, result3.getStatus());
         GlobalStateMgr.getCurrentState().setFrontendNodeType(FrontendNodeType.LEADER);
         TGetLoadTxnStatusResult result4 = impl.getLoadTxnStatus(request);
-        Assert.assertEquals(TTransactionStatus.PREPARE, result4.getStatus());
+        assertEquals(TTransactionStatus.PREPARE, result4.getStatus());
     }
 
     @Test
@@ -1119,13 +1127,33 @@ public class FrontendServiceImplTest {
         TStreamLoadPutResult result = impl.streamLoadPut(request);
         TStatus status = result.getStatus();
         request.setFileType(TFileType.FILE_STREAM);
-        Assert.assertEquals(TStatusCode.ANALYSIS_ERROR, status.getStatus_code());
+        assertEquals(TStatusCode.ANALYSIS_ERROR, status.getStatus_code());
         List<String> errMsg = status.getError_msgs();
-        Assert.assertEquals(1, errMsg.size());
-        Assert.assertEquals(
+        assertEquals(1, errMsg.size());
+        assertEquals(
                     "Expr 'str_to_date(`col1`)' analyze error: No matching function with signature: str_to_date(varchar), " +
                                 "derived column is 'event_day'",
                     errMsg.get(0));
+    }
+
+    @Test
+    public void testRequestGroupCommitLoad() throws Exception {
+        FrontendServiceImpl impl = new FrontendServiceImpl(exeEnv);
+        TGroupCommitLoadRequest request = new TGroupCommitLoadRequest();
+        request.setDb("test");
+        request.setTbl("site_access_hour");
+        request.setUser("root");
+        request.setPasswd("");
+        request.setBackend_id(10001);
+        request.setBackend_host("127.0.0.1");
+        request.putToParams(HTTP_ENABLE_GROUP_COMMIT, "true");
+        request.putToParams(HTTP_GROUP_COMMIT_ASYNC, "true");
+        request.putToParams(HTTP_GROUP_COMMIT_INTERVAL_MS, "1000");
+        request.putToParams(HTTP_GROUP_COMMIT_PARALLEL, "4");
+
+        TGroupCommitLoadResult result = impl.requestGroupCommitLoad(request);
+        assertEquals(TStatusCode.OK, result.getStatus().getStatus_code());
+        assertNotNull(result.getLabel());
     }
 
     @Test
@@ -1136,7 +1164,7 @@ public class FrontendServiceImplTest {
         request.values = Lists.newArrayList("5.1.1");
 
         TSetConfigResponse result = impl.setConfig(request);
-        Assert.assertEquals("5.1.1", GlobalVariable.version);
+        assertEquals("5.1.1", GlobalVariable.version);
     }
 
     @Test
@@ -1151,7 +1179,7 @@ public class FrontendServiceImplTest {
         long now = System.currentTimeMillis();
         doThrow(new CommitRateExceededException(1001, now + 100)).when(impl).loadTxnCommitImpl(any(), any());
         TLoadTxnCommitResult result = impl.loadTxnCommit(request);
-        Assert.assertEquals(TStatusCode.SR_EAGAIN, result.status.status_code);
+        assertEquals(TStatusCode.SR_EAGAIN, result.status.status_code);
         Assert.assertTrue(result.retry_interval_ms >= (now + 100 - System.currentTimeMillis()));
     }
 
@@ -1166,7 +1194,7 @@ public class FrontendServiceImplTest {
         request.commitInfos = new ArrayList<>();
         doThrow(new LockTimeoutException("get database write lock timeout")).when(impl).loadTxnCommitImpl(any(), any());
         TLoadTxnCommitResult result = impl.loadTxnCommit(request);
-        Assert.assertEquals(TStatusCode.TIMEOUT, result.status.status_code);
+        assertEquals(TStatusCode.TIMEOUT, result.status.status_code);
     }
 
     @Test
@@ -1180,7 +1208,7 @@ public class FrontendServiceImplTest {
         request.commitInfos = new ArrayList<>();
         doThrow(new UserException("injected error")).when(impl).loadTxnCommitImpl(any(), any());
         TLoadTxnCommitResult result = impl.loadTxnCommit(request);
-        Assert.assertEquals(TStatusCode.ANALYSIS_ERROR, result.status.status_code);
+        assertEquals(TStatusCode.ANALYSIS_ERROR, result.status.status_code);
     }
 
     @Test
@@ -1193,7 +1221,7 @@ public class FrontendServiceImplTest {
         request.setAuth_code(100);
         doThrow(new LockTimeoutException("get database read lock timeout")).when(impl).streamLoadPutImpl(any());
         TStreamLoadPutResult result = impl.streamLoadPut(request);
-        Assert.assertEquals(TStatusCode.TIMEOUT, result.status.status_code);
+        assertEquals(TStatusCode.TIMEOUT, result.status.status_code);
     }
 
     @Test

@@ -48,6 +48,8 @@ import org.apache.logging.log4j.Logger;
 import java.util.List;
 import java.util.Optional;
 
+import static com.starrocks.server.WarehouseManager.DEFAULT_WAREHOUSE_NAME;
+
 public class StreamLoadInfo {
 
     private static final Logger LOG = LogManager.getLogger(StreamLoadInfo.class);
@@ -286,14 +288,12 @@ public class StreamLoadInfo {
                 params.getFileType().orElse(TFileType.FILE_STREAM),
                 params.getFileFormatType().orElse(TFileFormatType.FORMAT_CSV_PLAIN));
         streamLoadInfo.setOptionalFromStreamLoad(params);
-        String warehouseName = params.getWarehouse().orElse(null);
-        if (warehouseName != null) {
-            Warehouse warehouse = GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouse(warehouseName);
-            if (warehouse == null) {
-                throw new UserException(String.format("Warehouse [%s] does not exist", warehouseName));
-            }
-            streamLoadInfo.setWarehouseId(warehouse.getId());
+        String warehouseName = params.getWarehouse().orElse(DEFAULT_WAREHOUSE_NAME);
+        Warehouse warehouse = GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouse(warehouseName);
+        if (warehouse == null) {
+            throw new UserException(String.format("Warehouse [%s] does not exist", warehouseName));
         }
+        streamLoadInfo.setWarehouseId(warehouse.getId());
         return streamLoadInfo;
     }
 

@@ -40,7 +40,7 @@ import com.starrocks.http.ActionController;
 import com.starrocks.http.BaseRequest;
 import com.starrocks.http.BaseResponse;
 import com.starrocks.http.IllegalArgException;
-import com.starrocks.load.groupcommit.RequestCoordinatorBeResult;
+import com.starrocks.load.groupcommit.RequestCoordinatorBackendResult;
 import com.starrocks.load.groupcommit.TableId;
 import com.starrocks.load.streamload.StreamLoadHttpHeader;
 import com.starrocks.load.streamload.StreamLoadKvParams;
@@ -172,8 +172,8 @@ public class LoadAction extends RestBaseAction {
             BaseRequest request, BaseResponse response, String dbName, String tableName) throws DdlException {
         TableId tableId = new TableId(dbName, tableName);
         StreamLoadKvParams params = StreamLoadKvParams.fromHttpHeaders(request.getRequest().headers());
-        RequestCoordinatorBeResult result = GlobalStateMgr.getCurrentState()
-                .getGroupCommitMgr().requestCoordinatorBEs(tableId, params);
+        RequestCoordinatorBackendResult result = GlobalStateMgr.getCurrentState()
+                .getGroupCommitMgr().requestCoordinatorBackends(tableId, params);
         if (!result.isOk()) {
             GroupCommitResponseResult responseResult = new GroupCommitResponseResult(
                     result.getStatus().status_code.name(), ActionStatus.FAILED,

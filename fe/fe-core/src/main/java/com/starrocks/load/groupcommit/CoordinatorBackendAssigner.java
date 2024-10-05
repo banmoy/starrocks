@@ -18,12 +18,12 @@ import com.starrocks.system.ComputeNode;
 
 import java.util.List;
 
-public interface CoordinatorBeAssigner {
+public interface CoordinatorBackendAssigner {
 
     void start();
 
     void registerLoad(long loadId, String warehouseName, TableId tableId, int expectParallel);
     void unregisterLoad(long loadId);
 
-    List<ComputeNode> requestBe(long loadId);
+    List<ComputeNode> getBackends(long loadId);
 }

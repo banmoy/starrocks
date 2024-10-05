@@ -16,12 +16,16 @@ package com.starrocks.load.groupcommit;
 
 import com.starrocks.common.util.DebugUtil;
 import com.starrocks.common.util.UUIDUtil;
-import com.starrocks.load.streamload.StreamLoadKvParams;
+import com.starrocks.load.streamload.StreamLoadInfo;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.DefaultCoordinator;
+import com.starrocks.qe.scheduler.Coordinator;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.thrift.TStatus;
 import com.starrocks.thrift.TStatusCode;
+import com.starrocks.thrift.TUniqueId;
+import org.apache.arrow.util.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,44 +34,49 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
-
-import static com.starrocks.server.WarehouseManager.DEFAULT_WAREHOUSE_NAME;
 
 public class IsomorphicLoad implements LoadExecuteCallback {
 
     private static final Logger LOG = LoggerFactory.getLogger(IsomorphicLoad.class);
 
+    private static final String LABEL_PREFIX = "group_commit_";
+
     private final long id;
     private final TableId tableId;
-    private final StreamLoadKvParams params;
+    private final String warehouseName;
+    private final StreamLoadInfo streamLoadInfo;
     private final int groupCommitIntervalMs;
     private final int groupCommitParallel;
     private final ConnectContext connectContext;
-    private final CoordinatorBeAssigner coordinatorBeAssigner;
-    private final ThreadPoolExecutor executor;
+    private final CoordinatorBackendAssigner coordinatorBackendAssigner;
+    private final Executor executor;
+    private final Coordinator.Factory coordinatorFactory;
     private final ConcurrentHashMap<String, GroupCommitLoadExecutor> loadExecutorMap;
     private final ReentrantReadWriteLock lock;
 
     public IsomorphicLoad(
             long id,
             TableId tableId,
-            StreamLoadKvParams params,
+            String warehouseName,
+            StreamLoadInfo streamLoadInfo,
             int groupCommitIntervalMs,
             int groupCommitParallel,
             ConnectContext connectContext,
-            CoordinatorBeAssigner coordinatorBeAssigner,
-            ThreadPoolExecutor executor) {
+            CoordinatorBackendAssigner coordinatorBackendAssigner,
+            Executor executor) {
         this.id = id;
         this.tableId = tableId;
-        this.params = params;
+        this.warehouseName = warehouseName;
+        this.streamLoadInfo = streamLoadInfo;
         this.groupCommitIntervalMs = groupCommitIntervalMs;
         this.groupCommitParallel = groupCommitParallel;
         this.connectContext = connectContext;
-        this.coordinatorBeAssigner = coordinatorBeAssigner;
+        this.coordinatorBackendAssigner = coordinatorBackendAssigner;
         this.executor = executor;
+        this.coordinatorFactory = new DefaultCoordinator.Factory();
         this.loadExecutorMap = new ConcurrentHashMap<>();
         this.lock = new ReentrantReadWriteLock();
     }
@@ -76,33 +85,48 @@ public class IsomorphicLoad implements LoadExecuteCallback {
         return id;
     }
 
+    public TableId getTableId() {
+        return tableId;
+    }
+
+    public String getWarehouse() {
+        return warehouseName;
+    }
+
     public int getGroupCommitParallel() {
         return groupCommitParallel;
     }
 
-    public String getWarehouse() {
-        return params.getWarehouse().orElse(DEFAULT_WAREHOUSE_NAME);
+    public int numRunningExecutors() {
+        return loadExecutorMap.size();
     }
 
-    public RequestCoordinatorBeResult requestCoordinatorBEs() {
+    public RequestCoordinatorBackendResult requestCoordinatorBackends() {
         TStatus status = new TStatus();
         List<ComputeNode> backends = null;
         try {
-            backends = coordinatorBeAssigner.requestBe(id);
+            backends = coordinatorBackendAssigner.getBackends(id);
             if (!backends.isEmpty()) {
                 status.setStatus_code(TStatusCode.OK);
             } else {
-                status.setStatus_code(TStatusCode.NOT_FOUND);
-                status.setError_msgs(Collections.singletonList("Can't find available backends"));
+                status.setStatus_code(TStatusCode.SERVICE_UNAVAILABLE);
+                String errMsg = String.format(
+                        "Can't find available backends, db: %s, table: %s, warehouse: %s, load id: %s",
+                        tableId.getDbName(), tableId.getTableName(), warehouseName, id);
+                status.setError_msgs(Collections.singletonList(errMsg));
                 backends = null;
-                LOG.warn("Group commit load can't find available coordinator BEs, id: {}, tableId: {}", id, tableId);
+                LOG.error(errMsg);
             }
         } catch (Throwable throwable) {
-            status.setStatus_code(TStatusCode.UNKNOWN);
-            status.setError_msgs(Collections.singletonList(throwable.getMessage()));
-            LOG.error("Group commit load failed to request coordinator BEs, id: {}, tableId: {}", id, tableId, throwable);
+            status.setStatus_code(TStatusCode.INTERNAL_ERROR);
+            String msg = String.format("Unexpected exception happen when getting backends, db: %s, table: %s, " +
+                        "warehouse: %s, load id: %s, error: %s", tableId.getDbName(), tableId.getTableName(),
+                                warehouseName, id, throwable.getMessage());
+            status.setError_msgs(Collections.singletonList(msg));
+            LOG.error("Failed to get backends, db: {}, table: {}, warehouse: {}, load id: {}",
+                    tableId.getDbName(), tableId.getTableName(), warehouseName, id, throwable);
         }
-        return new RequestCoordinatorBeResult(status, backends);
+        return new RequestCoordinatorBackendResult(status, backends);
     }
 
     public RequestLoadResult requestLoad(long backendId, String backendHost) {
@@ -110,7 +134,7 @@ public class IsomorphicLoad implements LoadExecuteCallback {
         lock.readLock().lock();
         try {
             for (GroupCommitLoadExecutor loadExecutor : loadExecutorMap.values()) {
-                if (loadExecutor.isActive() && loadExecutor.containCoordinatorBe(backendId)) {
+                if (loadExecutor.isActive() && loadExecutor.containCoordinatorBackend(backendId)) {
                     status.setStatus_code(TStatusCode.OK);
                     return new RequestLoadResult(status, loadExecutor.getLabel());
                 }
@@ -122,41 +146,42 @@ public class IsomorphicLoad implements LoadExecuteCallback {
         lock.writeLock().lock();
         try {
             for (GroupCommitLoadExecutor loadExecutor : loadExecutorMap.values()) {
-                if (loadExecutor.isActive() && loadExecutor.containCoordinatorBe(backendId)) {
+                if (loadExecutor.isActive() && loadExecutor.containCoordinatorBackend(backendId)) {
                     status.setStatus_code(TStatusCode.OK);
                     return new RequestLoadResult(status, loadExecutor.getLabel());
                 }
             }
 
-            RequestCoordinatorBeResult requestCoordinatorBeResult = requestCoordinatorBEs();
-            if (!requestCoordinatorBeResult.isOk()) {
-                return new RequestLoadResult(requestCoordinatorBeResult.getStatus(), null);
+            RequestCoordinatorBackendResult requestCoordinatorBackendResult = requestCoordinatorBackends();
+            if (!requestCoordinatorBackendResult.isOk()) {
+                return new RequestLoadResult(requestCoordinatorBackendResult.getStatus(), null);
             }
 
-            Set<Long> backendIds = requestCoordinatorBeResult.getResult().stream()
+            Set<Long> backendIds = requestCoordinatorBackendResult.getResult().stream()
                     .map(ComputeNode::getId).collect(Collectors.toSet());
             if (!backendIds.contains(backendId)) {
                 ComputeNode backend = GlobalStateMgr.getCurrentState()
-                        .getNodeMgr().getClusterInfo().getBackend(backendId);
+                        .getNodeMgr().getClusterInfo().getBackendOrComputeNode(backendId);
                 if (backend == null || !backend.isAvailable()) {
-                    status.setStatus_code(TStatusCode.NOT_FOUND);
+                    status.setStatus_code(TStatusCode.SERVICE_UNAVAILABLE);
                     status.setError_msgs(Collections.singletonList(
-                            String.format("Backend [%s, %s] is invalid", backendId, backendHost)));
-                    return new RequestLoadResult(requestCoordinatorBeResult.getStatus(), null);
+                            String.format("Backend [%s, %s] is not available", backendId, backendHost)));
+                    return new RequestLoadResult(status, null);
                 }
                 backendIds.add(backendId);
             }
 
-            String label = "group_commit_" + DebugUtil.printId(UUIDUtil.toTUniqueId(UUID.randomUUID()));
+            String label = LABEL_PREFIX + DebugUtil.printId(UUIDUtil.toTUniqueId(UUID.randomUUID()));
+            TUniqueId loadId = UUIDUtil.toTUniqueId(UUID.randomUUID());
             GroupCommitLoadExecutor loadExecutor = new GroupCommitLoadExecutor(
-                    tableId, label, params, connectContext, backendIds,
-                    groupCommitIntervalMs, this);
+                    tableId, label, loadId, streamLoadInfo, groupCommitIntervalMs,
+                    connectContext, backendIds, coordinatorFactory, this);
             loadExecutorMap.put(label, loadExecutor);
             try {
                 executor.execute(loadExecutor);
             } catch (Exception e) {
                 loadExecutorMap.remove(label);
-                status.setStatus_code(TStatusCode.UNKNOWN);
+                status.setStatus_code(TStatusCode.INTERNAL_ERROR);
                 status.setError_msgs(Collections.singletonList(e.getMessage()));
                 return new RequestLoadResult(status, null);
             }
@@ -171,7 +196,6 @@ public class IsomorphicLoad implements LoadExecuteCallback {
         return !loadExecutorMap.isEmpty();
     }
 
-    // TODO add statistic about the load
     @Override
     public void finishLoad(String label) {
         lock.writeLock().lock();
@@ -180,5 +204,10 @@ public class IsomorphicLoad implements LoadExecuteCallback {
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    @VisibleForTesting
+    GroupCommitLoadExecutor getLoadExecutor(String label) {
+        return loadExecutorMap.get(label);
     }
 }

@@ -1708,7 +1708,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             result.setStatus(status);
         } catch (Throwable throwable) {
             TStatus status = new TStatus();
-            status.setStatus_code(TStatusCode.UNKNOWN);
+            status.setStatus_code(TStatusCode.INTERNAL_ERROR);
             status.addToError_msgs(throwable.getMessage());
             result.setStatus(status);
         }

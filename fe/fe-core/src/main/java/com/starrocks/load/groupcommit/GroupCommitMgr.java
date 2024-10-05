@@ -17,6 +17,7 @@ package com.starrocks.load.groupcommit;
 import com.starrocks.common.Config;
 import com.starrocks.common.ThreadPoolManager;
 import com.starrocks.common.util.FrontendDaemon;
+import com.starrocks.load.streamload.StreamLoadInfo;
 import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.thrift.TStatus;
@@ -33,6 +34,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
+import javax.annotation.Nullable;
+
+import static com.starrocks.server.WarehouseManager.DEFAULT_WAREHOUSE_NAME;
 
 public class GroupCommitMgr extends FrontendDaemon {
 
@@ -42,7 +46,7 @@ public class GroupCommitMgr extends FrontendDaemon {
     /** Protected by lock. get/put need read lock, and remove need write lock. */
     private final ConcurrentHashMap<LoadUniqueId, IsomorphicLoad> loadMap;
     private final ReentrantReadWriteLock lock;
-    private final CoordinatorBeAssigner coordinatorBeAssigner;
+    private final CoordinatorBackendAssigner coordinatorBackendAssigner;
     private final ThreadPoolExecutor threadPoolExecutor;
 
     public GroupCommitMgr() {
@@ -50,31 +54,31 @@ public class GroupCommitMgr extends FrontendDaemon {
         this.idGenerator = new AtomicLong(0L);
         this.loadMap = new ConcurrentHashMap<>();
         this.lock = new ReentrantReadWriteLock();
-        this.coordinatorBeAssigner = new CoordinatorBeAssignerImpl();
+        this.coordinatorBackendAssigner = new CoordinatorBackendAssignerImpl();
         this.threadPoolExecutor = ThreadPoolManager.newDaemonCacheThreadPool(
                         Config.group_commit_load_executor_threads_num, "group-commit-load", true);
     }
 
     @Override
-    public synchronized void start() {
+    public void start() {
         super.start();
-        this.coordinatorBeAssigner.start();
+        this.coordinatorBackendAssigner.start();
         LOG.info("Start group commit manager");
     }
 
-    public RequestCoordinatorBeResult requestCoordinatorBEs(TableId tableId, StreamLoadKvParams params) {
+    public int numLoads() {
+        return loadMap.size();
+    }
+
+    public RequestCoordinatorBackendResult requestCoordinatorBackends(TableId tableId, StreamLoadKvParams params) {
         TStatus status = new TStatus(TStatusCode.OK);
-        checkServiceAvailable(status);
-        if (status.getStatus_code() != TStatusCode.OK) {
-            return new RequestCoordinatorBeResult(status, null);
-        }
         lock.readLock().lock();
         try {
             IsomorphicLoad load = getOrCreateTableGroupCommit(tableId, params, status);
             if (status.getStatus_code() != TStatusCode.OK) {
-                return new RequestCoordinatorBeResult(status, null);
+                return new RequestCoordinatorBackendResult(status, null);
             }
-            return load.requestCoordinatorBEs();
+            return load.requestCoordinatorBackends();
         } finally {
             lock.readLock().unlock();
         }
@@ -83,10 +87,6 @@ public class GroupCommitMgr extends FrontendDaemon {
     public RequestLoadResult requestLoad(
             TableId tableId, StreamLoadKvParams params, long backendId, String backendHost) {
         TStatus status = new TStatus(TStatusCode.OK);
-        checkServiceAvailable(status);
-        if (status.getStatus_code() != TStatusCode.OK) {
-            return new RequestLoadResult(status, null);
-        }
         lock.readLock().lock();
         try {
             IsomorphicLoad load = getOrCreateTableGroupCommit(tableId, params, status);
@@ -114,62 +114,57 @@ public class GroupCommitMgr extends FrontendDaemon {
                             .collect(Collectors.toList());
             for (Map.Entry<LoadUniqueId, IsomorphicLoad> entry : loads) {
                 loadMap.remove(entry.getKey());
-                coordinatorBeAssigner.unregisterLoad(entry.getValue().getId());
+                coordinatorBackendAssigner.unregisterLoad(entry.getValue().getId());
             }
         } finally {
             lock.writeLock().unlock();
         }
     }
 
-    private IsomorphicLoad getOrCreateTableGroupCommit(TableId tableId, StreamLoadKvParams params, TStatus status) {
+    @Nullable
+    private IsomorphicLoad getOrCreateTableGroupCommit(
+            TableId tableId, StreamLoadKvParams params, TStatus status) {
         LoadUniqueId uniqueId = new LoadUniqueId(tableId, params);
         IsomorphicLoad load = loadMap.get(uniqueId);
         if (load != null) {
             return load;
         }
 
+        String warehouseName = params.getWarehouse().orElse(DEFAULT_WAREHOUSE_NAME);
+        StreamLoadInfo streamLoadInfo;
+        try {
+            streamLoadInfo = StreamLoadInfo.fromHttpStreamLoadRequest(null, -1, params);
+        } catch (Exception e) {
+            status.setStatus_code(TStatusCode.INVALID_ARGUMENT);
+            status.setError_msgs(Collections.singletonList(
+                    String.format("Failed to build stream load info, error: %s", e.getMessage())));
+            return null;
+        }
+
         Integer groupCommitIntervalMs = params.getGroupCommitIntervalMs().orElse(null);
+        if (groupCommitIntervalMs == null || groupCommitIntervalMs <= 0) {
+            status.setStatus_code(TStatusCode.INVALID_ARGUMENT);
+            status.setError_msgs(Collections.singletonList(
+                    "Group commit interval must be set positive, but is " + groupCommitIntervalMs));
+            return null;
+        }
+
         Integer groupCommitParallel = params.getGroupCommitParallel().orElse(null);
-        checkGroupCommitParameters(groupCommitIntervalMs, groupCommitParallel, status);
-        if (status.getStatus_code() != TStatusCode.OK) {
+        if (groupCommitParallel == null || groupCommitParallel <= 0) {
+            status.setStatus_code(TStatusCode.INVALID_ARGUMENT);
+            status.setError_msgs(Collections.singletonList(
+                    "Group commit parallel must be set positive, but is " + groupCommitParallel));
             return null;
         }
 
         load = loadMap.computeIfAbsent(uniqueId, uid -> {
             long id = idGenerator.getAndIncrement();
             IsomorphicLoad newLoad = new IsomorphicLoad(
-                    id, tableId, params, groupCommitIntervalMs, groupCommitParallel,
-                    new ConnectContext(), coordinatorBeAssigner, threadPoolExecutor);
-            coordinatorBeAssigner.registerLoad(id, newLoad.getWarehouse(), tableId, newLoad.getGroupCommitParallel());
+                    id, tableId, warehouseName, streamLoadInfo, groupCommitIntervalMs, groupCommitParallel,
+                    new ConnectContext(), coordinatorBackendAssigner, threadPoolExecutor);
+            coordinatorBackendAssigner.registerLoad(id, newLoad.getWarehouse(), tableId, newLoad.getGroupCommitParallel());
             return newLoad;
         });
         return load;
-    }
-
-    private void checkServiceAvailable(TStatus status) {
-        String errMsg = null;
-        if (!Config.enable_group_commit) {
-            errMsg = "Group commit does not enable. You can set configuration 'enable_group_commit' on FE leader";
-        }
-        if (!isRunning()) {
-            errMsg = "Only FE leader can process group commit request, but current FE is not leader";
-        }
-
-        if (errMsg != null) {
-            status.setStatus_code(TStatusCode.SERVICE_UNAVAILABLE);
-            status.setError_msgs(Collections.singletonList(errMsg));
-        }
-    }
-
-    private void checkGroupCommitParameters(Integer groupCommitIntervalMs, Integer groupCommitParallel, TStatus status) {
-        if (groupCommitIntervalMs == null || groupCommitIntervalMs <= 0) {
-            status.setStatus_code(TStatusCode.INVALID_ARGUMENT);
-            status.setError_msgs(Collections.singletonList("Group commit interval must be set positive"));
-        }
-
-        if (groupCommitParallel == null || groupCommitParallel <= 0) {
-            status.setStatus_code(TStatusCode.INVALID_ARGUMENT);
-            status.setError_msgs(Collections.singletonList("Group commit parallel must be set positive"));
-        }
     }
 }

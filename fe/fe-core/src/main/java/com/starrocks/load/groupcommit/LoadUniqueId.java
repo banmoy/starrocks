@@ -28,14 +28,6 @@ public class LoadUniqueId {
         this.params = params;
     }
 
-    public TableId getTableId() {
-        return tableId;
-    }
-
-    public StreamLoadKvParams getParams() {
-        return params;
-    }
-
     @Override
     public boolean equals(Object o) {
         if (this == o) {

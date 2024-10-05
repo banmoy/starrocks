@@ -19,15 +19,13 @@ import com.starrocks.catalog.Database;
 import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.Table;
 import com.starrocks.common.LoadException;
+import com.starrocks.common.Pair;
 import com.starrocks.common.Status;
-import com.starrocks.common.UserException;
+import com.starrocks.common.util.DebugUtil;
 import com.starrocks.common.util.concurrent.lock.LockType;
 import com.starrocks.common.util.concurrent.lock.Locker;
 import com.starrocks.load.streamload.StreamLoadInfo;
-import com.starrocks.load.streamload.StreamLoadKvParams;
-import com.starrocks.load.streamload.StreamLoadTxnCommitAttachment;
 import com.starrocks.qe.ConnectContext;
-import com.starrocks.qe.DefaultCoordinator;
 import com.starrocks.qe.QeProcessorImpl;
 import com.starrocks.qe.scheduler.Coordinator;
 import com.starrocks.server.GlobalStateMgr;
@@ -36,14 +34,14 @@ import com.starrocks.thrift.TUniqueId;
 import com.starrocks.transaction.TabletCommitInfo;
 import com.starrocks.transaction.TabletFailInfo;
 import com.starrocks.transaction.TransactionState;
+import org.apache.arrow.util.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class GroupCommitLoadExecutor implements Runnable {
 
@@ -52,61 +50,62 @@ public class GroupCommitLoadExecutor implements Runnable {
     // Initialized in constructor ==================================
     private final TableId tableId;
     private final String label;
-    private final StreamLoadKvParams params;
+    private final TUniqueId loadId;
+    private final StreamLoadInfo streamLoadInfo;
     private final ConnectContext connectContext;
-    private final Set<Long> coordinatorBeIds;
+    private final Set<Long> coordinatorBackendIds;
     private final int groupCommitIntervalMs;
+    private final Coordinator.Factory coordinatorFactory;
     private final LoadExecuteCallback loadExecuteCallback;
-
     private final TimeTrace timeTrace;
-
-    // Initialized in prepare() ==================================
-    private long dbId;
-    private long tblId;
-    private StreamLoadInfo streamLoadInfo;
+    private final AtomicReference<Throwable> failure;
 
     // Initialized in beginTxn() ==================================
     private long txnId = -1;
 
     // Initialized in executeLoad() ==================================
+    private Coordinator coordinator;
     private List<TabletCommitInfo> tabletCommitInfo;
     private List<TabletFailInfo> tabletFailInfo;
-
-    private final AtomicBoolean failure = new AtomicBoolean(false);
 
     public GroupCommitLoadExecutor(
             TableId tableId,
             String label,
-            StreamLoadKvParams params,
-            ConnectContext connectContext,
-            Set<Long> coordinatorBeIds,
+            TUniqueId loadId,
+            StreamLoadInfo streamLoadInfo,
             int groupCommitIntervalMs,
+            ConnectContext connectContext,
+            Set<Long> coordinatorBackendIds,
+            Coordinator.Factory coordinatorFactory,
             LoadExecuteCallback loadExecuteCallback) {
         this.tableId = tableId;
         this.label = label;
-        this.params = params;
-        this.connectContext = connectContext;
-        this.coordinatorBeIds = coordinatorBeIds;
+        this.loadId = loadId;
+        this.streamLoadInfo = streamLoadInfo;
         this.groupCommitIntervalMs = groupCommitIntervalMs;
+        this.connectContext = connectContext;
+        this.coordinatorBackendIds = coordinatorBackendIds;
+        this.coordinatorFactory = coordinatorFactory;
         this.loadExecuteCallback = loadExecuteCallback;
         this.timeTrace = new TimeTrace();
+        this.failure = new AtomicReference<>();
     }
 
     @Override
     public void run() {
+        timeTrace.startRunTsMs.set(System.currentTimeMillis());
         try {
-            timeTrace.beginRunTimeMs.set(System.currentTimeMillis());
-            prepare();
             beginTxn();
             executeLoad();
             commitAndPublishTxn();
-            loadExecuteCallback.finishLoad(label);
         } catch (Throwable e) {
-            failure.set(true);
-            abortTxn();
+            failure.set(e);
+            abortTxn(e);
+            LOG.error("Failed to execute load, label: {}, load id: {}, txn id: {}",
+                    label, DebugUtil.printId(loadId), txnId, e);
         } finally {
-            timeTrace.finishTimeMs.set(System.currentTimeMillis());
             loadExecuteCallback.finishLoad(label);
+            timeTrace.finishTimeMs.set(System.currentTimeMillis());
         }
     }
 
@@ -114,82 +113,54 @@ public class GroupCommitLoadExecutor implements Runnable {
         return label;
     }
 
-    public boolean containCoordinatorBe(long backendId) {
-        return coordinatorBeIds.contains(backendId);
+    public boolean containCoordinatorBackend(long backendId) {
+        return coordinatorBackendIds.contains(backendId);
     }
 
     public boolean isActive() {
-        if (failure.get()) {
+        if (failure.get() != null) {
             return false;
         }
         long joinPlanTimeMs = timeTrace.joinPlanTimeMs.get();
         return joinPlanTimeMs <= 0 || (System.currentTimeMillis() - joinPlanTimeMs < groupCommitIntervalMs);
     }
 
-    private void prepare() throws Exception {
-        GlobalStateMgr globalStateMgr = GlobalStateMgr.getCurrentState();
-        Database db = globalStateMgr.getLocalMetastore().getDb(tableId.getDbName());
-        if (db == null) {
-            throw new UserException(String.format("Database %s does not exist", tableId.getDbName()));
-        }
-        dbId = db.getId();
-
-        Table table;
-        Locker locker = new Locker();
-        locker.lockDatabase(dbId, LockType.READ);
-        try {
-            table = GlobalStateMgr.getCurrentState()
-                    .getLocalMetastore().getTable(db.getFullName(), tableId.getTableName());
-        } finally {
-            locker.unLockDatabase(db.getId(), LockType.READ);
-        }
-        if (table == null) {
-            throw new UserException(String.format("Table %s does not exsit", tableId.getDbName()));
-        }
-        tblId = table.getId();
-
-        UUID uuid = UUID.randomUUID();
-        TUniqueId loadId = new TUniqueId(uuid.getMostSignificantBits(), uuid.getLeastSignificantBits());
-        // set txnId in beginTxn
-        streamLoadInfo = StreamLoadInfo.fromHttpStreamLoadRequest(loadId, -1, params);
+    public Throwable getFailure() {
+        return failure.get();
     }
 
     private void beginTxn() throws Exception {
-        timeTrace.beginTxnTimeMs.set(System.currentTimeMillis());
+        timeTrace.beginTxnTsMs.set(System.currentTimeMillis());
+        Pair<Database, OlapTable> pair = getDbAndTable();
         txnId = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().beginTransaction(
-                dbId, Lists.newArrayList(tblId), label,
+                pair.first.getId(), Lists.newArrayList(pair.second.getId()), label,
                 TransactionState.TxnCoordinator.fromThisFE(),
                 TransactionState.LoadJobSourceType.FRONTEND_STREAMING,
                 streamLoadInfo.getTimeout(), streamLoadInfo.getWarehouseId());
-        streamLoadInfo.setTxnId(txnId);
     }
 
     private void commitAndPublishTxn() throws Exception {
         timeTrace.commitTxnTimeMs.set(System.currentTimeMillis());
-        Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(tableId.getDbName());
-        if (db == null) {
-            throw new UserException(String.format("Database [%s] does not exist when commit transaction", tableId.getDbName()));
-        }
-
+        Pair<Database, OlapTable> pair = getDbAndTable();
         long publishTimeoutMs =
                 streamLoadInfo.getTimeout() * 1000L - (timeTrace.commitTxnTimeMs.get() - timeTrace.createTimeMs.get());
-        StreamLoadTxnCommitAttachment txnCommitAttachment = new StreamLoadTxnCommitAttachment(
-                0, 0, 0, 0, 0,
-                0, 0, 0, 0, null);
         boolean publishSuccess = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().commitAndPublishTransaction(
-                db, txnId, tabletCommitInfo, tabletFailInfo, publishTimeoutMs, txnCommitAttachment);
+                pair.first, txnId, tabletCommitInfo, tabletFailInfo, publishTimeoutMs, null);
         if (!publishSuccess) {
-            throw new UserException("Publish timeout");
+            throw new LoadException(String.format(
+                    "Publish timeout, total timeout time: %s ms, publish timeout time: %s ms",
+                        streamLoadInfo.getTimeout() * 1000, publishTimeoutMs));
         }
     }
 
-    private void abortTxn() {
+    private void abortTxn(Throwable reason) {
         if (txnId == -1) {
             return;
         }
         try {
+            Pair<Database, OlapTable> pair = getDbAndTable();
             GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().abortTransaction(
-                    dbId, txnId, "failed to execute group commit");
+                    pair.first.getId(), txnId, reason == null ? "" : reason.getMessage());
         } catch (Exception e) {
             LOG.error("Failed to abort transaction {}", txnId, e);
         }
@@ -197,66 +168,87 @@ public class GroupCommitLoadExecutor implements Runnable {
 
     private void executeLoad() throws Exception {
         timeTrace.executePlanTimeMs.set(System.currentTimeMillis());
-        Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(tableId.getDbName());
+        try {
+            Pair<Database, OlapTable> pair = getDbAndTable();
+            timeTrace.buildPlanTimeMs.set(System.currentTimeMillis());
+            LoadPlanner loadPlanner = new LoadPlanner(-1, loadId, txnId, pair.first.getId(),
+                    tableId.getDbName(), pair.second, streamLoadInfo.isStrictMode(), streamLoadInfo.getTimezone(),
+                    streamLoadInfo.isPartialUpdate(), connectContext, null,
+                    streamLoadInfo.getLoadMemLimit(), streamLoadInfo.getExecMemLimit(),
+                    streamLoadInfo.getNegative(), coordinatorBackendIds.size(), streamLoadInfo.getColumnExprDescs(),
+                    streamLoadInfo, label, streamLoadInfo.getTimeout());
+            loadPlanner.setWarehouseId(streamLoadInfo.getWarehouseId());
+            loadPlanner.setGroupCommit(groupCommitIntervalMs, coordinatorBackendIds);
+            loadPlanner.plan();
+
+            coordinator = coordinatorFactory.createStreamLoadScheduler(loadPlanner);
+            QeProcessorImpl.INSTANCE.registerQuery(loadId, coordinator);
+            timeTrace.executePlanTimeMs.set(System.currentTimeMillis());
+            coordinator.exec();
+
+            timeTrace.joinPlanTimeMs.set(System.currentTimeMillis());
+            int waitSecond = streamLoadInfo.getTimeout() -
+                    (int) (System.currentTimeMillis() - timeTrace.createTimeMs.get()) / 1000;
+            if (coordinator.join(waitSecond)) {
+                Status status = coordinator.getExecStatus();
+                if (!status.ok()) {
+                    throw new LoadException(
+                            String.format("Failed to execute load, status code: %s, error message: %s",
+                                    status.getErrorCodeString(), status.getErrorMsg()));
+                }
+                tabletCommitInfo = TabletCommitInfo.fromThrift(coordinator.getCommitInfos());
+                tabletFailInfo = TabletFailInfo.fromThrift(coordinator.getFailInfos());
+            } else {
+                throw new LoadException(
+                        String.format("Timeout to execute load after waiting for %s seconds", waitSecond));
+            }
+        } finally {
+            QeProcessorImpl.INSTANCE.unregisterQuery(loadId);
+        }
+    }
+
+    private Pair<Database, OlapTable> getDbAndTable() throws Exception {
+        GlobalStateMgr globalStateMgr = GlobalStateMgr.getCurrentState();
+        Database db = globalStateMgr.getLocalMetastore().getDb(tableId.getDbName());
         if (db == null) {
-            throw new UserException(String.format("Database [%s] does not exist when executing load", tableId.getDbName()));
+            throw new LoadException(String.format("Database %s does not exist", tableId.getDbName()));
         }
 
-        OlapTable table;
+        Table table;
         Locker locker = new Locker();
         locker.lockDatabase(db.getId(), LockType.READ);
         try {
-            table = (OlapTable) db.getTable(tableId.getTableName());
+            table = GlobalStateMgr.getCurrentState()
+                    .getLocalMetastore().getTable(db.getFullName(), tableId.getTableName());
         } finally {
             locker.unLockDatabase(db.getId(), LockType.READ);
         }
         if (table == null) {
-            throw new UserException(String.format("Table [%s].[%s] does not exist when executing load",
-                    tableId.getDbName(), tableId.getTableName()));
+            throw new LoadException(String.format(
+                    "Table [%s.%s] does not exist", tableId.getDbName(), tableId.getTableName()));
         }
+        return Pair.create(db, (OlapTable) table);
+    }
 
-        timeTrace.buildPlanTimeMs.set(System.currentTimeMillis());
-        LoadPlanner loadPlanner = new LoadPlanner(-1, streamLoadInfo.getId(), txnId, db.getId(),
-                tableId.getDbName(), table, streamLoadInfo.isStrictMode(), streamLoadInfo.getTimezone(),
-                streamLoadInfo.isPartialUpdate(), connectContext, null,
-                streamLoadInfo.getLoadMemLimit(), streamLoadInfo.getExecMemLimit(),
-                streamLoadInfo.getNegative(), coordinatorBeIds.size(),
-                streamLoadInfo.getColumnExprDescs(), streamLoadInfo, label, streamLoadInfo.getTimeout());
-        loadPlanner.setWarehouseId(streamLoadInfo.getWarehouseId());
-        loadPlanner.setGroupCommit(groupCommitIntervalMs, coordinatorBeIds);
-        loadPlanner.plan();
+    @VisibleForTesting
+    Set<Long> getCoordinatorBackendIds() {
+        return coordinatorBackendIds;
+    }
 
-        Coordinator coord = new DefaultCoordinator.Factory().createStreamLoadScheduler(loadPlanner);
-        try {
-            QeProcessorImpl.INSTANCE.registerQuery(streamLoadInfo.getId(), coord);
-            timeTrace.executePlanTimeMs.set(System.currentTimeMillis());
-            coord.exec();
+    @VisibleForTesting
+    Coordinator getCoordinator() {
+        return coordinator;
+    }
 
-            timeTrace.joinPlanTimeMs.set(System.currentTimeMillis());
-            int waitSecond = streamLoadInfo.getTimeout()
-                    - (int) (System.currentTimeMillis() - timeTrace.createTimeMs.get()) / 1000;
-            if (coord.join(waitSecond)) {
-                Status status = coord.getExecStatus();
-                if (!status.ok()) {
-                    throw new LoadException(status.getErrorMsg());
-                }
-            } else {
-                throw new LoadException("coordinator could not finished before job timeout");
-            }
-        } catch (Exception e) {
-            throw new UserException(e.getMessage());
-        } finally {
-            QeProcessorImpl.INSTANCE.unregisterQuery(streamLoadInfo.getId());
-        }
-
-        tabletCommitInfo = TabletCommitInfo.fromThrift(coord.getCommitInfos());
-        tabletFailInfo = TabletFailInfo.fromThrift(coord.getFailInfos());
+    @VisibleForTesting
+    TimeTrace getTimeTrace() {
+        return timeTrace;
     }
 
     static class TimeTrace {
         AtomicLong createTimeMs;
-        AtomicLong beginRunTimeMs = new AtomicLong(-1);
-        AtomicLong beginTxnTimeMs = new AtomicLong(-1);
+        AtomicLong startRunTsMs = new AtomicLong(-1);
+        AtomicLong beginTxnTsMs = new AtomicLong(-1);
         AtomicLong buildPlanTimeMs = new AtomicLong(-1);
         AtomicLong executePlanTimeMs = new AtomicLong(-1);
         AtomicLong joinPlanTimeMs = new AtomicLong(-1);

@@ -14,17 +14,14 @@
 
 package com.starrocks.load.groupcommit;
 
-public class GroupCommitException extends RuntimeException {
+import com.starrocks.system.ComputeNode;
+import com.starrocks.thrift.TStatus;
 
-    public GroupCommitException(String message) {
-        super(message);
-    }
+import java.util.List;
 
-    public GroupCommitException(String message, Throwable cause) {
-        super(message, cause);
-    }
+public class RequestCoordinatorBackendResult extends RequestResult<List<ComputeNode>> {
 
-    public GroupCommitException(Throwable cause) {
-        super(cause);
+    public RequestCoordinatorBackendResult(TStatus status, List<ComputeNode> result) {
+        super(status, result);
     }
 }
