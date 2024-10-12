@@ -15,6 +15,7 @@
 package com.starrocks.sql;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.starrocks.analysis.Analyzer;
@@ -146,8 +147,9 @@ public class LoadPlanner {
 
     // Only valid for stream load
     private boolean enableGroupCommit = false;
-    private int groupCommitIntervalMs = -1;
-    private Set<Long> groupCommitBackendIds = new HashSet<>();
+    private int groupCommitIntervalMs;
+    private ImmutableMap<String, String> groupCommitLoadParameters;
+    private Set<Long> groupCommitBackendIds;
 
     public LoadPlanner(long loadJobId, TUniqueId loadId, long txnId, long dbId, OlapTable destTable,
                        boolean strictMode, String timezone, long timeoutS,
@@ -246,10 +248,12 @@ public class LoadPlanner {
         return warehouseId;
     }
 
-    public void setGroupCommit(int groupCommitIntervalMs, Set<Long> groupCommitBackendIds) {
+    public void setGroupCommit(
+            int groupCommitIntervalMs, ImmutableMap<String, String> loadParameters, Set<Long> groupCommitBackendIds) {
         this.enableGroupCommit = true;
         this.groupCommitIntervalMs = groupCommitIntervalMs;
-        this.groupCommitBackendIds.addAll(groupCommitBackendIds);
+        this.groupCommitLoadParameters = loadParameters;
+        this.groupCommitBackendIds = new HashSet<>(groupCommitBackendIds);
     }
 
     public void setPartialUpdateMode(TPartialUpdateMode mode) {
@@ -431,7 +435,7 @@ public class LoadPlanner {
                     destTable, streamLoadInfo, dbName, label, parallelInstanceNum, txnId, warehouseId);
             streamScanNode.setNeedAssignBE(true);
             if (enableGroupCommit) {
-                streamScanNode.setGroupCommit(groupCommitIntervalMs, groupCommitBackendIds);
+                streamScanNode.setGroupCommit(groupCommitIntervalMs, groupCommitLoadParameters, groupCommitBackendIds);
             }
             streamScanNode.setUseVectorizedLoad(true);
             streamScanNode.init(analyzer);

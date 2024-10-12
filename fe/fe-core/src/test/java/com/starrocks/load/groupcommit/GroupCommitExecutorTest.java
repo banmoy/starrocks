@@ -14,6 +14,7 @@
 
 package com.starrocks.load.groupcommit;
 
+import com.google.common.collect.ImmutableMap;
 import com.starrocks.analysis.DescriptorTable;
 import com.starrocks.catalog.OlapTable;
 import com.starrocks.common.LoadException;
@@ -63,6 +64,7 @@ public class GroupCommitExecutorTest extends GroupCommitTestBase {
 
     private String label;
     private TUniqueId loadId;
+    StreamLoadKvParams kvParams;
     private StreamLoadInfo streamLoadInfo;
     private TestLoadExecuteCallback loadExecuteCallback;
 
@@ -108,6 +110,7 @@ public class GroupCommitExecutorTest extends GroupCommitTestBase {
                 loadId,
                 streamLoadInfo,
                 1000,
+                ImmutableMap.<String, String>builder().putAll(kvParams.toMap()).build(),
                 connectContext,
                 new HashSet<>(Arrays.asList(10002L, 10003L)),
                 coordinatorFactory,
@@ -142,6 +145,7 @@ public class GroupCommitExecutorTest extends GroupCommitTestBase {
                 loadId,
                 streamLoadInfo,
                 1000,
+                ImmutableMap.<String, String>builder().putAll(kvParams.toMap()).build(),
                 connectContext,
                 new HashSet<>(Arrays.asList(10002L, 10003L)),
                 coordinatorFactory,
@@ -172,6 +176,7 @@ public class GroupCommitExecutorTest extends GroupCommitTestBase {
                 loadId,
                 streamLoadInfo,
                 1000,
+                ImmutableMap.<String, String>builder().putAll(kvParams.toMap()).build(),
                 connectContext,
                 new HashSet<>(Arrays.asList(10002L, 10003L)),
                 coordinatorFactory,
@@ -198,6 +203,7 @@ public class GroupCommitExecutorTest extends GroupCommitTestBase {
                 loadId,
                 streamLoadInfo,
                 1000,
+                ImmutableMap.<String, String>builder().putAll(kvParams.toMap()).build(),
                 connectContext,
                 new HashSet<>(Arrays.asList(10002L, 10003L)),
                 coordinatorFactory,
@@ -232,6 +238,7 @@ public class GroupCommitExecutorTest extends GroupCommitTestBase {
                 loadId,
                 streamLoadInfo,
                 1000,
+                ImmutableMap.<String, String>builder().putAll(kvParams.toMap()).build(),
                 connectContext,
                 new HashSet<>(Arrays.asList(10002L, 10003L)),
                 coordinatorFactory,
@@ -260,6 +267,7 @@ public class GroupCommitExecutorTest extends GroupCommitTestBase {
                 loadId,
                 streamLoadInfo,
                 1000,
+                ImmutableMap.<String, String>builder().putAll(kvParams.toMap()).build(),
                 connectContext,
                 new HashSet<>(Arrays.asList(10002L, 10003L)),
                 coordinatorFactory,

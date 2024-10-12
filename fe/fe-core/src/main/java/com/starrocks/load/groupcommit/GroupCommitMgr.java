@@ -161,7 +161,7 @@ public class GroupCommitMgr extends FrontendDaemon {
             long id = idGenerator.getAndIncrement();
             IsomorphicLoad newLoad = new IsomorphicLoad(
                     id, tableId, warehouseName, streamLoadInfo, groupCommitIntervalMs, groupCommitParallel,
-                    new ConnectContext(), coordinatorBackendAssigner, threadPoolExecutor);
+                    params.toMap(), new ConnectContext(), coordinatorBackendAssigner, threadPoolExecutor);
             coordinatorBackendAssigner.registerLoad(id, newLoad.getWarehouse(), tableId, newLoad.getGroupCommitParallel());
             return newLoad;
         });

@@ -283,6 +283,7 @@ struct TBrokerScanRange {
     // available when this is a stream load in group commit mode
     5: optional bool enable_group_commit
     6: optional i32 group_commit_interval_ms
+    7: optional map<string, string> group_commit_load_parameters;
 }
 
 // Es scan range

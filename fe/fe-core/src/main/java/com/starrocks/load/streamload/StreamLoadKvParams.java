@@ -19,6 +19,7 @@ import com.starrocks.thrift.TFileType;
 import com.starrocks.thrift.TPartialUpdateMode;
 import io.netty.handler.codec.http.HttpHeaders;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -351,6 +352,10 @@ public class StreamLoadKvParams implements StreamLoadParams {
             return Optional.empty();
         }
         return Optional.of(Integer.parseInt(parallel));
+    }
+
+    public Map<String, String> toMap() {
+        return Collections.unmodifiableMap(params);
     }
 
     @Override

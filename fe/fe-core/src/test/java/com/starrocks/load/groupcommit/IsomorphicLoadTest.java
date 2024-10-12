@@ -82,6 +82,7 @@ public class IsomorphicLoadTest extends GroupCommitTestBase {
                 streamLoadInfo,
                 1000,
                 parallel,
+                params.toMap(),
                 connectContext,
                 assigner,
                 executor);

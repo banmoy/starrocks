@@ -14,6 +14,7 @@
 
 package com.starrocks.load.groupcommit;
 
+import com.google.common.collect.ImmutableMap;
 import com.starrocks.common.util.DebugUtil;
 import com.starrocks.common.util.UUIDUtil;
 import com.starrocks.load.streamload.StreamLoadInfo;
@@ -31,6 +32,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -50,6 +52,7 @@ public class IsomorphicLoad implements LoadExecuteCallback {
     private final StreamLoadInfo streamLoadInfo;
     private final int groupCommitIntervalMs;
     private final int groupCommitParallel;
+    private final ImmutableMap<String, String> loadParameters;
     private final ConnectContext connectContext;
     private final CoordinatorBackendAssigner coordinatorBackendAssigner;
     private final Executor executor;
@@ -64,6 +67,7 @@ public class IsomorphicLoad implements LoadExecuteCallback {
             StreamLoadInfo streamLoadInfo,
             int groupCommitIntervalMs,
             int groupCommitParallel,
+            Map<String, String> loadParameters,
             ConnectContext connectContext,
             CoordinatorBackendAssigner coordinatorBackendAssigner,
             Executor executor) {
@@ -73,6 +77,7 @@ public class IsomorphicLoad implements LoadExecuteCallback {
         this.streamLoadInfo = streamLoadInfo;
         this.groupCommitIntervalMs = groupCommitIntervalMs;
         this.groupCommitParallel = groupCommitParallel;
+        this.loadParameters = ImmutableMap.<String, String>builder().putAll(loadParameters).build();
         this.connectContext = connectContext;
         this.coordinatorBackendAssigner = coordinatorBackendAssigner;
         this.executor = executor;
@@ -174,7 +179,7 @@ public class IsomorphicLoad implements LoadExecuteCallback {
             String label = LABEL_PREFIX + DebugUtil.printId(UUIDUtil.toTUniqueId(UUID.randomUUID()));
             TUniqueId loadId = UUIDUtil.toTUniqueId(UUID.randomUUID());
             GroupCommitLoadExecutor loadExecutor = new GroupCommitLoadExecutor(
-                    tableId, label, loadId, streamLoadInfo, groupCommitIntervalMs,
+                    tableId, label, loadId, streamLoadInfo, groupCommitIntervalMs, loadParameters,
                     connectContext, backendIds, coordinatorFactory, this);
             loadExecutorMap.put(label, loadExecutor);
             try {

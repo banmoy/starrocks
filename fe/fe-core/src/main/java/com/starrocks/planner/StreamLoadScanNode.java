@@ -34,6 +34,7 @@
 
 package com.starrocks.planner;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.starrocks.analysis.Analyzer;
@@ -120,8 +121,9 @@ public class StreamLoadScanNode extends LoadScanNode {
     private boolean needAssignBE;
 
     private boolean enableGroupCommit = false;
-    private int groupCommitIntervalMs = -1;
-    private Set<Long> groupCommitBackendIds = new HashSet<>();
+    private int groupCommitIntervalMs;
+    private ImmutableMap<String, String> groupCommitLoadParameters;
+    private Set<Long> groupCommitBackendIds;
 
     private List<Backend> backends;
     private int nextBe = 0;
@@ -181,11 +183,12 @@ public class StreamLoadScanNode extends LoadScanNode {
         this.needAssignBE = needAssignBE;
     }
 
-    public void setGroupCommit(int groupCommitIntervalMs, Set<Long> groupCommitBackendIds) {
+    public void setGroupCommit(int groupCommitIntervalMs, ImmutableMap<String, String> loadParameters, Set<Long> groupCommitBackendIds) {
         setNeedAssignBE(true);
         this.enableGroupCommit = true;
         this.groupCommitIntervalMs = groupCommitIntervalMs;
-        this.groupCommitBackendIds.addAll(groupCommitBackendIds);
+        this.groupCommitLoadParameters = loadParameters;
+        this.groupCommitBackendIds = new HashSet<>(groupCommitBackendIds);
     }
 
     public boolean nullExprInAutoIncrement() {
@@ -426,6 +429,7 @@ public class StreamLoadScanNode extends LoadScanNode {
                 brokerScanRange.setChannel_id(curChannelId++);
                 brokerScanRange.setEnable_group_commit(enableGroupCommit);
                 brokerScanRange.setGroup_commit_interval_ms(groupCommitIntervalMs);
+                brokerScanRange.setGroup_commit_load_parameters(groupCommitLoadParameters);
             }
             TScanRangeLocations locations = new TScanRangeLocations();
             TScanRange scanRange = new TScanRange();

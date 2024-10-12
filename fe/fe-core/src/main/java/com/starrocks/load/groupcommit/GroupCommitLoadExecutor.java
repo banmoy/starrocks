@@ -14,6 +14,7 @@
 
 package com.starrocks.load.groupcommit;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.starrocks.catalog.Database;
 import com.starrocks.catalog.OlapTable;
@@ -52,6 +53,7 @@ public class GroupCommitLoadExecutor implements Runnable {
     private final String label;
     private final TUniqueId loadId;
     private final StreamLoadInfo streamLoadInfo;
+    private final ImmutableMap<String, String> loadParameters;
     private final ConnectContext connectContext;
     private final Set<Long> coordinatorBackendIds;
     private final int groupCommitIntervalMs;
@@ -74,6 +76,7 @@ public class GroupCommitLoadExecutor implements Runnable {
             TUniqueId loadId,
             StreamLoadInfo streamLoadInfo,
             int groupCommitIntervalMs,
+            ImmutableMap<String, String> loadParameters,
             ConnectContext connectContext,
             Set<Long> coordinatorBackendIds,
             Coordinator.Factory coordinatorFactory,
@@ -83,6 +86,7 @@ public class GroupCommitLoadExecutor implements Runnable {
         this.loadId = loadId;
         this.streamLoadInfo = streamLoadInfo;
         this.groupCommitIntervalMs = groupCommitIntervalMs;
+        this.loadParameters = loadParameters;
         this.connectContext = connectContext;
         this.coordinatorBackendIds = coordinatorBackendIds;
         this.coordinatorFactory = coordinatorFactory;
@@ -178,7 +182,7 @@ public class GroupCommitLoadExecutor implements Runnable {
                     streamLoadInfo.getNegative(), coordinatorBackendIds.size(), streamLoadInfo.getColumnExprDescs(),
                     streamLoadInfo, label, streamLoadInfo.getTimeout());
             loadPlanner.setWarehouseId(streamLoadInfo.getWarehouseId());
-            loadPlanner.setGroupCommit(groupCommitIntervalMs, coordinatorBackendIds);
+            loadPlanner.setGroupCommit(groupCommitIntervalMs, loadParameters, coordinatorBackendIds);
             loadPlanner.plan();
 
             coordinator = coordinatorFactory.createStreamLoadScheduler(loadPlanner);
