@@ -529,12 +529,6 @@ Status PlanFragmentExecutor::_prepare_stream_load_pipe(const TExecPlanFragmentPa
             StreamLoadContext* ctx = nullptr;
             RETURN_IF_ERROR(_exec_env->stream_context_mgr()->create_channel_context(
                     _exec_env, label, channel_id, db_name, table_name, format, ctx, load_id, txn_id));
-            DeferOp op([&] {
-                if (ctx->unref()) {
-                    delete ctx;
-                }
-            });
-            RETURN_IF_ERROR(_exec_env->stream_context_mgr()->put_channel_context(label, channel_id, ctx));
             _stream_load_contexts.push_back(ctx);
         }
     }

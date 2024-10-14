@@ -96,6 +96,7 @@ public:
         RETURN_IF_ERROR(exec_env->load_stream_mgr()->put(load_id, pipe));
         ctx = new StreamLoadContext(exec_env, load_id);
         if (ctx == nullptr) {
+            exec_env->load_stream_mgr()->remove(load_id);
             return Status::InternalError("allocate stream load context fail");
         }
         ctx->ref();
@@ -116,10 +117,6 @@ public:
         ctx->body_sink = pipe;
         ctx->txn_id = txn_id;
 
-        return Status::OK();
-    }
-
-    Status put_channel_context(const string& label, int channel_id, StreamLoadContext* ctx) {
         std::lock_guard<std::mutex> l(_lock);
         auto it = _channel_stream_map.find(label);
         if (it == std::end(_channel_stream_map)) {
@@ -129,10 +126,10 @@ public:
         auto& label_channel_map = it->second;
         auto it2 = label_channel_map.find(channel_id);
         if (it2 != std::end(label_channel_map)) {
+            delete ctx;
             return Status::InternalError("channel id " + std::to_string(channel_id) + " for label " + label +
                                          " already exist");
         }
-        ctx->ref();
         label_channel_map.emplace(channel_id, ctx);
         LOG(INFO) << "stream load: " << label << ", channel_id: " << std::to_string(channel_id) << " start pipe";
         return Status::OK();

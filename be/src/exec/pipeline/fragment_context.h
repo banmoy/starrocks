@@ -125,7 +125,7 @@ public:
 
     bool enable_cache() const { return _enable_cache; }
 
-    void set_stream_load_contexts(const std::vector<StreamLoadContext*>& contexts);
+    void set_stream_load_channel_contexts(const std::vector<StreamLoadContext*>& contexts);
 
     void set_enable_adaptive_dop(bool val) { _enable_adaptive_dop = val; }
     bool enable_adaptive_dop() const { return _enable_adaptive_dop; }
@@ -208,8 +208,7 @@ private:
 
     query_cache::CacheParam _cache_param;
     bool _enable_cache = false;
-    std::vector<StreamLoadContext*> _stream_load_contexts;
-    bool _channel_stream_load = false;
+    std::vector<StreamLoadContext*> _stream_load_channel_contexts;
 
     // STREAM MV
     std::atomic<size_t> _num_finished_epoch_pipelines = 0;

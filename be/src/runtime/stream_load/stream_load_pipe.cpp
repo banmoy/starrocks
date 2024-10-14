@@ -242,7 +242,7 @@ void StreamLoadPipe::cancel(const Status& status) {
         std::lock_guard<std::mutex> l(_lock);
         _cancelled = true;
         if (_err_st.ok()) {
-            _err_st = status;
+            _err_st = status.ok() ? status : Status::Cancelled("Cancelled without an external error");
         }
     }
     _get_cond.notify_all();
