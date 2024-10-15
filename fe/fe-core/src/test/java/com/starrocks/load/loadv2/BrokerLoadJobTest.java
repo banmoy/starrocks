@@ -449,6 +449,37 @@ public class BrokerLoadJobTest {
     }
 
     @Test
+    public void testTaskAbortTransactionOnTimeoutFailure(@Mocked GlobalTransactionMgr globalTransactionMgr,
+            @Injectable long taskId, @Injectable FailMsg failMsg) throws UserException {
+        new Expectations() {
+            {
+                globalTransactionMgr.abortTransaction(anyLong, anyLong, anyString);
+                times = 1;
+            }
+        };
+
+        BrokerLoadJob brokerLoadJob = new BrokerLoadJob();
+        failMsg = new FailMsg(FailMsg.CancelType.UNKNOWN, "[E1008]Reached timeout=7200000ms @127.0.0.1:8060");
+        brokerLoadJob.onTaskFailed(taskId, failMsg);
+
+        new Expectations() {
+            {
+                globalTransactionMgr.abortTransaction(anyLong, anyLong, anyString);
+                times = 1;
+                result = new UserException("Artificial exception");
+            }
+        };
+
+        try {
+            BrokerLoadJob brokerLoadJob1 = new BrokerLoadJob();
+            failMsg = new FailMsg(FailMsg.CancelType.UNKNOWN, "[E1008]Reached timeout=7200000ms @127.0.0.1:8060");
+            brokerLoadJob1.onTaskFailed(taskId, failMsg);
+        } catch (Exception e) {
+            Assert.fail("should not throw exception");
+        }
+    }
+
+    @Test
     public void testPendingTaskOnFinishedWithJobCancelled(@Injectable BrokerPendingTaskAttachment attachment) {
         BrokerLoadJob brokerLoadJob = new BrokerLoadJob();
         Deencapsulation.setField(brokerLoadJob, "state", JobState.CANCELLED);
