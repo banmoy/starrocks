@@ -1483,4 +1483,6 @@ CONF_mBool(enable_bit_unpack_simd, "true");
 
 CONF_mInt32(max_committed_without_schema_rowset, "1000");
 
+CONF_mBool(load_debug_block, "false");
+
 } // namespace starrocks::config

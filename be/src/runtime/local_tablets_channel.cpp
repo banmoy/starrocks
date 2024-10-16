@@ -391,6 +391,13 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
     _flush_stale_memtables();
 
     if (close_channel) {
+        if (config::load_debug_block) {
+            int64_t timeout = request.timeout_ms() * 2;
+            LOG(INFO) << "Begin to block, timeout: " << timeout;
+            bthread_usleep(timeout * 1000);
+            LOG(INFO) << "Stop to block, timeout: " << timeout;
+        }
+
         // persist txn.
         std::vector<TabletSharedPtr> tablets;
         tablets.reserve(request.tablet_ids().size());
