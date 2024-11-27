@@ -220,6 +220,13 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
                     tableId, label, loadId, streamLoadInfo, batchWriteIntervalMs, loadParameters,
                     backendIds, queryCoordinatorFactory, this);
             loadExecutorMap.put(label, loadExecutor);
+            if (LOG.isDebugEnabled()) {
+                Set<String> backends = requestCoordinatorBackendResult.getValue().stream()
+                        .map(ComputeNode::getHost).collect(Collectors.toSet());
+                backends.add(backendHost);
+                LOG.debug("Create load executor, db: {}, table: {}, label: {}, load id: {}, backends: {}",
+                        tableId.getDbName(), tableId.getTableName(), label, loadId, backends);
+            }
             try {
                 executor.execute(loadExecutor);
             } catch (Exception e) {
