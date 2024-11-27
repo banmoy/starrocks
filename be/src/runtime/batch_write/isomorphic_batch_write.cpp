@@ -365,7 +365,7 @@ Status IsomorphicBatchWrite::_wait_for_stream_load_pipe() {
     if (!_alive_stream_load_pipe_ctxs.empty()) {
         return Status::OK();
     }
-    return Status::TimedOut("");
+    return Status::TimedOut("wait for stream load pipe timeout");
 }
 
 Status IsomorphicBatchWrite::_send_rpc_request(StreamLoadContext* data_ctx) {
