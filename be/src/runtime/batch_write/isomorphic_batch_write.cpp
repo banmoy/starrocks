@@ -318,26 +318,44 @@ Status IsomorphicBatchWrite::_execute_write(AsyncAppendDataContext* async_ctx) {
 }
 
 Status IsomorphicBatchWrite::_write_data(AsyncAppendDataContext* async_ctx) {
-    // TODO write data outside the lock
-    std::unique_lock<std::mutex> lock(_mutex);
-    Status st;
     StreamLoadContext* data_ctx = async_ctx->data_ctx();
-    for (auto it = _alive_stream_load_pipe_ctxs.begin(); it != _alive_stream_load_pipe_ctxs.end();) {
-        StreamLoadContext* pipe_ctx = *it;
+    // the pipe is dead if append fails
+    StreamLoadContext* dead_ctx = nullptr;
+    Status st = Status::CapacityLimitExceed("No available stream load pipe, and please retry later");
+    while (true) {
+        StreamLoadContext* pipe_ctx = nullptr;
+        {
+            std::unique_lock<std::mutex> lock(_mutex);
+            // move the dead pipe to dead
+            if (dead_ctx && _alive_stream_load_pipe_ctxs.erase(dead_ctx)) {
+                _dead_stream_load_pipe_ctxs.emplace(dead_ctx);
+            }
+            if (!_alive_stream_load_pipe_ctxs.empty()) {
+                pipe_ctx = *(_alive_stream_load_pipe_ctxs.begin());
+                pipe_ctx->ref();
+            }
+        }
+        if (dead_ctx) {
+            StreamLoadContext::release(dead_ctx);
+            dead_ctx = nullptr;
+        }
+        if (!pipe_ctx) {
+            break;
+        }
         // add reference to the buffer to avoid being released if append fails
         ByteBufferPtr buffer = data_ctx->buffer;
-        st = pipe_ctx->body_sink->append(std::move(buffer));
+        st = pipe_ctx->body_sink->append(std::move(data_ctx->buffer));
         if (st.ok()) {
             data_ctx->buffer.reset();
             async_ctx->pipe_left_active_ns.store(
                     static_cast<TimeBoundedStreamLoadPipe*>(pipe_ctx->body_sink.get())->left_active_ns());
             async_ctx->set_txn(pipe_ctx->txn_id, pipe_ctx->label);
-            return st;
+            StreamLoadContext::release(pipe_ctx);
+            break;
         }
-        _dead_stream_load_pipe_ctxs.emplace(pipe_ctx);
-        it = _alive_stream_load_pipe_ctxs.erase(it);
+        dead_ctx = pipe_ctx;
     }
-    return st.ok() ? Status::CapacityLimitExceed("") : st;
+    return st;
 }
 
 Status IsomorphicBatchWrite::_wait_for_stream_load_pipe() {
