@@ -57,6 +57,16 @@ public class LoadExecutor implements Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(LoadExecutor.class);
 
+    enum LoadState {
+        INITIALIZED,
+        BEGIN_TXN,
+        BUILD_PLAN,
+        DEPLOY_PLAN,
+        JOIN_PLAN,
+        COMMIT_TXN,
+        FINISHED
+    }
+
     // Initialized in constructor ==================================
     private final TableId tableId;
     private final String label;
@@ -69,6 +79,7 @@ public class LoadExecutor implements Runnable {
     private final LoadExecuteCallback loadExecuteCallback;
     private final TimeTrace timeTrace;
     private final AtomicReference<Throwable> failure;
+    private volatile LoadState loadState;
 
     // Initialized in beginTxn() ==================================
     private long txnId = -1;
@@ -100,6 +111,7 @@ public class LoadExecutor implements Runnable {
         this.loadExecuteCallback = loadExecuteCallback;
         this.timeTrace = new TimeTrace();
         this.failure = new AtomicReference<>();
+        this.loadState = LoadState.INITIALIZED;
     }
 
     @Override
@@ -116,6 +128,7 @@ public class LoadExecutor implements Runnable {
         } finally {
             loadExecuteCallback.finishLoad(label);
             timeTrace.finishTimeMs = System.currentTimeMillis();
+            loadState = LoadState.FINISHED;
             LOG.debug("Finish load, label: {}, load id: {}, txn_id: {}, {}",
                     label, DebugUtil.printId(loadId), txnId, timeTrace.summary());
         }
@@ -143,6 +156,10 @@ public class LoadExecutor implements Runnable {
         return joinPlanTimeMs <= 0 || (System.currentTimeMillis() - joinPlanTimeMs < batchWriteIntervalMs);
     }
 
+    public LoadState getLoadState() {
+        return loadState;
+    }
+
     public Throwable getFailure() {
         return failure.get();
     }
@@ -155,6 +172,7 @@ public class LoadExecutor implements Runnable {
                 TransactionState.TxnCoordinator.fromThisFE(),
                 TransactionState.LoadJobSourceType.FRONTEND_STREAMING,
                 streamLoadInfo.getTimeout(), streamLoadInfo.getWarehouseId());
+        loadState = LoadState.BEGIN_TXN;
     }
 
     private void commitAndPublishTxn() throws Exception {
@@ -168,6 +186,7 @@ public class LoadExecutor implements Runnable {
             LOG.warn("Publish timeout, txn_id: {}, label: {}, total timeout: {} ms, publish timeout: {} ms",
                         txnId, label, streamLoadInfo.getTimeout() * 1000, publishTimeoutMs);
         }
+        loadState = LoadState.COMMIT_TXN;
     }
 
     private void abortTxn(Throwable reason) {
@@ -206,10 +225,12 @@ public class LoadExecutor implements Runnable {
                     ImmutableMap.<String, String>builder()
                             .putAll(loadParameters.toMap()).build(), coordinatorBackendIds);
             loadPlanner.plan();
+            loadState = LoadState.BUILD_PLAN;
             timeTrace.deployPlanTimeMs = System.currentTimeMillis();
             coordinator = coordinatorFactory.createStreamLoadScheduler(loadPlanner);
             QeProcessorImpl.INSTANCE.registerQuery(loadId, coordinator);
             coordinator.exec();
+            loadState = LoadState.DEPLOY_PLAN;
             int waitSecond = streamLoadInfo.getTimeout() -
                     (int) (System.currentTimeMillis() - timeTrace.createTimeMs) / 1000;
             timeTrace.joinPlanTimeMs.set(System.currentTimeMillis());
@@ -248,6 +269,7 @@ public class LoadExecutor implements Runnable {
                 throw new LoadException(
                         String.format("Timeout to execute load after waiting for %s seconds", waitSecond));
             }
+            loadState = LoadState.JOIN_PLAN;
         } finally {
             QeProcessorImpl.INSTANCE.unregisterQuery(loadId);
         }

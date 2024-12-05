@@ -178,6 +178,9 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
         try {
             for (LoadExecutor loadExecutor : loadExecutorMap.values()) {
                 if (loadExecutor.isActive() && loadExecutor.containCoordinatorBackend(backendId)) {
+                    LOG.debug("Load executor is active, db: {}, table: {}, label: {}, state: {}",
+                            tableId.getDbName(), tableId.getTableName(), loadExecutor.getLabel(),
+                            loadExecutor.getLoadState());
                     status.setStatus_code(TStatusCode.OK);
                     return new RequestLoadResult(status, loadExecutor.getLabel());
                 }
