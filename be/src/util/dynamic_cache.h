@@ -72,7 +72,7 @@ public:
 
     DynamicCache(size_t capacity) : _size(0), _capacity(capacity) {}
     ~DynamicCache() {
-        std::lock_guard<std::mutex> lg(_lock);
+        std::lock_guard<bthread::Mutex> lg(_lock);
         _object_size = 0;
         _size = 0;
         auto itr = _list.begin();
