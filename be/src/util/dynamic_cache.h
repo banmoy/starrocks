@@ -339,7 +339,7 @@ public:
                 entry_list.push_back(entry);
             }
         }
-        return std::move(entry_list);
+        return entry_list;
     }
 
     bool TEST_evict(size_t target_capacity, std::vector<Entry*>* entry_list) {

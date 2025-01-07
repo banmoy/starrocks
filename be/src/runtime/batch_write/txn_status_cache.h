@@ -34,8 +34,8 @@ class TxnStatusHolder {
 public:
     void update_txn_status(TTransactionStatus::type new_status, const std::string& reason);
 
-    void inc_waiter();
-    void dec_waiter();
+    void add_waiter();
+    void release_waiter();
     Status wait_final_status(TxnStatusWaiter* waiter, int64_t timeout_us);
 
     void set_txn_id(int64_t txn_id) { _txn_id.store(txn_id); }
@@ -57,6 +57,16 @@ private:
     bool _stopped{false};
 };
 
+inline void TxnStatusHolder::add_waiter() {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    _num_waiter++;
+}
+
+inline void TxnStatusHolder::release_waiter() {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    _num_waiter--;
+}
+
 inline std::ostream& operator<<(std::ostream& os, TxnStatusHolder& holder) {
     os << holder.debug_string();
     return os;
@@ -66,11 +76,11 @@ class TxnStatusWaiter {
 public:
     TxnStatusWaiter(TxnStatusDynamicCache* cache, TxnStatusDynamicCacheEntry* entry, const std::string& name)
             : _cache(cache), _entry(entry), _name(name) {
-        _entry->value().inc_waiter();
+        _entry->value().add_waiter();
     }
 
     ~TxnStatusWaiter() {
-        _entry->value().dec_waiter();
+        _entry->value().release_waiter();
         _cache->release(_entry);
     }
 

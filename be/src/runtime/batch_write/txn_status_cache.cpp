@@ -53,16 +53,6 @@ void TxnStatusHolder::update_txn_status(TTransactionStatus::type new_status, con
     }
 }
 
-inline void TxnStatusHolder::inc_waiter() {
-    std::unique_lock<bthread::Mutex> lock(_mutex);
-    _num_waiter++;
-}
-
-inline void TxnStatusHolder::dec_waiter() {
-    std::unique_lock<bthread::Mutex> lock(_mutex);
-    _num_waiter--;
-}
-
 Status TxnStatusHolder::wait_final_status(TxnStatusWaiter* waiter, int64_t timeout_us) {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     if (is_final_txn_status(_txn_status)) {
