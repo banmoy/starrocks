@@ -114,7 +114,7 @@ public class LoadExecutor implements Runnable {
             LOG.error("Failed to execute load, label: {}, load id: {}, txn id: {}",
                     label, DebugUtil.printId(loadId), txnId, e);
         } finally {
-            loadExecuteCallback.finishLoad(label);
+            loadExecuteCallback.finishLoad(this);
             timeTrace.finishTimeMs = System.currentTimeMillis();
             LOG.debug("Finish load, label: {}, load id: {}, txn_id: {}, {}",
                     label, DebugUtil.printId(loadId), txnId, timeTrace.summary());

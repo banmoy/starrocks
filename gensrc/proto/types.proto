@@ -104,9 +104,9 @@ enum WriteQuorumTypePB {
 }
 
 enum TxnTypePB {
-     TXN_NORMAL = 0;
-     TXN_REPLICATION = 1;
-     TXN_EMPTY = 2;
+    TXN_NORMAL = 0;
+    TXN_REPLICATION = 1;
+    TXN_EMPTY = 2;
 }
 
 enum ReplicationTxnStatePB {
@@ -124,17 +124,17 @@ enum IndexType {
     VECTOR = 4;
 }
 
- message ReplicationTxnMetaPB {
-     optional int64 txn_id = 1;
-     optional ReplicationTxnStatePB txn_state = 2;
-     optional int64 tablet_id = 3;
-     optional int64 visible_version = 4;
-     optional string src_backend_host = 5;
-     optional int32 src_backend_port = 6;
-     optional string src_snapshot_path = 7;
-     optional int64 snapshot_version = 8;
-     optional bool incremental_snapshot = 9;
- }
+message ReplicationTxnMetaPB {
+    optional int64 txn_id = 1;
+    optional ReplicationTxnStatePB txn_state = 2;
+    optional int64 tablet_id = 3;
+    optional int64 visible_version = 4;
+    optional string src_backend_host = 5;
+    optional int32 src_backend_port = 6;
+    optional string src_snapshot_path = 7;
+    optional int64 snapshot_version = 8;
+    optional bool incremental_snapshot = 9;
+}
 
 // Used to store additional information about a txn when it is finished/visible
 // It will be serialized with TransactionState
@@ -204,4 +204,20 @@ message PersistentIndexSstablePB {
 message PersistentIndexSstableMetaPB {
     // sstables are ordered with the smaller version on the left.
     repeated PersistentIndexSstablePB sstables = 1;
+}
+
+enum TransactionStatusPB {
+    UNKNOWN = 0;
+    PREPARE = 1;
+    COMMITTED = 2;
+    VISIBLE = 3;
+    ABORTED = 4;
+    PREPARED = 5;
+}
+
+message TransactionStatePB {
+    optional int64 txn_id = 1;
+    optional string label = 2;
+    optional TransactionStatusPB status = 3;
+    optional string reason = 4;
 }

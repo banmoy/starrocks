@@ -248,10 +248,10 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
     }
 
     @Override
-    public void finishLoad(String label) {
+    public void finishLoad(LoadExecutor executor) {
         lock.writeLock().lock();
         try {
-            loadExecutorMap.remove(label);
+            loadExecutorMap.remove(executor.getLabel());
         } finally {
             lock.writeLock().unlock();
         }
