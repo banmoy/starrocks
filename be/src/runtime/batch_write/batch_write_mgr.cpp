@@ -25,6 +25,10 @@
 
 namespace starrocks {
 
+BatchWriteMgr::BatchWriteMgr(std::unique_ptr<bthreads::ThreadPoolExecutor> executor)
+        : _executor(std::move(executor)),
+          _txn_status_cache(new TxnStatusCache(config::merge_commit_txn_status_cache_capacity)) {}
+
 Status BatchWriteMgr::register_stream_load_pipe(StreamLoadContext* pipe_ctx) {
     BatchWriteId batch_write_id = {
             .db = pipe_ctx->db, .table = pipe_ctx->table, .load_params = pipe_ctx->load_parameters};
@@ -78,7 +82,7 @@ StatusOr<IsomorphicBatchWriteSharedPtr> BatchWriteMgr::_get_batch_write(const st
         return it->second;
     }
 
-    auto batch_write = std::make_shared<IsomorphicBatchWrite>(batch_write_id, _executor.get());
+    auto batch_write = std::make_shared<IsomorphicBatchWrite>(batch_write_id, _executor.get(), _txn_status_cache.get());
     Status st = batch_write->init();
     if (!st.ok()) {
         LOG(ERROR) << "Fail to init batch write, " << batch_write_id << ", status: " << st;
@@ -105,6 +109,7 @@ void BatchWriteMgr::stop() {
     for (auto& batch_write : stop_writes) {
         batch_write->stop();
     }
+    _txn_status_cache->stop();
 }
 
 StatusOr<StreamLoadContext*> BatchWriteMgr::create_and_register_pipe(

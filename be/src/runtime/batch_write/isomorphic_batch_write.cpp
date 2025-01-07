@@ -119,8 +119,9 @@ public:
     std::atomic_int num_retries{-1};
 };
 
-IsomorphicBatchWrite::IsomorphicBatchWrite(BatchWriteId batch_write_id, bthreads::ThreadPoolExecutor* executor)
-        : _batch_write_id(std::move(batch_write_id)), _executor(executor) {}
+IsomorphicBatchWrite::IsomorphicBatchWrite(BatchWriteId batch_write_id, bthreads::ThreadPoolExecutor* executor,
+                                           TxnStatusCache* _txn_status_cache)
+        : _batch_write_id(std::move(batch_write_id)), _executor(executor), _txn_status_cache(_txn_status_cache) {}
 
 Status IsomorphicBatchWrite::init() {
     TEST_ERROR_POINT("IsomorphicBatchWrite::init::error");
@@ -258,10 +259,7 @@ Status IsomorphicBatchWrite::append_data(StreamLoadContext* data_ctx) {
     if (_batch_write_async) {
         return Status::OK();
     }
-    int64_t timeout_ms =
-            data_ctx->timeout_second > 0 ? data_ctx->timeout_second * 1000 : config::batch_write_default_timeout_ms;
-    int64_t left_timeout_ns = std::max((int64_t)0, timeout_ms * 1000 * 1000 - (MonotonicNanos() - start_ts));
-    return _wait_for_load_status(data_ctx, left_timeout_ns);
+    return _wait_for_load_status(data_ctx);
 }
 
 int IsomorphicBatchWrite::_execute_tasks(void* meta, bthread::TaskIterator<Task>& iter) {
@@ -418,78 +416,39 @@ Status IsomorphicBatchWrite::_send_rpc_request(StreamLoadContext* data_ctx) {
     return st.ok() ? Status(response.status) : st;
 }
 
-bool is_final_load_status(const TTransactionStatus::type& status) {
-    switch (status) {
-    case TTransactionStatus::VISIBLE:
-    case TTransactionStatus::ABORTED:
-    case TTransactionStatus::UNKNOWN:
-        return true;
-    default:
-        return false;
-    }
-}
-
-// TODO just poll the load status periodically. improve it later, such as cache the label, and FE notify the BE
-Status IsomorphicBatchWrite::_wait_for_load_status(StreamLoadContext* data_ctx, int64_t timeout_ns) {
+Status IsomorphicBatchWrite::_wait_for_load_status(StreamLoadContext* data_ctx) {
+    int64_t total_timeout_ms =
+            data_ctx->timeout_second > 0 ? data_ctx->timeout_second * 1000 : config::batch_write_default_timeout_ms;
+    int64_t left_timeout_ns =
+            std::max((int64_t)0, total_timeout_ms * 1000000 - (MonotonicNanos() - data_ctx->start_nanos));
+    int64_t wait_commit_ns =
+            data_ctx->mc_left_merge_time_nanos + config::merge_commit_estimated_txn_commit_cost_ms * 1000000;
     int64_t start_ts = MonotonicNanos();
-    int64_t wait_load_finish_ns = std::max((int64_t)0, data_ctx->mc_left_merge_time_nanos) + 1000000;
-    bthread_usleep(std::min(wait_load_finish_ns, timeout_ns) / 1000);
-    TGetLoadTxnStatusRequest request;
-    request.__set_db(_batch_write_id.db);
-    request.__set_tbl(_batch_write_id.table);
-    request.__set_txnId(data_ctx->txn_id);
-    set_request_auth(&request, data_ctx->auth);
-    TGetLoadTxnStatusResult response;
-    Status st;
-    do {
-        if (_stopped.load(std::memory_order_acquire)) {
-            return Status::ServiceUnavailable("Batch write is stopped");
-        }
-#ifndef BE_TEST
-        int64_t rpc_ts = MonotonicNanos();
-        TNetworkAddress master_addr = get_master_address();
-        st = ThriftRpcHelper::rpc<FrontendServiceClient>(
-                master_addr.hostname, master_addr.port,
-                [&request, &response](FrontendServiceConnection& client) {
-                    client->getLoadTxnStatus(response, request);
-                },
-                config::batch_write_rpc_reqeust_timeout_ms);
-        TRACE_BATCH_WRITE << "receive getLoadTxnStatus response, " << _batch_write_id
-                          << ", user label: " << data_ctx->label << ", txn_id: " << data_ctx->txn_id
-                          << ", label: " << data_ctx->batch_write_label << ", master: " << master_addr
-                          << ", cost: " << ((MonotonicNanos() - rpc_ts) / 1000) << "us, status: " << st
-                          << ", response: " << response;
-#else
-        TEST_SYNC_POINT_CALLBACK("IsomorphicBatchWrite::_wait_for_load_status::request", &request);
-        TEST_SYNC_POINT_CALLBACK("IsomorphicBatchWrite::_wait_for_load_status::status", &st);
-        TEST_SYNC_POINT_CALLBACK("IsomorphicBatchWrite::_wait_for_load_status::response", &response);
-#endif
-        if (st.ok() && is_final_load_status(response.status)) {
-            break;
-        }
-        int64_t left_timeout_ns = timeout_ns - (MonotonicNanos() - start_ts);
-        if (left_timeout_ns <= 0) {
-            break;
-        }
-        bthread_usleep(
-                std::min(config::batch_write_poll_load_status_interval_ms * (int64_t)1000, left_timeout_ns / 1000));
-    } while (true);
-    data_ctx->mc_wait_finish_cost_nanos = MonotonicNanos() - start_ts;
-    if (!st.ok()) {
-        return Status::InternalError("Failed to get load status, " + st.to_string());
+    bthread_usleep(std::min(left_timeout_ns, wait_commit_ns) / 1000);
+    StatusOr<TxnStatusWaiterPtr> waiter_status = _txn_status_cache->create_waiter(data_ctx->db, data_ctx->txn_id, data_ctx->label);
+    if (!waiter_status.ok()) {
+        return Status::InternalError("Failed to create txn status waiter, " + waiter_status.status().to_string());
     }
-    switch (response.status) {
-    case TTransactionStatus::PREPARE:
-    case TTransactionStatus::PREPARED:
-        return Status::TimedOut("load timeout, txn status: " + to_string(response.status));
+    TxnStatusWaiterPtr waiter = std::move(waiter_status.value());
+    int64_t wait_status_ns = std::max((int64_t)0L, left_timeout_ns - (MonotonicNanos() - start_ts));
+    Status status = waiter->wait_final_status(left_timeout_ns);
+    data_ctx->mc_wait_finish_cost_nanos = MonotonicNanos() - start_ts;
+    if (!status.ok()) {
+        return Status::InternalError(fmt::format("Failed to get load final status, current status: {}, error: {}",
+                                                 to_string(waiter->txn_status()), status.to_string()));
+    }
+    TTransactionStatus::type txn_status = waiter->txn_status();
+    switch (txn_status) {
     case TTransactionStatus::COMMITTED:
         return Status::PublishTimeout("Load has not been published before timeout");
     case TTransactionStatus::VISIBLE:
         return Status::OK();
     case TTransactionStatus::ABORTED:
-        return Status::InternalError("Load is aborted, reason: " + response.reason);
+        return Status::InternalError("Load is aborted, reason: " + waiter->reason());
+    case TTransactionStatus::UNKNOWN:
+        return Status::InternalError("Can't find the transaction on FE");
     default:
-        return Status::InternalError("Load status is unknown: " + to_string(response.status));
+        return Status::InternalError("Load status is not final: " + to_string(txn_status));
     }
 }
 

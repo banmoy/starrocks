@@ -111,7 +111,7 @@ public:
 
     // atomic get_or_create operation, to prevent loading
     // same resource multiple times
-    Entry* get_or_create(const Key& key) {
+    Entry* get_or_create(const Key& key, size_t init_size = 0) {
         std::lock_guard<bthread::Mutex> lg(_lock);
         auto itr = _map.find(key);
         if (itr == _map.end()) {
@@ -123,6 +123,7 @@ public:
             insert->_handle = ret;
             _map[key] = ret;
             (*ret)->_ref++;
+            (*ret)->_size = init_size;
             _object_size++;
             if (insert->_size > 0) {
                 _size += insert->_size;
@@ -324,6 +325,21 @@ public:
             delete entry;
         }
         return;
+    }
+
+    std::vector<Entry*> get_all_entries() {
+        std::vector<Entry*> entry_list;
+        {
+            std::lock_guard<bthread::Mutex> lg(_lock);
+            entry_list.reserve(_list.size());
+            auto itr = _list.begin();
+            while (itr != _list.end()) {
+                Entry* entry = (*itr);
+                entry->_ref++;
+                entry_list.push_back(entry);
+            }
+        }
+        return std::move(entry_list);
     }
 
     bool TEST_evict(size_t target_capacity, std::vector<Entry*>* entry_list) {

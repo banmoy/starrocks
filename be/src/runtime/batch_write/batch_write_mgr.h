@@ -18,6 +18,7 @@
 
 #include "common/statusor.h"
 #include "runtime/batch_write/isomorphic_batch_write.h"
+#include "runtime/batch_write/txn_status_cache.h"
 #include "runtime/stream_load/stream_load_context.h"
 #include "util/bthreads/bthread_shared_mutex.h"
 #include "util/bthreads/executor.h"
@@ -35,7 +36,7 @@ class StreamLoadContext;
 
 class BatchWriteMgr {
 public:
-    BatchWriteMgr(std::unique_ptr<bthreads::ThreadPoolExecutor> executor) : _executor(std::move(executor)){};
+    BatchWriteMgr(std::unique_ptr<bthreads::ThreadPoolExecutor> executor);
 
     Status register_stream_load_pipe(StreamLoadContext* pipe_ctx);
     void unregister_stream_load_pipe(StreamLoadContext* pipe_ctx);
@@ -44,6 +45,9 @@ public:
     Status append_data(StreamLoadContext* data_ctx);
 
     void stop();
+
+    bthreads::ThreadPoolExecutor* executor() { return _executor.get(); }
+    TxnStatusCache* txn_status_cache() { return _txn_status_cache.get(); }
 
     static StatusOr<StreamLoadContext*> create_and_register_pipe(
             ExecEnv* exec_env, BatchWriteMgr* batch_write_mgr, const string& db, const string& table,
@@ -58,6 +62,7 @@ private:
                                                              bool create_if_missing);
 
     std::unique_ptr<bthreads::ThreadPoolExecutor> _executor;
+    std::unique_ptr<TxnStatusCache> _txn_status_cache;
     bthreads::BThreadSharedMutex _rw_mutex;
     std::unordered_map<BatchWriteId, IsomorphicBatchWriteSharedPtr, BatchWriteIdHash, BatchWriteIdEqual>
             _batch_write_map;
