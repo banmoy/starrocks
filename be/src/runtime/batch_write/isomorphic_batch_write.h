@@ -67,7 +67,7 @@ private:
     Status _execute_write(AsyncAppendDataContext* async_ctx);
     Status _write_data_to_pipe(AsyncAppendDataContext* data_ctx);
     Status _send_rpc_request(StreamLoadContext* data_ctx);
-    Status _wait_for_load_status(StreamLoadContext* data_ctx);
+    Status _wait_for_load_finish(StreamLoadContext* data_ctx);
 
     BatchWriteId _batch_write_id;
     bthreads::ThreadPoolExecutor* _executor;

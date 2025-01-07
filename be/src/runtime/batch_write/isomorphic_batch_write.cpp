@@ -221,7 +221,6 @@ Status IsomorphicBatchWrite::append_data(StreamLoadContext* data_ctx) {
     if (_stopped.load(std::memory_order_acquire)) {
         return Status::ServiceUnavailable("Batch write is stopped");
     }
-    int64_t start_ts = MonotonicNanos();
     AsyncAppendDataContext* async_ctx = new AsyncAppendDataContext(data_ctx);
     async_ctx->ref();
     async_ctx->create_time_ts.store(MonotonicNanos());
@@ -259,7 +258,7 @@ Status IsomorphicBatchWrite::append_data(StreamLoadContext* data_ctx) {
     if (_batch_write_async) {
         return Status::OK();
     }
-    return _wait_for_load_status(data_ctx);
+    return _wait_for_load_finish(data_ctx);
 }
 
 int IsomorphicBatchWrite::_execute_tasks(void* meta, bthread::TaskIterator<Task>& iter) {
@@ -416,23 +415,24 @@ Status IsomorphicBatchWrite::_send_rpc_request(StreamLoadContext* data_ctx) {
     return st.ok() ? Status(response.status) : st;
 }
 
-Status IsomorphicBatchWrite::_wait_for_load_status(StreamLoadContext* data_ctx) {
+Status IsomorphicBatchWrite::_wait_for_load_finish(StreamLoadContext* data_ctx) {
     int64_t total_timeout_ms =
             data_ctx->timeout_second > 0 ? data_ctx->timeout_second * 1000 : config::batch_write_default_timeout_ms;
     int64_t left_timeout_ns =
             std::max((int64_t)0, total_timeout_ms * 1000000 - (MonotonicNanos() - data_ctx->start_nanos));
-    int64_t wait_commit_ns =
-            data_ctx->mc_left_merge_time_nanos + config::merge_commit_estimated_txn_commit_cost_ms * 1000000;
-    int64_t start_ts = MonotonicNanos();
-    bthread_usleep(std::min(left_timeout_ns, wait_commit_ns) / 1000);
     StatusOr<TxnStatusWaiterPtr> waiter_status = _txn_status_cache->create_waiter(data_ctx->txn_id, data_ctx->label);
     if (!waiter_status.ok()) {
         return Status::InternalError("Failed to create txn status waiter, " + waiter_status.status().to_string());
     }
     TxnStatusWaiterPtr waiter = std::move(waiter_status.value());
-    int64_t wait_status_ns = std::max((int64_t)0L, left_timeout_ns - (MonotonicNanos() - start_ts));
+    int64_t start_ts = MonotonicNanos();
     Status status = waiter->wait_final_status(left_timeout_ns);
     data_ctx->mc_wait_finish_cost_nanos = MonotonicNanos() - start_ts;
+    TRACE_BATCH_WRITE << "load finish, " << _batch_write_id << ", user label: " << data_ctx->label
+                      << ", txn_id: " << data_ctx->txn_id << ", load label: " << data_ctx->batch_write_label
+                      << ", cost: " << (data_ctx->mc_wait_finish_cost_nanos / 1000)
+                      << "us, txn_status: " << waiter->txn_status() << ", reason: " << waiter->reason()
+                      << ", wait status: " << status;
     if (!status.ok()) {
         return Status::InternalError(fmt::format("Failed to get load final status, current status: {}, error: {}",
                                                  to_string(waiter->txn_status()), status.to_string()));

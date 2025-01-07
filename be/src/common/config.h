@@ -1522,7 +1522,6 @@ CONF_mInt32(batch_write_rpc_request_retry_num, "10");
 CONF_mInt32(batch_write_rpc_request_retry_interval_ms, "500");
 CONF_mInt32(batch_write_rpc_reqeust_timeout_ms, "10000");
 CONF_mBool(batch_write_trace_log_enable, "false");
-CONF_mInt32(merge_commit_estimated_txn_commit_cost_ms, "300");
 CONF_mInt32(merge_commit_txn_status_cache_capacity, "2048");
 
 // ignore union type tag in avro kafka routine load
