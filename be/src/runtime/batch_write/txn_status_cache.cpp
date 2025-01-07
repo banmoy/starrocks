@@ -149,8 +149,7 @@ Status TxnStatusCache::notify_txn(int64_t txn_id, TTransactionStatus::type statu
     return Status::OK();
 }
 
-StatusOr<TxnStatusWaiterPtr> TxnStatusCache::create_waiter(const std::string& db, int64_t txn_id,
-                                                           const std::string& waiter_name, const AuthInfo& auth) {
+StatusOr<TxnStatusWaiterPtr> TxnStatusCache::create_waiter(int64_t txn_id, const std::string& waiter_name) {
     auto cache = _get_txn_cache(txn_id);
     ASSIGN_OR_RETURN(auto entry, _get_or_create_txn_entry(cache, txn_id));
     return std::make_unique<TxnStatusWaiter>(cache, entry, waiter_name);

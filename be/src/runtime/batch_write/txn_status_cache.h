@@ -16,7 +16,6 @@
 
 #include <map>
 
-#include "common/utils.h"
 #include "util/bthreads/bthread_shared_mutex.h"
 #include "util/dynamic_cache.h"
 #include "util/threadpool.h"
@@ -97,8 +96,7 @@ public:
 
     Status notify_txn(int64_t txn_id, TTransactionStatus::type status, const std::string& reason);
 
-    StatusOr<TxnStatusWaiterPtr> create_waiter(const std::string& db, int64_t txn_id, const std::string& waiter_name,
-                                               const AuthInfo& auth);
+    StatusOr<TxnStatusWaiterPtr> create_waiter(int64_t txn_id, const std::string& waiter_name);
 
     void set_capacity(size_t new_capacity);
 

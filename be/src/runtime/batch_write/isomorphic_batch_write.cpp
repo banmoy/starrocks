@@ -425,7 +425,7 @@ Status IsomorphicBatchWrite::_wait_for_load_status(StreamLoadContext* data_ctx) 
             data_ctx->mc_left_merge_time_nanos + config::merge_commit_estimated_txn_commit_cost_ms * 1000000;
     int64_t start_ts = MonotonicNanos();
     bthread_usleep(std::min(left_timeout_ns, wait_commit_ns) / 1000);
-    StatusOr<TxnStatusWaiterPtr> waiter_status = _txn_status_cache->create_waiter(data_ctx->db, data_ctx->txn_id, data_ctx->label);
+    StatusOr<TxnStatusWaiterPtr> waiter_status = _txn_status_cache->create_waiter(data_ctx->txn_id, data_ctx->label);
     if (!waiter_status.ok()) {
         return Status::InternalError("Failed to create txn status waiter, " + waiter_status.status().to_string());
     }
