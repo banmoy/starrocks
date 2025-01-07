@@ -60,6 +60,7 @@ public class IsomorphicBatchWriteTest extends BatchWriteTestBase {
     @Mocked
     private CoordinatorBackendAssigner assigner;
     private TestThreadPoolExecutor executor;
+    private BeTxnStateUpdateExecutor txnStateUpdateExecutor;
     private int parallel;
 
     private IsomorphicBatchWrite load;
@@ -67,6 +68,7 @@ public class IsomorphicBatchWriteTest extends BatchWriteTestBase {
     @Before
     public void setup() throws Exception {
         executor = new TestThreadPoolExecutor();
+        txnStateUpdateExecutor = new BeTxnStateUpdateExecutor(executor);
         parallel = 4;
         assertTrue("Number nodes " + allNodes.size(), parallel < allNodes.size());
         Map<String, String> map = new HashMap<>();
@@ -85,7 +87,8 @@ public class IsomorphicBatchWriteTest extends BatchWriteTestBase {
                 parallel,
                 params,
                 assigner,
-                executor);
+                executor,
+                txnStateUpdateExecutor);
     }
 
     @Test

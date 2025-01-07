@@ -33,6 +33,8 @@ class ExecEnv;
 class PStreamLoadRequest;
 class PStreamLoadResponse;
 class StreamLoadContext;
+class PUpdateTransactionStateRequest;
+class PUpdateTransactionStateResponse;
 
 class BatchWriteMgr {
 public:
@@ -56,6 +58,10 @@ public:
 
     static void receive_stream_load_rpc(ExecEnv* exec_env, brpc::Controller* cntl, const PStreamLoadRequest* request,
                                         PStreamLoadResponse* response);
+
+    static void update_transaction_state(ExecEnv* exec_env, brpc::Controller* cntl,
+                                         const PUpdateTransactionStateRequest* request,
+                                         PUpdateTransactionStateResponse* response);
 
 private:
     StatusOr<IsomorphicBatchWriteSharedPtr> _get_batch_write(const BatchWriteId& batch_write_id,

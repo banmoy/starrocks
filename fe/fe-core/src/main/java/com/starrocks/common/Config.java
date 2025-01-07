@@ -3359,6 +3359,12 @@ public class Config extends ConfigBase {
 
     public static int batch_write_executor_threads_num = 4096;
 
+    @ConfField(mutable = true)
+    public static int merge_commit_be_txn_state_update_retry_times = 3;
+
+    @ConfField(mutable = true)
+    public static int merge_commit_be_txn_state_update_retry_interval_ms = 500;
+
     /**
      * Enable Arrow Flight SQL server only when the port is set to positive value.
      */

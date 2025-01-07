@@ -207,17 +207,16 @@ message PersistentIndexSstableMetaPB {
 }
 
 enum TransactionStatusPB {
-    UNKNOWN = 0;
-    PREPARE = 1;
-    COMMITTED = 2;
-    VISIBLE = 3;
-    ABORTED = 4;
-    PREPARED = 5;
+    TRANS_UNKNOWN = 0;
+    TRANS_PREPARE = 1;
+    TRANS_COMMITTED = 2;
+    TRANS_VISIBLE = 3;
+    TRANS_ABORTED = 4;
+    TRANS_PREPARED = 5;
 }
 
 message TransactionStatePB {
     optional int64 txn_id = 1;
-    optional string label = 2;
-    optional TransactionStatusPB status = 3;
-    optional string reason = 4;
+    optional TransactionStatusPB status = 2;
+    optional string reason = 3;
 }

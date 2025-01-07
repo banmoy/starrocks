@@ -232,4 +232,42 @@ void BatchWriteMgr::receive_stream_load_rpc(ExecEnv* exec_env, brpc::Controller*
     ctx->status = exec_env->batch_write_mgr()->append_data(ctx);
 }
 
+TTransactionStatus::type to_thrift_txn_status(TransactionStatusPB status) {
+    switch (status) {
+    case TRANS_UNKNOWN:
+        return TTransactionStatus::UNKNOWN;
+    case TRANS_PREPARE:
+        return TTransactionStatus::PREPARE;
+    case TRANS_COMMITTED:
+        return TTransactionStatus::COMMITTED;
+    case TRANS_VISIBLE:
+        return TTransactionStatus::VISIBLE;
+    case TRANS_ABORTED:
+        return TTransactionStatus::ABORTED;
+    case TRANS_PREPARED:
+        return TTransactionStatus::PREPARED;
+    default:
+        return TTransactionStatus::UNKNOWN;
+    }
+}
+
+void BatchWriteMgr::update_transaction_state(ExecEnv* exec_env, brpc::Controller* cntl,
+                                             const PUpdateTransactionStateRequest* request,
+                                             PUpdateTransactionStateResponse* response) {
+    auto txn_status_cache = exec_env->batch_write_mgr()->txn_status_cache();
+    for (int i = 0; i < request->states_size(); i++) {
+        auto& txn_state = request->states(i);
+        auto st = txn_status_cache->notify_txn(txn_state.txn_id(), to_thrift_txn_status(txn_state.status()),
+                                               txn_state.reason());
+        if (!st.ok()) {
+            LOG(WARNING) << "Failed to update transaction state, txn_id: " << txn_state.txn_id()
+                         << ", status: " << txn_state.status() << ", reason: " << txn_state.reason()
+                         << ", error: " << st;
+        } else {
+            TRACE_BATCH_WRITE << "Update transaction state, txn_id: " << txn_state.txn_id()
+                              << ", status: " << txn_state.status() << ", reason: " << txn_state.reason();
+        }
+    }
+}
+
 } // namespace starrocks

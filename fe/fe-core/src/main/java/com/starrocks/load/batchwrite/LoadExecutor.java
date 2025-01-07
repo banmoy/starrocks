@@ -45,6 +45,7 @@ import org.apache.arrow.util.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -123,6 +124,14 @@ public class LoadExecutor implements Runnable {
 
     public String getLabel() {
         return label;
+    }
+
+    public long getTxnId() {
+        return txnId;
+    }
+
+    public Set<Long> getBackendIds() {
+        return Collections.unmodifiableSet(coordinatorBackendIds);
     }
 
     /**
