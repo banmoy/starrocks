@@ -267,6 +267,7 @@ void BatchWriteMgr::update_transaction_state(ExecEnv* exec_env, brpc::Controller
             TRACE_BATCH_WRITE << "Update transaction state, txn_id: " << txn_state.txn_id()
                               << ", status: " << txn_state.status() << ", reason: " << txn_state.reason();
         }
+        st.to_protobuf(response->add_results());
     }
 }
 
