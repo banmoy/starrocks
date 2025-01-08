@@ -23,20 +23,20 @@
 
 namespace starrocks {
 
-class TxnStatusHolder;
-class TxnStatusWaiter;
-class TxnStatusCache;
-using TxnStatusDynamicCache = DynamicCache<int64_t, TxnStatusHolder>;
-using TxnStatusDynamicCachePtr = std::unique_ptr<TxnStatusDynamicCache>;
-using TxnStatusDynamicCacheEntry = TxnStatusDynamicCache::Entry;
+class TxnStateHolder;
+class TxnStateSubscriber;
+class TxnStateCache;
+using TxnStateDynamicCache = DynamicCache<int64_t, TxnStateHolder>;
+using TxnStateDynamicCachePtr = std::unique_ptr<TxnStateDynamicCache>;
+using TxnStateDynamicCacheEntry = TxnStateDynamicCache::Entry;
 
-class TxnStatusHolder {
+class TxnStateHolder {
 public:
-    void update_txn_status(TTransactionStatus::type new_status, const std::string& reason);
+    void update_state(TTransactionStatus::type new_status, const std::string& reason);
 
-    void add_waiter();
-    void release_waiter();
-    Status wait_final_status(TxnStatusWaiter* waiter, int64_t timeout_us);
+    void add_subscriber();
+    void release_subscriber();
+    Status wait_final_status(TxnStateSubscriber* subscriber, int64_t timeout_us);
 
     void set_txn_id(int64_t txn_id) { _txn_id.store(txn_id); }
     TTransactionStatus::type txn_status();
@@ -52,35 +52,35 @@ private:
     bthread::ConditionVariable _cv;
     TTransactionStatus::type _txn_status{TTransactionStatus::PREPARE};
     std::string _reason;
-    int32_t _num_waiter{0};
+    int32_t _num_subscriber{0};
     int32_t _num_waiting_final_status{0};
     bool _stopped{false};
 };
 
-inline void TxnStatusHolder::add_waiter() {
+inline void TxnStateHolder::add_subscriber() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
-    _num_waiter++;
+    _num_subscriber++;
 }
 
-inline void TxnStatusHolder::release_waiter() {
+inline void TxnStateHolder::release_subscriber() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
-    _num_waiter--;
+    _num_subscriber--;
 }
 
-inline std::ostream& operator<<(std::ostream& os, TxnStatusHolder& holder) {
+inline std::ostream& operator<<(std::ostream& os, TxnStateHolder& holder) {
     os << holder.debug_string();
     return os;
 }
 
-class TxnStatusWaiter {
+class TxnStateSubscriber {
 public:
-    TxnStatusWaiter(TxnStatusDynamicCache* cache, TxnStatusDynamicCacheEntry* entry, const std::string& name)
+    TxnStateSubscriber(TxnStateDynamicCache* cache, TxnStateDynamicCacheEntry* entry, const std::string& name)
             : _cache(cache), _entry(entry), _name(name) {
-        _entry->value().add_waiter();
+        _entry->value().add_subscriber();
     }
 
-    ~TxnStatusWaiter() {
-        _entry->value().release_waiter();
+    ~TxnStateSubscriber() {
+        _entry->value().release_subscriber();
         _cache->release(_entry);
     }
 
@@ -91,22 +91,22 @@ public:
     std::string reason();
 
 private:
-    TxnStatusDynamicCache* _cache;
-    TxnStatusDynamicCacheEntry* _entry;
+    TxnStateDynamicCache* _cache;
+    TxnStateDynamicCacheEntry* _entry;
     std::string _name;
 };
-using TxnStatusWaiterPtr = std::unique_ptr<TxnStatusWaiter>;
+using TxnStateSubscriberPtr = std::unique_ptr<TxnStateSubscriber>;
 
 // TODO
 // 1. support txn status expire
 // 2. support poll txn status
-class TxnStatusCache {
+class TxnStateCache {
 public:
-    TxnStatusCache(size_t capacity);
+    TxnStateCache(size_t capacity);
 
-    Status notify_txn(int64_t txn_id, TTransactionStatus::type status, const std::string& reason);
+    Status update_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason);
 
-    StatusOr<TxnStatusWaiterPtr> create_waiter(int64_t txn_id, const std::string& waiter_name);
+    StatusOr<TxnStateSubscriberPtr> create_subscriber(int64_t txn_id, const std::string& subscriber_name);
 
     void set_capacity(size_t new_capacity);
 
@@ -116,18 +116,18 @@ private:
     static const int kNumShardBits = 5;
     static const int kNumShards = 1 << kNumShardBits;
 
-    friend class TxnStatusHolder;
+    friend class TxnStateHolder;
 
-    TxnStatusDynamicCache* _get_txn_cache(int64_t txn_id);
-    StatusOr<TxnStatusDynamicCacheEntry*> _get_or_create_txn_entry(TxnStatusDynamicCache* cache, int64_t txn_id);
+    TxnStateDynamicCache* _get_txn_cache(int64_t txn_id);
+    StatusOr<TxnStateDynamicCacheEntry*> _get_or_create_txn_entry(TxnStateDynamicCache* cache, int64_t txn_id);
 
     size_t _capacity;
-    TxnStatusDynamicCachePtr _shards[kNumShards];
+    TxnStateDynamicCachePtr _shards[kNumShards];
     bthreads::BThreadSharedMutex _rw_mutex;
     bool _stopped{false};
 };
 
-inline TxnStatusDynamicCache* TxnStatusCache::_get_txn_cache(int64_t txn_id) {
+inline TxnStateDynamicCache* TxnStateCache::_get_txn_cache(int64_t txn_id) {
     return _shards[txn_id & (kNumShards - 1)].get();
 }
 } // namespace starrocks

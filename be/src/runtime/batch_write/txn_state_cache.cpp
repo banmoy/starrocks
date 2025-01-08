@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/batch_write/txn_status_cache.h"
+#include "runtime/batch_write/txn_state_cache.h"
 
 #include <utility>
 
@@ -31,7 +31,7 @@ bool is_final_txn_status(const TTransactionStatus::type& status) {
     }
 }
 
-void TxnStatusHolder::update_txn_status(TTransactionStatus::type new_status, const std::string& reason) {
+void TxnStateHolder::update_state(TTransactionStatus::type new_status, const std::string& reason) {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     if (_stopped) {
         return;
@@ -53,7 +53,7 @@ void TxnStatusHolder::update_txn_status(TTransactionStatus::type new_status, con
     }
 }
 
-Status TxnStatusHolder::wait_final_status(TxnStatusWaiter* waiter, int64_t timeout_us) {
+Status TxnStateHolder::wait_final_status(TxnStateSubscriber* subscriber, int64_t timeout_us) {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     if (is_final_txn_status(_txn_status)) {
         return Status::OK();
@@ -66,12 +66,12 @@ Status TxnStatusHolder::wait_final_status(TxnStatusWaiter* waiter, int64_t timeo
 
     int64_t left_timeout_us = timeout_us;
     while (left_timeout_us > 0) {
-        TRACE_BATCH_WRITE << "start wait final status, name: " << waiter->name() << ", txn_id: " << _txn_id
+        TRACE_BATCH_WRITE << "start wait final status, name: " << subscriber->name() << ", txn_id: " << _txn_id
                           << ", timeout_us: " << left_timeout_us;
         auto start_us = MonotonicMicros();
         int ret = _cv.wait_for(lock, left_timeout_us);
         int64_t elapsed_us = MonotonicMicros() - start_us;
-        TRACE_BATCH_WRITE << "finish wait final status, name: " << waiter->name() << ", txn_id: " << _txn_id
+        TRACE_BATCH_WRITE << "finish wait final status, name: " << subscriber->name() << ", txn_id: " << _txn_id
                           << ", elapsed: " << elapsed_us << " us, txn_status: " << to_string(_txn_status)
                           << ", reason: " << _reason << ", stopped: " << _stopped;
         left_timeout_us = std::max((int64_t)0, left_timeout_us - elapsed_us);
@@ -86,7 +86,7 @@ Status TxnStatusHolder::wait_final_status(TxnStatusWaiter* waiter, int64_t timeo
     return Status::TimedOut(fmt::format("Wait txn status timeout {} us", timeout_us));
 }
 
-void TxnStatusHolder::stop() {
+void TxnStateHolder::stop() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     if (_stopped) {
         return;
@@ -95,57 +95,57 @@ void TxnStatusHolder::stop() {
     _cv.notify_all();
 }
 
-inline TTransactionStatus::type TxnStatusHolder::txn_status() {
+inline TTransactionStatus::type TxnStateHolder::txn_status() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     return _txn_status;
 }
 
-inline std::string TxnStatusHolder::reason() {
+inline std::string TxnStateHolder::reason() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     return _reason;
 }
 
-std::string TxnStatusHolder::debug_string() {
+std::string TxnStateHolder::debug_string() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     return fmt::format(
             "txn_id: {}, txn_status: {}, reason: {}, num_waiter: {}, num_waiting_final_status: {}, stopped: {}",
-            _txn_id.load(), to_string(_txn_status), _reason, _num_waiter, _num_waiting_final_status, _stopped);
+            _txn_id.load(), to_string(_txn_status), _reason, _num_subscriber, _num_waiting_final_status, _stopped);
 }
 
-Status TxnStatusWaiter::wait_final_status(int64_t timeout_us) {
+Status TxnStateSubscriber::wait_final_status(int64_t timeout_us) {
     return _entry->value().wait_final_status(this, timeout_us);
 }
 
-TTransactionStatus::type TxnStatusWaiter::txn_status() {
+TTransactionStatus::type TxnStateSubscriber::txn_status() {
     return _entry->value().txn_status();
 }
 
-std::string TxnStatusWaiter::reason() {
+std::string TxnStateSubscriber::reason() {
     return _entry->value().reason();
 }
 
-TxnStatusCache::TxnStatusCache(size_t capacity) : _capacity(capacity) {
+TxnStateCache::TxnStateCache(size_t capacity) : _capacity(capacity) {
     size_t capacity_per_shard = (_capacity + (kNumShards - 1)) / kNumShards;
     for (int32_t i = 0; i < kNumShards; i++) {
-        _shards[i] = std::make_unique<TxnStatusDynamicCache>(capacity_per_shard);
+        _shards[i] = std::make_unique<TxnStateDynamicCache>(capacity_per_shard);
     }
 }
 
-Status TxnStatusCache::notify_txn(int64_t txn_id, TTransactionStatus::type status, const std::string& reason) {
+Status TxnStateCache::update_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason) {
     auto cache = _get_txn_cache(txn_id);
     ASSIGN_OR_RETURN(auto entry, _get_or_create_txn_entry(cache, txn_id));
-    entry->value().update_txn_status(status, reason);
+    entry->value().update_state(status, reason);
     cache->release(entry);
     return Status::OK();
 }
 
-StatusOr<TxnStatusWaiterPtr> TxnStatusCache::create_waiter(int64_t txn_id, const std::string& waiter_name) {
+StatusOr<TxnStateSubscriberPtr> TxnStateCache::create_subscriber(int64_t txn_id, const std::string& subscriber_name) {
     auto cache = _get_txn_cache(txn_id);
     ASSIGN_OR_RETURN(auto entry, _get_or_create_txn_entry(cache, txn_id));
-    return std::make_unique<TxnStatusWaiter>(cache, entry, waiter_name);
+    return std::make_unique<TxnStateSubscriber>(cache, entry, subscriber_name);
 }
 
-void TxnStatusCache::set_capacity(size_t new_capacity) {
+void TxnStateCache::set_capacity(size_t new_capacity) {
     std::unique_lock<bthreads::BThreadSharedMutex> lock;
     if (_stopped) {
         return;
@@ -157,7 +157,7 @@ void TxnStatusCache::set_capacity(size_t new_capacity) {
     _capacity = new_capacity;
 }
 
-void TxnStatusCache::stop() {
+void TxnStateCache::stop() {
     {
         std::unique_lock<bthreads::BThreadSharedMutex> lock;
         if (_stopped) {
@@ -174,10 +174,10 @@ void TxnStatusCache::stop() {
     }
 }
 
-StatusOr<TxnStatusDynamicCacheEntry*> TxnStatusCache::_get_or_create_txn_entry(TxnStatusDynamicCache* cache,
-                                                                               int64_t txn_id) {
+StatusOr<TxnStateDynamicCacheEntry*> TxnStateCache::_get_or_create_txn_entry(TxnStateDynamicCache* cache,
+                                                                             int64_t txn_id) {
     // use lock to avoid creating new entry after stopped
-    TxnStatusDynamicCacheEntry* entry = nullptr;
+    TxnStateDynamicCacheEntry* entry = nullptr;
     {
         std::shared_lock<bthreads::BThreadSharedMutex> lock;
         if (_stopped) {

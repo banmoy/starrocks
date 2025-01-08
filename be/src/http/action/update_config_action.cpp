@@ -53,7 +53,7 @@
 #include "http/http_request.h"
 #include "http/http_status.h"
 #include "runtime/batch_write/batch_write_mgr.h"
-#include "runtime/batch_write/txn_status_cache.h"
+#include "runtime/batch_write/txn_state_cache.h"
 #include "storage/compaction_manager.h"
 #include "storage/lake/compaction_scheduler.h"
 #include "storage/lake/tablet_manager.h"

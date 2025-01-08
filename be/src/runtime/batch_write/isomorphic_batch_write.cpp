@@ -120,7 +120,7 @@ public:
 };
 
 IsomorphicBatchWrite::IsomorphicBatchWrite(BatchWriteId batch_write_id, bthreads::ThreadPoolExecutor* executor,
-                                           TxnStatusCache* _txn_status_cache)
+                                           TxnStateCache* _txn_status_cache)
         : _batch_write_id(std::move(batch_write_id)), _executor(executor), _txn_status_cache(_txn_status_cache) {}
 
 Status IsomorphicBatchWrite::init() {
@@ -420,11 +420,12 @@ Status IsomorphicBatchWrite::_wait_for_load_finish(StreamLoadContext* data_ctx) 
             data_ctx->timeout_second > 0 ? data_ctx->timeout_second * 1000 : config::batch_write_default_timeout_ms;
     int64_t left_timeout_ns =
             std::max((int64_t)0, total_timeout_ms * 1000000 - (MonotonicNanos() - data_ctx->start_nanos));
-    StatusOr<TxnStatusWaiterPtr> waiter_status = _txn_status_cache->create_waiter(data_ctx->txn_id, data_ctx->label);
+    StatusOr<TxnStateSubscriberPtr> waiter_status =
+            _txn_status_cache->create_subscriber(data_ctx->txn_id, data_ctx->label);
     if (!waiter_status.ok()) {
         return Status::InternalError("Failed to create txn status waiter, " + waiter_status.status().to_string());
     }
-    TxnStatusWaiterPtr waiter = std::move(waiter_status.value());
+    TxnStateSubscriberPtr waiter = std::move(waiter_status.value());
     int64_t start_ts = MonotonicNanos();
     Status status = waiter->wait_final_status(left_timeout_ns);
     data_ctx->mc_wait_finish_cost_nanos = MonotonicNanos() - start_ts;

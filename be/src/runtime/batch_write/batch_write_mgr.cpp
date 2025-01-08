@@ -27,7 +27,7 @@ namespace starrocks {
 
 BatchWriteMgr::BatchWriteMgr(std::unique_ptr<bthreads::ThreadPoolExecutor> executor)
         : _executor(std::move(executor)),
-          _txn_status_cache(new TxnStatusCache(config::merge_commit_txn_status_cache_capacity)) {}
+          _txn_status_cache(new TxnStateCache(config::merge_commit_txn_status_cache_capacity)) {}
 
 Status BatchWriteMgr::register_stream_load_pipe(StreamLoadContext* pipe_ctx) {
     BatchWriteId batch_write_id = {
@@ -257,8 +257,8 @@ void BatchWriteMgr::update_transaction_state(ExecEnv* exec_env, brpc::Controller
     auto txn_status_cache = exec_env->batch_write_mgr()->txn_status_cache();
     for (int i = 0; i < request->states_size(); i++) {
         auto& txn_state = request->states(i);
-        auto st = txn_status_cache->notify_txn(txn_state.txn_id(), to_thrift_txn_status(txn_state.status()),
-                                               txn_state.reason());
+        auto st = txn_status_cache->update_state(txn_state.txn_id(), to_thrift_txn_status(txn_state.status()),
+                                                 txn_state.reason());
         if (!st.ok()) {
             LOG(WARNING) << "Failed to update transaction state, txn_id: " << txn_state.txn_id()
                          << ", status: " << txn_state.status() << ", reason: " << txn_state.reason()
