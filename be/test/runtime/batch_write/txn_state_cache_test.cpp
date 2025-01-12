@@ -25,6 +25,9 @@ public:
     ~TxnStateCacheTest() override = default;
 
     void SetUp() override {
+        _db = "test_db";
+        _tbl = "test_tbl";
+        _auth = {"test_user", "test_password"};
         ASSERT_OK(ThreadPoolBuilder("IsomorphicBatchWriteTest")
                           .set_min_threads(0)
                           .set_max_threads(1)
@@ -45,6 +48,11 @@ public:
         EXPECT_OK(cache->init());
         return cache;
     }
+
+protected:
+    std::string _db;
+    std::string _tbl;
+    AuthInfo _auth;
 
 private:
     std::unique_ptr<ThreadPool> _thread_pool;
@@ -186,16 +194,16 @@ TEST_F(TxnStateCacheTest, cache_subscriber) {
     };
 
     ASSERT_TRUE(cache->get_state(1).status().is_not_found());
-    auto s1_1 = cache->subscribe_state(1, "s1_1");
+    auto s1_1 = cache->subscribe_state(1, "s1_1", _db, _tbl, _auth);
     ASSERT_OK(s1_1.status());
     assert_txn_state_eq({TTransactionStatus::PREPARE, ""}, s1_1.value()->current_state());
-    auto s1_2 = cache->subscribe_state(1, "s1_2");
+    auto s1_2 = cache->subscribe_state(1, "s1_2", _db, _tbl, _auth);
     ASSERT_OK(s1_2.status());
     assert_txn_state_eq({TTransactionStatus::PREPARE, ""}, s1_2.value()->current_state());
 
     ASSERT_TRUE(cache->get_state(2).status().is_not_found());
     ASSERT_OK(cache->update_state(2, TTransactionStatus::ABORTED, "artificial failure"));
-    auto s2_1 = cache->subscribe_state(2, "s2_1");
+    auto s2_1 = cache->subscribe_state(2, "s2_1", _db, _tbl, _auth);
     ASSERT_OK(s2_1.status());
     assert_txn_state_eq({TTransactionStatus::ABORTED, "artificial failure"}, s2_1.value()->current_state());
 
@@ -215,7 +223,7 @@ TEST_F(TxnStateCacheTest, cache_subscriber) {
     t2_1.join();
 
     ASSERT_TRUE(cache->get_state(3).status().is_not_found());
-    auto s3_1 = cache->subscribe_state(3, "s3_1");
+    auto s3_1 = cache->subscribe_state(3, "s3_1", _db, _tbl, _auth);
     ASSERT_OK(s3_1.status());
     auto t3_1 = std::thread([&]() {
         wait_func(s3_1.value().get(), 10000, StatusOr<TxnState>(Status::TimedOut("Wait txn state timeout 10000 us")));
@@ -244,7 +252,7 @@ TEST_F(TxnStateCacheTest, cache_eviction) {
     ASSERT_OK(cache->update_state(1 << 5, TTransactionStatus::VISIBLE, ""));
     ASSERT_EQ(1, cache->size());
     ASSERT_EQ(0, num_evict);
-    auto s1 = cache->subscribe_state(2 << 5, "s1");
+    auto s1 = cache->subscribe_state(2 << 5, "s1", _db, _tbl, _auth);
     ASSERT_OK(s1.status());
     ASSERT_EQ(2, cache->size());
     ASSERT_EQ(0, num_evict);
@@ -257,13 +265,13 @@ TEST_F(TxnStateCacheTest, cache_eviction) {
     ASSERT_EQ(1 << 5, evict_txn_id);
     ASSERT_EQ(1, num_evict);
 
-    auto s2 = cache->subscribe_state(5 << 5, "s2");
+    auto s2 = cache->subscribe_state(5 << 5, "s2", _db, _tbl, _auth);
     ASSERT_OK(s2.status());
     ASSERT_EQ(3, cache->size());
     ASSERT_EQ(3 << 5, evict_txn_id);
     ASSERT_EQ(2, num_evict);
 
-    auto s3 = cache->subscribe_state(6 << 5, "s3");
+    auto s3 = cache->subscribe_state(6 << 5, "s3", _db, _tbl, _auth);
     ASSERT_OK(s3.status());
     ASSERT_EQ(3, cache->size());
     ASSERT_EQ(4 << 5, evict_txn_id);
@@ -301,12 +309,12 @@ TEST_F(TxnStateCacheTest, cache_stop) {
         }
     };
 
-    auto s1 = cache->subscribe_state(1, "s1");
+    auto s1 = cache->subscribe_state(1, "s1", _db, _tbl, _auth);
     ASSERT_OK(s1.status());
     auto t1 = std::thread([&]() { wait_func(s1.value().get(), 60000000, StatusOr<TxnState>(expected_status)); });
-    auto s2 = cache->subscribe_state(1, "s2");
+    auto s2 = cache->subscribe_state(1, "s2", _db, _tbl, _auth);
     ASSERT_OK(s2.status());
-    auto s3 = cache->subscribe_state(2, "s3");
+    auto s3 = cache->subscribe_state(2, "s3", _db, _tbl, _auth);
     ASSERT_OK(s3.status());
     auto t3 = std::thread([&]() { wait_func(s3.value().get(), 60000000, StatusOr<TxnState>(expected_status)); });
 
@@ -322,7 +330,7 @@ TEST_F(TxnStateCacheTest, cache_stop) {
 
     expected_status = Status::ServiceUnavailable("Transaction state cache is stopped");
     ASSERT_EQ(expected_status.to_string(), cache->update_state(3, TTransactionStatus::VISIBLE, "").to_string(false));
-    ASSERT_EQ(expected_status.to_string(), cache->subscribe_state(3, "s4").status().to_string(false));
+    ASSERT_EQ(expected_status.to_string(), cache->subscribe_state(3, "s4", _db, _tbl, _auth).status().to_string(false));
 }
 
 } // namespace starrocks

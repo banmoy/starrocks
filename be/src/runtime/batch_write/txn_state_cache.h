@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "common/utils.h"
 #include "testutil/sync_point.h"
 #include "util/bthreads/bthread_shared_mutex.h"
 #include "util/dynamic_cache.h"
@@ -49,8 +50,11 @@ public:
     ~TxnStateHandler();
 
     void update_state(TTransactionStatus::type new_status, const std::string& reason);
+    // return whether to continue polling
+    bool notify_poll_result(const StatusOr<TxnState>& result);
 
-    void acquire_subscriber();
+    // return whether to trigger polling
+    bool acquire_subscriber();
     void release_subscriber();
     int32_t num_waiting_subscriber();
     StatusOr<TxnState> wait_finished_state(const std::string& subscriber_name, int64_t timeout_us);
@@ -63,8 +67,9 @@ public:
     void stop();
 
 private:
+    void _transition_txn_state(TTransactionStatus::type new_status, const std::string& reason);
     // Whether the current status indicate the load is finished
-    bool _is_finished_txn_status();
+    bool _is_finished_txn_state();
 
     // lazy initialized
     std::atomic<int64_t> _txn_id{-1};
@@ -76,9 +81,11 @@ private:
     bool _stopped{false};
 };
 
-inline void TxnStateHandler::acquire_subscriber() {
+inline bool TxnStateHandler::acquire_subscriber() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     _num_subscriber++;
+    // should trigger polling if this is the first subscriber
+    return _num_subscriber == 1 && !_is_finished_txn_state();
 }
 
 inline void TxnStateHandler::release_subscriber() {
@@ -104,9 +111,7 @@ inline std::ostream& operator<<(std::ostream& os, TxnStateHandler& holder) {
 class TxnStateSubscriber {
 public:
     TxnStateSubscriber(TxnStateDynamicCache* cache, TxnStateDynamicCacheEntry* entry, const std::string& name)
-            : _cache(cache), _entry(entry), _name(name) {
-        _entry->value().acquire_subscriber();
-    }
+            : _cache(cache), _entry(entry), _name(name) {};
 
     ~TxnStateSubscriber() {
         _entry->value().release_subscriber();
@@ -128,6 +133,8 @@ using TxnStateSubscriberPtr = std::unique_ptr<TxnStateSubscriber>;
 struct TxnStatePollTask {
     int64_t txn_id;
     std::string db;
+    std::string tbl;
+    AuthInfo auth;
 };
 
 class TxnStatePoller {
@@ -135,12 +142,13 @@ public:
     TxnStatePoller(TxnStateCache* txn_state_cache, ThreadPoolToken* poll_token)
             : _txn_state_cache(txn_state_cache), _poll_token(poll_token) {}
     Status init();
-    void submit(int64_t txn_id, const std::string& db, int64_t delay_ms);
+    void submit(const TxnStatePollTask& task, int64_t delay_ms);
     void stop();
 
 private:
     void _schedule_func();
     void _schedule_poll_tasks(const std::vector<TxnStatePollTask>& poll_tasks);
+    void _execute_poll(const TxnStatePollTask& task);
 
     TxnStateCache* _txn_state_cache;
     ThreadPoolToken* _poll_token;
@@ -164,7 +172,9 @@ public:
     // Return Status::NotFound if txn_id is not in cache
     StatusOr<TxnState> get_state(int64_t txn_id);
 
-    StatusOr<TxnStateSubscriberPtr> subscribe_state(int64_t txn_id, const std::string& subscriber_name);
+    StatusOr<TxnStateSubscriberPtr> subscribe_state(int64_t txn_id, const std::string& subscriber_name,
+                                                    const std::string& db, const std::string& tbl,
+                                                    const AuthInfo& auth);
 
     void set_capacity(size_t new_capacity);
     int32_t size();
@@ -189,6 +199,7 @@ private:
     TxnStateDynamicCache* _get_txn_cache(int64_t txn_id);
     StatusOr<TxnStateDynamicCacheEntry*> _get_txn_entry(TxnStateDynamicCache* cache, int64_t txn_id,
                                                         bool create_if_not_exist);
+    void _notify_poll_result(const TxnStatePollTask& task, StatusOr<TxnState> result);
 
     size_t _capacity;
     std::unique_ptr<ThreadPoolToken> _poller_token;
