@@ -71,7 +71,6 @@ TEST_F(TxnStateCacheTest, handler_push_state) {
         handler.push_state(TTransactionStatus::COMMITTED, "");
         assert_txn_state_eq({TTransactionStatus::COMMITTED, ""}, handler.txn_state());
         ASSERT_TRUE(handler.committed_status_from_fe());
-
         handler.push_state(TTransactionStatus::VISIBLE, "");
         assert_txn_state_eq({TTransactionStatus::VISIBLE, ""}, handler.txn_state());
     }

@@ -150,7 +150,7 @@ void TxnStateHandler::_transit_txn_state(TTransactionStatus::type new_status, co
     } else if (old_status == TTransactionStatus::PREPARED && new_status == TTransactionStatus::PREPARE) {
         return;
     } else if (old_status == TTransactionStatus::COMMITTED &&
-               (new_status != TTransactionStatus::VISIBLE || new_status != TTransactionStatus::UNKNOWN)) {
+               (new_status != TTransactionStatus::VISIBLE && new_status != TTransactionStatus::UNKNOWN)) {
         return;
     }
     _txn_state.txn_status = new_status;
