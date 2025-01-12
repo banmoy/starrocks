@@ -302,6 +302,28 @@ void TxnStatePoller::_execute_poll(const TxnStatePollTask& task) {
     }
 }
 
+bool TxnStatePoller::is_txn_pending(int64_t txn_id) {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    return _pending_txn_ids.find(txn_id) != _pending_txn_ids.end();
+}
+
+StatusOr<int64_t> TxnStatePoller::pending_execution_time(int64_t txn_id) {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    auto it = _pending_tasks.begin();
+    while (it != _pending_tasks.end()) {
+        if (it->second.txn_id == txn_id) {
+            return it->first;
+        }
+        ++it;
+    }
+    return Status::NotFound("no task found");
+}
+
+bool TxnStatePoller::is_scheduling() {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    return _is_scheduling;
+}
+
 TxnStateCache::TxnStateCache(size_t capacity, std::unique_ptr<ThreadPoolToken> poller_token)
         : _capacity(capacity), _poll_state_token(std::move(poller_token)) {
     size_t capacity_per_shard = (_capacity + (kNumShards - 1)) / kNumShards;

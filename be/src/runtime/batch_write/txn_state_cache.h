@@ -179,10 +179,7 @@ public:
     // For testing
     bool is_txn_pending(int64_t txn_id);
     StatusOr<int64_t> pending_execution_time(int64_t txn_id);
-    bool is_scheduling() {
-        std::unique_lock<bthread::Mutex> lock(_mutex);
-        return _is_scheduling;
-    }
+    bool is_scheduling();
 
 private:
     void _schedule_func();
@@ -201,23 +198,6 @@ private:
     bool _is_scheduling{false};
     bool _stopped{false};
 };
-
-bool TxnStatePoller::is_txn_pending(int64_t txn_id) {
-    std::unique_lock<bthread::Mutex> lock(_mutex);
-    return _pending_txn_ids.find(txn_id) != _pending_txn_ids.end();
-}
-
-StatusOr<int64_t> TxnStatePoller::pending_execution_time(int64_t txn_id) {
-    std::unique_lock<bthread::Mutex> lock(_mutex);
-    auto it = _pending_tasks.begin();
-    while (it != _pending_tasks.end()) {
-        if (it->second.txn_id == txn_id) {
-            return it->first;
-        }
-        ++it;
-    }
-    return Status::NotFound("no task found");
-}
 
 // A cache for txn states. It can receive txn state in two ways: pushed by FE and polled from FE by itself.
 // When the load finishes, FE will try to push the txn state to BE which is more efficient and realtime,
