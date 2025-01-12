@@ -113,7 +113,7 @@ TEST_F(TxnStateCacheTest, handler_poll_state) {
         TxnStateHandler handler;
         handler.subscribe(trigger_poll);
         assert_txn_state_eq({TTransactionStatus::PREPARE, ""}, handler.txn_state());
-        ASSERT_TRUE(handler.poll_state(TxnState{TTransactionStatus::ABORTED, "manual failure"}));
+        ASSERT_FALSE(handler.poll_state(TxnState{TTransactionStatus::ABORTED, "manual failure"}));
         assert_txn_state_eq({TTransactionStatus::ABORTED, "manual failure"}, handler.txn_state());
     }
 
@@ -122,7 +122,7 @@ TEST_F(TxnStateCacheTest, handler_poll_state) {
         TxnStateHandler handler;
         handler.subscribe(trigger_poll);
         assert_txn_state_eq({TTransactionStatus::PREPARE, ""}, handler.txn_state());
-        ASSERT_TRUE(handler.poll_state(TxnState{TTransactionStatus::UNKNOWN, ""}));
+        ASSERT_FALSE(handler.poll_state(TxnState{TTransactionStatus::UNKNOWN, ""}));
         assert_txn_state_eq({TTransactionStatus::UNKNOWN, ""}, handler.txn_state());
     }
 
@@ -130,7 +130,6 @@ TEST_F(TxnStateCacheTest, handler_poll_state) {
     {
         TxnStateHandler handler;
         handler.subscribe(trigger_poll);
-        assert_txn_state_eq({TTransactionStatus::PREPARE, ""}, handler.txn_state());
         ASSERT_EQ(0, handler.num_poll_failure());
         assert_txn_state_eq({TTransactionStatus::PREPARE, ""}, handler.txn_state());
         ASSERT_TRUE(handler.poll_state(Status::InternalError("artificial failure")));
@@ -144,6 +143,7 @@ TEST_F(TxnStateCacheTest, handler_poll_state) {
         ASSERT_EQ(1, handler.num_poll_failure());
         assert_txn_state_eq({TTransactionStatus::COMMITTED, ""}, handler.txn_state());
         ASSERT_FALSE(handler.poll_state(TxnState{TTransactionStatus::VISIBLE, ""}));
+        ASSERT_EQ(0, handler.num_poll_failure());
         assert_txn_state_eq({TTransactionStatus::VISIBLE, ""}, handler.txn_state());
     }
 
@@ -159,7 +159,7 @@ TEST_F(TxnStateCacheTest, handler_poll_state) {
         ASSERT_FALSE(handler.committed_status_from_fe());
         ASSERT_TRUE(handler.poll_state(Status::InternalError("artificial failure")));
         ASSERT_EQ(1, handler.num_poll_failure());
-        assert_txn_state_eq({TTransactionStatus::PREPARE, ""}, handler.txn_state());
+        assert_txn_state_eq({TTransactionStatus::COMMITTED, ""}, handler.txn_state());
         ASSERT_FALSE(handler.poll_state(Status::InternalError("artificial failure")));
         ASSERT_EQ(2, handler.num_poll_failure());
         assert_txn_state_eq(
