@@ -95,11 +95,31 @@ TEST_F(TxnStateCacheTest, handler_update_state) {
     }
 }
 
+TEST_F(TxnStateCacheTest, handler_subscriber) {
+    TxnStateHandler handler;
+    bool trigger_poll = false;
+    handler.subscribe(trigger_poll);
+    ASSERT_EQ(1, handler.num_subscriber());
+    ASSERT_TRUE(trigger_poll);
+    handler.subscribe(trigger_poll);
+    ASSERT_EQ(2, handler.num_subscriber());
+    ASSERT_FALSE(trigger_poll);
+    handler.update_state(TTransactionStatus::VISIBLE, "");
+    handler.unsubscribe();
+    ASSERT_EQ(1, handler.num_subscriber());
+    handler.unsubscribe();
+    ASSERT_EQ(0, handler.num_subscriber());
+    handler.subscribe(trigger_poll);
+    ASSERT_EQ(1, handler.num_subscriber());
+    ASSERT_FALSE(trigger_poll);
+}
+
 TEST_F(TxnStateCacheTest, handler_wait_finished_state) {
     TxnStateHandler handler;
     StatusOr<TxnState> expected_status;
     auto wait_func = [&](const std::string& name, int64_t timeout_us) {
-        handler.acquire_subscriber();
+        bool trigger_poll = false;
+        handler.subscribe(trigger_poll);
         auto st = handler.wait_finished_state(name, timeout_us);
         ASSERT_EQ(expected_status.status().to_string(), st.status().to_string());
         if (st.ok()) {
@@ -111,29 +131,30 @@ TEST_F(TxnStateCacheTest, handler_wait_finished_state) {
     expected_status = Status::TimedOut("Wait txn state timeout 10000 us");
     auto t0 = std::thread([&]() { wait_func("t0", 10000); });
     t0.join();
-    ASSERT_EQ(0, handler.num_waiting_subscriber());
+    ASSERT_EQ(0, handler.num_waiting_finished_state());
 
     // wait until final state
     auto t1 = std::thread([&]() { wait_func("t1", 60000000); });
     auto t2 = std::thread([&]() { wait_func("t2", 60000000); });
-    ASSERT_TRUE(Awaitility().timeout(5000000).until([&] { return handler.num_waiting_subscriber() == 2; }));
+    ASSERT_TRUE(Awaitility().timeout(5000000).until([&] { return handler.num_waiting_finished_state() == 2; }));
     expected_status = {TTransactionStatus::VISIBLE, ""};
     handler.update_state(TTransactionStatus::VISIBLE, "");
     t1.join();
     t2.join();
-    ASSERT_EQ(0, handler.num_waiting_subscriber());
+    ASSERT_EQ(0, handler.num_waiting_finished_state());
 
     // already in final state
     auto t3 = std::thread([&]() { wait_func("t3", 60000000); });
     t3.join();
-    ASSERT_EQ(0, handler.num_waiting_subscriber());
+    ASSERT_EQ(0, handler.num_waiting_finished_state());
 }
 
 TEST_F(TxnStateCacheTest, handler_stop) {
     TxnStateHandler handler;
     StatusOr<TxnState> expected_status;
     auto wait_func = [&](const std::string& name, int64_t timeout_us) {
-        handler.acquire_subscriber();
+        bool trigger_poll = false;
+        handler.subscribe(trigger_poll);
         auto st = handler.wait_finished_state(name, timeout_us);
         ASSERT_EQ(expected_status.status().to_string(), st.status().to_string());
         if (st.ok()) {
@@ -144,7 +165,7 @@ TEST_F(TxnStateCacheTest, handler_stop) {
     // wait when stopped
     auto t1 = std::thread([&]() { wait_func("t1", 60000000); });
     auto t2 = std::thread([&]() { wait_func("t2", 60000000); });
-    ASSERT_TRUE(Awaitility().timeout(60000000).until([&] { return handler.num_waiting_subscriber() == 2; }));
+    ASSERT_TRUE(Awaitility().timeout(60000000).until([&] { return handler.num_waiting_finished_state() == 2; }));
     expected_status = Status::ServiceUnavailable("Transaction state handler is stopped");
     handler.stop();
     t1.join();
@@ -319,9 +340,9 @@ TEST_F(TxnStateCacheTest, cache_stop) {
     auto t3 = std::thread([&]() { wait_func(s3.value().get(), 60000000, StatusOr<TxnState>(expected_status)); });
 
     ASSERT_TRUE(Awaitility().timeout(5000000).until(
-            [&] { return s1.value()->entry()->value().num_waiting_subscriber() == 1; }));
+            [&] { return s1.value()->entry()->value().num_waiting_finished_state() == 1; }));
     ASSERT_TRUE(Awaitility().timeout(5000000).until(
-            [&] { return s3.value()->entry()->value().num_waiting_subscriber() == 1; }));
+            [&] { return s3.value()->entry()->value().num_waiting_finished_state() == 1; }));
     cache->stop();
     t1.join();
     t3.join();

@@ -16,6 +16,7 @@
 
 #include <map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "common/utils.h"
@@ -45,18 +46,33 @@ inline std::ostream& operator<<(std::ostream& os, const TxnState& txn_state) {
     return os;
 }
 
+// Handle the transaction state. It's the value of the DynamicCache
+// 1. transmit the txn state according to the new state from FE or poll task
+// 2. notify txn state subscribers whether it reaches the finished state
+// 3. control the behaviour of txn state poll. In general, the poll task is
+//    triggered when the subscriber comes, and continue to run periodically
+//    until the txn state reaches the finished state, and there is no subscriber
 class TxnStateHandler {
 public:
     ~TxnStateHandler();
 
+    // update the txn state. The new state is from FE
     void update_state(TTransactionStatus::type new_status, const std::string& reason);
-    // return whether to continue polling
+    // notify the handler the result of a round of txn state poll. The returned
+    // value tell the caller to continue or stop polling according the current
+    // result and the current txn state
     bool notify_poll_result(const StatusOr<TxnState>& result);
 
-    void acquire_subscriber(bool& trigger_poll);
-    void release_subscriber();
-    int32_t num_waiting_subscriber();
+    // Add a subscriber for the finished state. Handler will set 'trigger_poll'
+    // to tell whether the caller should submit a txn state poll task
+    void subscribe(bool& trigger_poll);
+    // Remove a subscriber which has called subscribe() before
+    void unsubscribe();
+    int32_t num_subscriber();
+    // A subscriber calls this function to wait for the txn state to reach
+    // a finished state or error happens.
     StatusOr<TxnState> wait_finished_state(const std::string& subscriber_name, int64_t timeout_us);
+    int32_t num_waiting_finished_state();
 
     void set_txn_id(int64_t txn_id) { _txn_id.store(txn_id); }
     int64_t txn_id() { return _txn_id.load(); }
@@ -66,7 +82,7 @@ public:
     void stop();
 
 private:
-    void _transition_txn_state(TTransactionStatus::type new_status, const std::string& reason);
+    void _transit_txn_state(TTransactionStatus::type new_status, const std::string& reason, bool from_fe);
     // Whether the current status indicate the load is finished
     bool _is_finished_txn_state();
 
@@ -75,15 +91,24 @@ private:
     bthread::Mutex _mutex;
     bthread::ConditionVariable _cv;
     TxnState _txn_state;
+    // whether COMMITTED status is notified by FE. Only valid if txn status is COMMITTED.
+    // If true, means publish timeout happens, and should notify subscribers. If false,
+    // means its from poll should continue to wait.
+    bool _is_committed_status_from_fe{false};
     int32_t _num_subscriber{0};
-    int32_t _num_waiting_subscriber{0};
+    int32_t _num_waiting_finished_state{0};
     int32_t _num_poll_failure{0};
     bool _stopped{false};
 };
 
-inline int32_t TxnStateHandler::num_waiting_subscriber() {
+inline int32_t TxnStateHandler::num_subscriber() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
-    return _num_waiting_subscriber;
+    return _num_subscriber;
+}
+
+inline int32_t TxnStateHandler::num_waiting_finished_state() {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    return _num_waiting_finished_state;
 }
 
 inline TxnState TxnStateHandler::txn_state() {
@@ -96,13 +121,16 @@ inline std::ostream& operator<<(std::ostream& os, TxnStateHandler& holder) {
     return os;
 }
 
+// A subscriber which will wait for the finished txn state. It holds a reference
+// to the entry of DynamicCache so that the cache will not evict the txn state.
+// The subscriber can call wait_finished_state() to wait for the finished state.
 class TxnStateSubscriber {
 public:
-    TxnStateSubscriber(TxnStateDynamicCache* cache, TxnStateDynamicCacheEntry* entry, const std::string& name)
-            : _cache(cache), _entry(entry), _name(name) {};
+    TxnStateSubscriber(TxnStateDynamicCache* cache, TxnStateDynamicCacheEntry* entry, std::string name)
+            : _cache(cache), _entry(entry), _name(std::move(name)) {};
 
     ~TxnStateSubscriber() {
-        _entry->value().release_subscriber();
+        _entry->value().unsubscribe();
         _cache->release(_entry);
     }
 
@@ -125,11 +153,15 @@ struct TxnStatePollTask {
     AuthInfo auth;
 };
 
+// Schedule and execute txn state poll tasks. The poller uses a single thread
+// to schedule tasks according to their execution time, and sumit them to the
+// thread pool to run which will send rpc to FE to get txn state.
 class TxnStatePoller {
 public:
     TxnStatePoller(TxnStateCache* txn_state_cache, ThreadPoolToken* poll_token)
             : _txn_state_cache(txn_state_cache), _poll_token(poll_token) {}
     Status init();
+    // submit a task which should be executed after the delay time
     void submit(const TxnStatePollTask& task, int64_t delay_ms);
     void stop();
 
@@ -143,23 +175,33 @@ private:
     std::unique_ptr<std::thread> _schedule_thread;
     bthread::Mutex _mutex;
     bthread::ConditionVariable _cv;
-    // pending txn ids, used to avoid duplicated poll
+    // txn ids to schedule, used to duplicate tasks for the same txn
     std::unordered_set<int64_t> _pending_txn_ids;
-    // execute time in milliseconds -> task
+    // sorted execution time (milliseconds) -> task
     std::multimap<int64_t, TxnStatePollTask> _pending_tasks;
     bool _stopped{false};
 };
 
-// TODO support txn state expire
+// A cache for txn states
+// 1.
 class TxnStateCache {
 public:
     TxnStateCache(size_t capacity, std::unique_ptr<ThreadPoolToken> poller_token);
     Status init();
 
+    // update the txn state of txn_id. The new state is from FE. It will create an entry
+    // in the DynamicCache it the txn does not in the cache before.
     Status update_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason);
-    // Return Status::NotFound if txn_id is not in cache
+
+    // get the current state of txn_id. A TxnState will return if the txn is in the cache.
+    // Status::NotFound will return if the txn is not in the cache. Other status will return
+    // if error happens.
     StatusOr<TxnState> get_state(int64_t txn_id);
 
+    // create a TxnStateSubscriber to subscribe the finished txn state. It will create an entry
+    // in the DynamicCache it the txn does not in the cache before. The subscriber will hold a
+    // reference to the entry, so the entry will not be evicted if any subscriber is using it.
+    // The db/tbl/auth may be used to poll txn state.
     StatusOr<TxnStateSubscriberPtr> subscribe_state(int64_t txn_id, const std::string& subscriber_name,
                                                     const std::string& db, const std::string& tbl,
                                                     const AuthInfo& auth);
@@ -185,6 +227,9 @@ private:
     friend class TxnStatePoller;
 
     TxnStateDynamicCache* _get_txn_cache(int64_t txn_id);
+    // if create_if_not_exist is true, must return non nullptr entry if status is ok.
+    // if create_if_not_exist is false, return nullptr if txn is not in cache.
+    // Return not ok status if error happens.
     StatusOr<TxnStateDynamicCacheEntry*> _get_txn_entry(TxnStateDynamicCache* cache, int64_t txn_id,
                                                         bool create_if_not_exist);
     void _notify_poll_result(const TxnStatePollTask& task, StatusOr<TxnState> result);
@@ -193,6 +238,7 @@ private:
     std::unique_ptr<ThreadPoolToken> _poller_token;
     TxnStateDynamicCachePtr _shards[kNumShards];
     std::unique_ptr<TxnStatePoller> _txn_state_poller;
+    // protect the cache from being accessed after it is stopped
     bthreads::BThreadSharedMutex _rw_mutex;
     bool _stopped{false};
 };
