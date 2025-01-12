@@ -65,14 +65,14 @@ bool TxnStateHandler::notify_poll_result(const StatusOr<TxnState>& result) {
     }
 }
 
-inline bool TxnStateHandler::acquire_subscriber() {
+void TxnStateHandler::acquire_subscriber(bool& trigger_poll) {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     _num_subscriber++;
-    // should trigger polling if this is the first subscriber
-    return _num_subscriber == 1 && !_is_finished_txn_state();
+    // should trigger polling if this is the first subscriber and no in finished state
+    trigger_poll = _num_subscriber == 1 && !_is_finished_txn_state();
 }
 
-inline void TxnStateHandler::release_subscriber() {
+void TxnStateHandler::release_subscriber() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     _num_subscriber--;
 }
@@ -312,8 +312,9 @@ StatusOr<TxnStateSubscriberPtr> TxnStateCache::subscribe_state(int64_t txn_id, c
     auto cache = _get_txn_cache(txn_id);
     ASSIGN_OR_RETURN(auto entry, _get_txn_entry(cache, txn_id, true));
     DCHECK(entry != nullptr);
-    bool should_poll = entry->value().acquire_subscriber();
-    if (should_poll) {
+    bool trigger_poll = false;
+    entry->value().acquire_subscriber(trigger_poll);
+    if (trigger_poll) {
         _txn_state_poller->submit({txn_id, db, tbl, auth}, config::merge_commit_txn_state_poll_interval_ms);
     }
     return std::make_unique<TxnStateSubscriber>(cache, entry, subscriber_name);
@@ -385,7 +386,9 @@ void TxnStateCache::_notify_poll_result(const TxnStatePollTask& task, StatusOr<T
     auto entry = entry_st.value();
     DeferOp defer([&] { cache->release(entry); });
     bool continue_poll = entry->value().notify_poll_result(result);
-    _txn_state_poller->submit(task, config::merge_commit_txn_state_poll_interval_ms);
+    if (continue_poll) {
+        _txn_state_poller->submit(task, config::merge_commit_txn_state_poll_interval_ms);
+    }
 }
 
 } // namespace starrocks

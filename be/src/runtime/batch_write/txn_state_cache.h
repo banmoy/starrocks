@@ -53,8 +53,7 @@ public:
     // return whether to continue polling
     bool notify_poll_result(const StatusOr<TxnState>& result);
 
-    // return whether to trigger polling
-    bool acquire_subscriber();
+    void acquire_subscriber(bool& trigger_poll);
     void release_subscriber();
     int32_t num_waiting_subscriber();
     StatusOr<TxnState> wait_finished_state(const std::string& subscriber_name, int64_t timeout_us);
