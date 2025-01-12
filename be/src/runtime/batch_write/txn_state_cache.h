@@ -78,20 +78,9 @@ private:
     TxnState _txn_state;
     int32_t _num_subscriber{0};
     int32_t _num_waiting_subscriber{0};
+    int32_t _num_poll_failure{0};
     bool _stopped{false};
 };
-
-inline bool TxnStateHandler::acquire_subscriber() {
-    std::unique_lock<bthread::Mutex> lock(_mutex);
-    _num_subscriber++;
-    // should trigger polling if this is the first subscriber
-    return _num_subscriber == 1 && !_is_finished_txn_state();
-}
-
-inline void TxnStateHandler::release_subscriber() {
-    std::unique_lock<bthread::Mutex> lock(_mutex);
-    _num_subscriber--;
-}
 
 inline int32_t TxnStateHandler::num_waiting_subscriber() {
     std::unique_lock<bthread::Mutex> lock(_mutex);

@@ -421,7 +421,7 @@ Status IsomorphicBatchWrite::_wait_for_load_finish(StreamLoadContext* data_ctx) 
     int64_t left_timeout_ms =
             std::max((int64_t)0, total_timeout_ms - (MonotonicNanos() - data_ctx->start_nanos) / 1000000);
     StatusOr<TxnStateSubscriberPtr> subscriber_status = _txn_state_cache->subscribe_state(
-            data_ctx->txn_id, data_ctx->db, data_ctx->table, data_ctx->auth, data_ctx->label);
+            data_ctx->txn_id, data_ctx->label, data_ctx->db, data_ctx->table, data_ctx->auth);
     if (!subscriber_status.ok()) {
         return Status::InternalError("Failed to create txn state subscriber, " +
                                      subscriber_status.status().to_string());

@@ -47,9 +47,14 @@ bool TxnStateHandler::notify_poll_result(const StatusOr<TxnState>& result) {
         return false;
     }
     if (!result.status().ok()) {
-        // TODO retry to poll
-        _transition_txn_state(TTransactionStatus::UNKNOWN, result.status().to_string());
+        _num_poll_failure += 1;
+        if (_num_poll_failure >= config::merge_commit_txn_state_poll_max_fail_times) {
+            _transition_txn_state(TTransactionStatus::UNKNOWN,
+                                  fmt::format("poll failure exceeds max times {}, last error: {} ", _num_poll_failure,
+                                              result.status().to_string()));
+        }
     } else {
+        _num_poll_failure = 0;
         _transition_txn_state(result.value().txn_status, result.value().reason);
     }
     if (_is_finished_txn_state()) {
@@ -58,6 +63,18 @@ bool TxnStateHandler::notify_poll_result(const StatusOr<TxnState>& result) {
     } else {
         return _num_subscriber > 0;
     }
+}
+
+inline bool TxnStateHandler::acquire_subscriber() {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    _num_subscriber++;
+    // should trigger polling if this is the first subscriber
+    return _num_subscriber == 1 && !_is_finished_txn_state();
+}
+
+inline void TxnStateHandler::release_subscriber() {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    _num_subscriber--;
 }
 
 StatusOr<TxnState> TxnStateHandler::wait_finished_state(const std::string& subscriber_name, int64_t timeout_us) {
