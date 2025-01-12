@@ -126,6 +126,7 @@ TEST(TxnStateCacheTest, handler_stop) {
 
 TEST(TxnStateCacheTest, cache_update_state) {
     TxnStateCache cache(2048);
+    ASSERT_OK(cache.init());
     DeferOp defer([&] { cache.stop(); });
 
     ASSERT_TRUE(cache.get_state(1).status().is_not_found());
@@ -152,6 +153,7 @@ TEST(TxnStateCacheTest, cache_update_state) {
 
 TEST(TxnStateCacheTest, cache_subscriber) {
     TxnStateCache cache(2048);
+    ASSERT_OK(cache.init());
     DeferOp defer([&] { cache.stop(); });
 
     auto wait_func = [&](TxnStateSubscriber* subscriber, int64_t timeout_us, StatusOr<TxnState> expected) {
@@ -176,15 +178,13 @@ TEST(TxnStateCacheTest, cache_subscriber) {
     ASSERT_OK(s2_1.status());
     assert_txn_state_eq({TTransactionStatus::ABORTED, "artificial failure"}, s2_1.value()->current_state());
 
-    auto t1_1 = std::thread([&]() {
-        wait_func(s1_1.value().get(), 60000000, StatusOr<TxnState>({TTransactionStatus::VISIBLE, ""}));
-    });
+    auto t1_1 = std::thread(
+            [&]() { wait_func(s1_1.value().get(), 60000000, StatusOr<TxnState>({TTransactionStatus::VISIBLE, ""})); });
     ASSERT_OK(cache.update_state(1, TTransactionStatus::VISIBLE, ""));
     t1_1.join();
 
-    auto t1_2 = std::thread([&]() {
-        wait_func(s1_2.value().get(), 60000000, StatusOr<TxnState>({TTransactionStatus::VISIBLE, ""}));
-    });
+    auto t1_2 = std::thread(
+            [&]() { wait_func(s1_2.value().get(), 60000000, StatusOr<TxnState>({TTransactionStatus::VISIBLE, ""})); });
     t1_2.join();
 
     auto t2_1 = std::thread([&]() {
@@ -205,6 +205,7 @@ TEST(TxnStateCacheTest, cache_subscriber) {
 TEST(TxnStateCacheTest, cache_eviction) {
     int32_t numShards = 1 << 5;
     TxnStateCache cache(numShards * 3);
+    ASSERT_OK(cache.init());
     DeferOp defer_stop([&] { cache.stop(); });
 
     int64_t evict_txn_id = -1;
@@ -257,6 +258,7 @@ TEST(TxnStateCacheTest, cache_eviction) {
 
 TEST(TxnStateCacheTest, cache_set_capacity) {
     TxnStateCache cache(2048);
+    ASSERT_OK(cache.init());
     DeferOp defer([&] { cache.stop(); });
     auto shards = cache.get_cache_shards();
     for (auto shard : shards) {
@@ -270,6 +272,7 @@ TEST(TxnStateCacheTest, cache_set_capacity) {
 
 TEST(TxnStateCacheTest, cache_stop) {
     TxnStateCache cache(2048);
+    ASSERT_OK(cache.init());
 
     Status expected_status = Status::ServiceUnavailable("Transaction state handler is stopped");
     auto wait_func = [&](TxnStateSubscriber* subscriber, int64_t timeout_us, StatusOr<TxnState> expected) {

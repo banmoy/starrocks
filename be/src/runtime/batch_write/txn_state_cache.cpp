@@ -132,6 +132,10 @@ TxnStateCache::TxnStateCache(size_t capacity) : _capacity(capacity) {
     }
 }
 
+Status TxnStateCache::init() {
+    return Status::OK();
+}
+
 Status TxnStateCache::update_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason) {
     auto cache = _get_txn_cache(txn_id);
     ASSIGN_OR_RETURN(auto entry, _get_txn_entry(cache, txn_id, true));

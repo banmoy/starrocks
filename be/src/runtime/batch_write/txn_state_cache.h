@@ -129,6 +129,7 @@ using TxnStateSubscriberPtr = std::unique_ptr<TxnStateSubscriber>;
 class TxnStateCache {
 public:
     TxnStateCache(size_t capacity);
+    Status init();
 
     Status update_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason);
     // Return Status::NotFound if txn_id is not in cache
