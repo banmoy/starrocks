@@ -53,8 +53,8 @@ bool TxnStateHandler::poll_state(const StatusOr<TxnState>& result) {
         // fast fail if there is failure between FE and BE
         if (_num_poll_failure >= config::merge_commit_txn_state_poll_max_fail_times) {
             _transit_txn_state(TTransactionStatus::UNKNOWN,
-                               fmt::format("poll failure exceeds max times {}, last error: {}", _num_poll_failure,
-                                           result.status().to_string(false)),
+                               fmt::format("poll txn state failure exceeds max times {}, last error: {}",
+                                           _num_poll_failure, result.status().to_string(false)),
                                false);
         }
     } else {

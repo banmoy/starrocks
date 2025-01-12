@@ -163,7 +163,7 @@ TEST_F(TxnStateCacheTest, handler_poll_state) {
         ASSERT_FALSE(handler.poll_state(Status::InternalError("artificial failure")));
         ASSERT_EQ(2, handler.num_poll_failure());
         assert_txn_state_eq(
-                {TTransactionStatus::UNKNOWN, "poll failure exceeds max times 2, last error: " +
+                {TTransactionStatus::UNKNOWN, "poll txn state failure exceeds max times 2, last error: " +
                                                       Status::InternalError("artificial failure").to_string(false)},
                 handler.txn_state());
     }
