@@ -30,7 +30,7 @@ TxnStateHandler::~TxnStateHandler() {
     TRACE_BATCH_WRITE << "evict txn state, " << debug_string();
 }
 
-void TxnStateHandler::update_state(TTransactionStatus::type new_status, const std::string& reason) {
+void TxnStateHandler::push_state(TTransactionStatus::type new_status, const std::string& reason) {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     if (_stopped) {
         return;
@@ -41,7 +41,7 @@ void TxnStateHandler::update_state(TTransactionStatus::type new_status, const st
     }
 }
 
-bool TxnStateHandler::notify_poll_result(const StatusOr<TxnState>& result) {
+bool TxnStateHandler::poll_state(const StatusOr<TxnState>& result) {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     if (_stopped) {
         return false;
@@ -54,7 +54,7 @@ bool TxnStateHandler::notify_poll_result(const StatusOr<TxnState>& result) {
         if (_num_poll_failure >= config::merge_commit_txn_state_poll_max_fail_times) {
             _transit_txn_state(TTransactionStatus::UNKNOWN,
                                fmt::format("poll failure exceeds max times {}, last error: {} ", _num_poll_failure,
-                                           result.status().to_string()),
+                                           result.status().to_string(false)),
                                false);
         }
     } else {
@@ -142,14 +142,15 @@ void TxnStateHandler::_transit_txn_state(TTransactionStatus::type new_status, co
     // special case for COMMITTED status. If it's notified by FE, it means the load finished with
     // publish timeout, _is_finished_txn_state() should return true, and notify subscribers.
     if (new_status == TTransactionStatus::COMMITTED && from_fe) {
-        _is_committed_status_from_fe = from_fe;
+        _committed_status_from_fe = from_fe;
     }
     if (old_status == TTransactionStatus::VISIBLE || old_status == TTransactionStatus::ABORTED ||
         old_status == TTransactionStatus::UNKNOWN) {
         return;
     } else if (old_status == TTransactionStatus::PREPARED && new_status == TTransactionStatus::PREPARE) {
         return;
-    } else if (old_status == TTransactionStatus::COMMITTED && new_status != TTransactionStatus::VISIBLE) {
+    } else if (old_status == TTransactionStatus::COMMITTED &&
+               (new_status != TTransactionStatus::VISIBLE || new_status != TTransactionStatus::UNKNOWN)) {
         return;
     }
     _txn_state.txn_status = new_status;
@@ -166,7 +167,7 @@ bool TxnStateHandler::_is_finished_txn_state() {
     case TTransactionStatus::UNKNOWN:
         return true;
     case TTransactionStatus::COMMITTED:
-        return _is_committed_status_from_fe;
+        return _committed_status_from_fe;
     default:
         return false;
     }
@@ -178,6 +179,12 @@ StatusOr<TxnState> TxnStateSubscriber::wait_finished_state(int64_t timeout_us) {
 
 TxnState TxnStateSubscriber::current_state() {
     return _entry->value().txn_state();
+}
+
+inline int64_t get_current_ms() {
+    int64_t current_ts = MonotonicMillis();
+    TEST_SYNC_POINT_CALLBACK("TxnStatePoller::get_current_ms", &current_ts);
+    return current_ts;
 }
 
 Status TxnStatePoller::init() {
@@ -194,7 +201,7 @@ void TxnStatePoller::submit(const TxnStatePollTask& task, int64_t delay_ms) {
     if (_pending_txn_ids.find(task.txn_id) != _pending_txn_ids.end()) {
         return;
     }
-    int64_t execute_time = MonotonicMillis() + delay_ms;
+    int64_t execute_time = get_current_ms() + delay_ms;
     _pending_txn_ids.emplace(task.txn_id);
     _pending_tasks.emplace(std::make_pair(execute_time, task));
     _cv.notify_all();
@@ -219,8 +226,9 @@ void TxnStatePoller::stop() {
 void TxnStatePoller::_schedule_func() {
     std::vector<TxnStatePollTask> poll_tasks;
     std::unique_lock<bthread::Mutex> lock(_mutex);
+    _is_scheduling = true;
     while (!_stopped) {
-        int64_t current_ts = MonotonicMillis();
+        int64_t current_ts = get_current_ms();
         auto it = _pending_tasks.begin();
         while (it != _pending_tasks.end()) {
             if (it->first <= current_ts) {
@@ -244,10 +252,11 @@ void TxnStatePoller::_schedule_func() {
             _cv.wait(lock);
         } else {
             // at least wait 50 ms to avoid busy loop
-            int64_t wait_time_ms = std::max((int64_t)50, _pending_tasks.begin()->first - MonotonicMillis());
+            int64_t wait_time_ms = std::max((int64_t)50, _pending_tasks.begin()->first - get_current_ms());
             _cv.wait_for(lock, wait_time_ms * 1000);
         }
     }
+    _is_scheduling = false;
 }
 
 void TxnStatePoller::_schedule_poll_tasks(const std::vector<TxnStatePollTask>& poll_tasks) {
@@ -294,7 +303,7 @@ void TxnStatePoller::_execute_poll(const TxnStatePollTask& task) {
 }
 
 TxnStateCache::TxnStateCache(size_t capacity, std::unique_ptr<ThreadPoolToken> poller_token)
-        : _capacity(capacity), _poller_token(std::move(poller_token)) {
+        : _capacity(capacity), _poll_state_token(std::move(poller_token)) {
     size_t capacity_per_shard = (_capacity + (kNumShards - 1)) / kNumShards;
     for (int32_t i = 0; i < kNumShards; i++) {
         _shards[i] = std::make_unique<TxnStateDynamicCache>(capacity_per_shard);
@@ -302,15 +311,15 @@ TxnStateCache::TxnStateCache(size_t capacity, std::unique_ptr<ThreadPoolToken> p
 }
 
 Status TxnStateCache::init() {
-    _txn_state_poller = std::make_unique<TxnStatePoller>(this, _poller_token.get());
+    _txn_state_poller = std::make_unique<TxnStatePoller>(this, _poll_state_token.get());
     return _txn_state_poller->init();
 }
 
-Status TxnStateCache::update_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason) {
+Status TxnStateCache::push_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason) {
     auto cache = _get_txn_cache(txn_id);
     ASSIGN_OR_RETURN(auto entry, _get_txn_entry(cache, txn_id, true));
     DCHECK(entry != nullptr);
-    entry->value().update_state(status, reason);
+    entry->value().push_state(status, reason);
     cache->release(entry);
     return Status::OK();
 }
@@ -372,7 +381,7 @@ void TxnStateCache::stop() {
     if (_txn_state_poller) {
         _txn_state_poller->stop();
     }
-    _poller_token->shutdown();
+    _poll_state_token->shutdown();
 }
 
 int32_t TxnStateCache::size() {
@@ -407,7 +416,7 @@ void TxnStateCache::_notify_poll_result(const TxnStatePollTask& task, StatusOr<T
     }
     auto entry = entry_st.value();
     DeferOp defer([&] { cache->release(entry); });
-    bool continue_poll = entry->value().notify_poll_result(result);
+    bool continue_poll = entry->value().poll_state(result);
     TRACE_BATCH_WRITE << "notify cache poll result, txn_id: " << task.txn_id << ", db: " << task.db
                       << ", tbl: " << task.tbl << ", continue_poll: " << continue_poll;
     if (continue_poll) {

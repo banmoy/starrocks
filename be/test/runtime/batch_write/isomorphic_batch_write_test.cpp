@@ -258,7 +258,7 @@ TEST_F(IsomorphicBatchWriteTest, append_data_async) {
 
 TEST_F(IsomorphicBatchWriteTest, append_data_sync) {
     test_append_data_sync_base(1, "label1", {TTransactionStatus::UNKNOWN, ""},
-                               Status::InternalError("Can't find the transaction"));
+                               Status::InternalError("Can't find the transaction, reason: "));
     test_append_data_sync_base(2, "label2", {TTransactionStatus::COMMITTED, ""},
                                Status::PublishTimeout("Load has not been published before timeout"));
     test_append_data_sync_base(3, "label3", {TTransactionStatus::VISIBLE, ""}, Status::OK());
@@ -305,7 +305,7 @@ void IsomorphicBatchWriteTest::test_append_data_sync_base(int64_t txn_id, std::s
     // stream pipe left time is 100ms
     SyncPoint::GetInstance()->SetCallBack("TimeBoundedStreamLoadPipe::get_current_ns",
                                           [&](void* arg) { *((int64_t*)arg) = 900000000; });
-    ASSERT_OK(_txn_state_cache->update_state(txn_id, txn_state.txn_status, txn_state.reason));
+    ASSERT_OK(_txn_state_cache->push_state(txn_id, txn_state.txn_status, txn_state.reason));
     StreamLoadContext* data_ctx1 = build_data_context(batch_write_id, "data1");
     Status result = batch_write->append_data(data_ctx1);
     ASSERT_EQ(1, num_rpc_request);

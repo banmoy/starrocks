@@ -46,22 +46,21 @@ inline std::ostream& operator<<(std::ostream& os, const TxnState& txn_state) {
     return os;
 }
 
-// Handle the transaction state. It's the value of the DynamicCache
-// 1. transmit the txn state according to the new state from FE or poll task
+// Handle the transaction state. It's the value of the DynamicCache entry
+// 1. transmit the txn state according to the new state pushed by FE or polled from FE
 // 2. notify txn state subscribers whether it reaches the finished state
-// 3. control the behaviour of txn state poll. In general, the poll task is
-//    triggered when the subscriber comes, and continue to run periodically
+// 3. control the behaviour of txn state poll. The poll task starts to schedule when the
+//    first subscriber comes(see subscribe()), and continue to schedule (see poll_state())
 //    until the txn state reaches the finished state, and there is no subscriber
 class TxnStateHandler {
 public:
     ~TxnStateHandler();
 
-    // update the txn state. The new state is from FE
-    void update_state(TTransactionStatus::type new_status, const std::string& reason);
-    // notify the handler the result of a round of txn state poll. The returned
-    // value tell the caller to continue or stop polling according the current
-    // result and the current txn state
-    bool notify_poll_result(const StatusOr<TxnState>& result);
+    // update the txn state pushed by FE
+    void push_state(TTransactionStatus::type new_status, const std::string& reason);
+    // update the txn state polled by the cache. The returned value tell the caller to
+    // continue or stop polling according the current result and the current txn state
+    bool poll_state(const StatusOr<TxnState>& result);
 
     // Add a subscriber for the finished state. Handler will set 'trigger_poll'
     // to tell whether the caller should submit a txn state poll task
@@ -77,6 +76,8 @@ public:
     void set_txn_id(int64_t txn_id) { _txn_id.store(txn_id); }
     int64_t txn_id() { return _txn_id.load(); }
     TxnState txn_state();
+    bool committed_status_from_fe();
+    int32_t num_poll_failure();
     std::string debug_string();
 
     void stop();
@@ -94,7 +95,7 @@ private:
     // whether COMMITTED status is notified by FE. Only valid if txn status is COMMITTED.
     // If true, means publish timeout happens, and should notify subscribers. If false,
     // means its from poll should continue to wait.
-    bool _is_committed_status_from_fe{false};
+    bool _committed_status_from_fe{false};
     int32_t _num_subscriber{0};
     int32_t _num_waiting_finished_state{0};
     int32_t _num_poll_failure{0};
@@ -114,6 +115,16 @@ inline int32_t TxnStateHandler::num_waiting_finished_state() {
 inline TxnState TxnStateHandler::txn_state() {
     std::unique_lock<bthread::Mutex> lock(_mutex);
     return _txn_state;
+}
+
+inline bool TxnStateHandler::committed_status_from_fe() {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    return _committed_status_from_fe;
+}
+
+inline int32_t TxnStateHandler::num_poll_failure() {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    return _num_poll_failure;
 }
 
 inline std::ostream& operator<<(std::ostream& os, TxnStateHandler& holder) {
@@ -154,7 +165,7 @@ struct TxnStatePollTask {
 };
 
 // Schedule and execute txn state poll tasks. The poller uses a single thread
-// to schedule tasks according to their execution time, and sumit them to the
+// to schedule tasks according to their execution time, and submit them to the
 // thread pool to run which will send rpc to FE to get txn state.
 class TxnStatePoller {
 public:
@@ -164,6 +175,14 @@ public:
     // submit a task which should be executed after the delay time
     void submit(const TxnStatePollTask& task, int64_t delay_ms);
     void stop();
+
+    // For testing
+    bool is_txn_pending(int64_t txn_id);
+    StatusOr<int64_t> pending_execution_time(int64_t txn_id);
+    bool is_scheduling() {
+        std::unique_lock<bthread::Mutex> lock(_mutex);
+        return _is_scheduling;
+    }
 
 private:
     void _schedule_func();
@@ -179,19 +198,43 @@ private:
     std::unordered_set<int64_t> _pending_txn_ids;
     // sorted execution time (milliseconds) -> task
     std::multimap<int64_t, TxnStatePollTask> _pending_tasks;
+    bool _is_scheduling{false};
     bool _stopped{false};
 };
 
-// A cache for txn states
-// 1.
+bool TxnStatePoller::is_txn_pending(int64_t txn_id) {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    return _pending_txn_ids.find(txn_id) != _pending_txn_ids.end();
+}
+
+StatusOr<int64_t> TxnStatePoller::pending_execution_time(int64_t txn_id) {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    auto it = _pending_tasks.begin();
+    while (it != _pending_tasks.end()) {
+        if (it->second.txn_id == txn_id) {
+            return it->first;
+        }
+        ++it;
+    }
+    return Status::NotFound("no task found");
+}
+
+// A cache for txn states. It can receive txn state in two ways: pushed by FE and polled from FE by itself.
+// When the load finishes, FE will try to push the txn state to BE which is more efficient and realtime,
+// but it does not always work because the push may fail for some reason, such as FE leader switch or crash.
+// So BE will poll the txn state from FE periodically in a low frequency to detect those bad cases rather
+// than just waiting until timeout. Apart from maintaining the txn state, the cache also provides a subscribe
+// mechanism to notify the subscriber when the txn state reaches the finished state.
+// The poll state task starts to schedule when the first subscriber comes, and continue to schedule when the
+// last poll finishes. The schedule will end when the txn reaches the finished state or there is no subscriber.
 class TxnStateCache {
 public:
     TxnStateCache(size_t capacity, std::unique_ptr<ThreadPoolToken> poller_token);
     Status init();
 
-    // update the txn state of txn_id. The new state is from FE. It will create an entry
+    // update the txn state which is pushed by FE. It will create an entry
     // in the DynamicCache it the txn does not in the cache before.
-    Status update_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason);
+    Status push_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason);
 
     // get the current state of txn_id. A TxnState will return if the txn is in the cache.
     // Status::NotFound will return if the txn is not in the cache. Other status will return
@@ -219,6 +262,7 @@ public:
         }
         return ret;
     }
+    TxnStatePoller* txn_state_poller() { return _txn_state_poller.get(); }
 
 private:
     static const int kNumShardBits = 5;
@@ -235,7 +279,7 @@ private:
     void _notify_poll_result(const TxnStatePollTask& task, StatusOr<TxnState> result);
 
     size_t _capacity;
-    std::unique_ptr<ThreadPoolToken> _poller_token;
+    std::unique_ptr<ThreadPoolToken> _poll_state_token;
     TxnStateDynamicCachePtr _shards[kNumShards];
     std::unique_ptr<TxnStatePoller> _txn_state_poller;
     // protect the cache from being accessed after it is stopped

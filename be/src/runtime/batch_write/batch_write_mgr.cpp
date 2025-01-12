@@ -264,8 +264,8 @@ void BatchWriteMgr::update_transaction_state(ExecEnv* exec_env, brpc::Controller
                                              PUpdateTransactionStateResponse* response) {
     for (int i = 0; i < request->states_size(); i++) {
         auto& txn_state = request->states(i);
-        auto st = _txn_state_cache->update_state(txn_state.txn_id(), to_thrift_txn_status(txn_state.status()),
-                                                 txn_state.reason());
+        auto st = _txn_state_cache->push_state(txn_state.txn_id(), to_thrift_txn_status(txn_state.status()),
+                                               txn_state.reason());
         if (!st.ok()) {
             LOG(WARNING) << "Failed to update transaction state, txn_id: " << txn_state.txn_id()
                          << ", txn status: " << TransactionStatusPB_Name(txn_state.status())
