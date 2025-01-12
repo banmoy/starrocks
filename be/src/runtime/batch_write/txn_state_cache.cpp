@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "runtime/batch_write/batch_write_util.h"
+#include "util/thread.h"
 
 namespace starrocks {
 
@@ -125,7 +126,79 @@ TxnState TxnStateSubscriber::current_state() {
     return _entry->value().txn_state();
 }
 
-TxnStateCache::TxnStateCache(size_t capacity) : _capacity(capacity) {
+Status TxnStatePoller::init() {
+    _schedule_thread = std::make_unique<std::thread>([this] { _schedule_func(); });
+    Thread::set_thread_name(*_schedule_thread.get(), "txn_state_sche");
+    return Status::OK();
+}
+
+void TxnStatePoller::submit(int64_t txn_id, const std::string& db, int64_t delay_ms) {
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    if (_stopped) {
+        return;
+    }
+    if (_pending_txn_ids.find(txn_id) != _pending_txn_ids.end()) {
+        return;
+    }
+    int64_t execute_time = MonotonicMillis() + delay_ms;
+    _pending_txn_ids.emplace(txn_id);
+    TxnStatePollTask task = {txn_id, db};
+    _pending_tasks.emplace(std::make_pair(execute_time, task));
+    _cv.notify_all();
+}
+
+void TxnStatePoller::stop() {
+    {
+        std::unique_lock<bthread::Mutex> lock(_mutex);
+        if (_stopped) {
+            return;
+        }
+        _stopped = true;
+        _cv.notify_all();
+    }
+    if (_schedule_thread && _schedule_thread->joinable()) {
+        _schedule_thread->join();
+    }
+}
+
+void TxnStatePoller::_schedule_func() {
+    std::vector<TxnStatePollTask> poll_tasks;
+    std::unique_lock<bthread::Mutex> lock(_mutex);
+    while (!_stopped) {
+        int64_t current_ts = MonotonicMillis();
+        auto it = _pending_tasks.begin();
+        while (it != _pending_tasks.end()) {
+            if (it->first <= current_ts) {
+                it = _pending_tasks.erase(it);
+            } else {
+                break;
+            }
+        }
+        if (!poll_tasks.empty()) {
+            lock.unlock();
+
+            poll_tasks.clear();
+            lock.lock();
+        }
+        if (_stopped) {
+            break;
+        }
+        if (_pending_tasks.empty()) {
+            _cv.wait(lock);
+        } else {
+            // at least wait 50 ms to avoid busy loop
+            int64_t wait_time_ms = std::max((int64_t)50, _pending_tasks.begin()->first - MonotonicMillis());
+            _cv.wait_for(lock, wait_time_ms * 1000);
+        }
+    }
+}
+
+void TxnStatePoller::_schedule_poll_tasks(const std::vector<TxnStatePollTask>& poll_tasks) {
+    // TODO
+}
+
+TxnStateCache::TxnStateCache(size_t capacity, std::unique_ptr<ThreadPoolToken> poller_token)
+        : _capacity(capacity), _poller_token(std::move(poller_token)) {
     size_t capacity_per_shard = (_capacity + (kNumShards - 1)) / kNumShards;
     for (int32_t i = 0; i < kNumShards; i++) {
         _shards[i] = std::make_unique<TxnStateDynamicCache>(capacity_per_shard);
@@ -133,7 +206,8 @@ TxnStateCache::TxnStateCache(size_t capacity) : _capacity(capacity) {
 }
 
 Status TxnStateCache::init() {
-    return Status::OK();
+    _txn_state_poller = std::make_unique<TxnStatePoller>(this, _poller_token.get());
+    return _txn_state_poller->init();
 }
 
 Status TxnStateCache::update_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason) {
@@ -188,6 +262,10 @@ void TxnStateCache::stop() {
             cache->release(entry);
         }
     }
+    if (_txn_state_poller) {
+        _txn_state_poller->stop();
+    }
+    _poller_token->shutdown();
 }
 
 int32_t TxnStateCache::size() {

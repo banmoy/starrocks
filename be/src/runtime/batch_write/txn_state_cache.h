@@ -15,6 +15,7 @@
 #pragma once
 
 #include <map>
+#include <unordered_set>
 #include <vector>
 
 #include "testutil/sync_point.h"
@@ -25,6 +26,7 @@
 
 namespace starrocks {
 
+class ThreadPoolToken;
 class TxnStateHandler;
 class TxnStateSubscriber;
 class TxnStateCache;
@@ -123,12 +125,39 @@ private:
 };
 using TxnStateSubscriberPtr = std::unique_ptr<TxnStateSubscriber>;
 
-// TODO
-// 1. support txn status expire
-// 2. support poll txn status
+struct TxnStatePollTask {
+    int64_t txn_id;
+    std::string db;
+};
+
+class TxnStatePoller {
+public:
+    TxnStatePoller(TxnStateCache* txn_state_cache, ThreadPoolToken* poll_token)
+            : _txn_state_cache(txn_state_cache), _poll_token(poll_token) {}
+    Status init();
+    void submit(int64_t txn_id, const std::string& db, int64_t delay_ms);
+    void stop();
+
+private:
+    void _schedule_func();
+    void _schedule_poll_tasks(const std::vector<TxnStatePollTask>& poll_tasks);
+
+    TxnStateCache* _txn_state_cache;
+    ThreadPoolToken* _poll_token;
+    std::unique_ptr<std::thread> _schedule_thread;
+    bthread::Mutex _mutex;
+    bthread::ConditionVariable _cv;
+    // pending txn ids, used to avoid duplicated poll
+    std::unordered_set<int64_t> _pending_txn_ids;
+    // execute time in milliseconds -> task
+    std::multimap<int64_t, TxnStatePollTask> _pending_tasks;
+    bool _stopped{false};
+};
+
+// TODO support txn state expire
 class TxnStateCache {
 public:
-    TxnStateCache(size_t capacity);
+    TxnStateCache(size_t capacity, std::unique_ptr<ThreadPoolToken> poller_token);
     Status init();
 
     Status update_state(int64_t txn_id, TTransactionStatus::type status, const std::string& reason);
@@ -155,12 +184,16 @@ private:
     static const int kNumShardBits = 5;
     static const int kNumShards = 1 << kNumShardBits;
 
+    friend class TxnStatePoller;
+
     TxnStateDynamicCache* _get_txn_cache(int64_t txn_id);
     StatusOr<TxnStateDynamicCacheEntry*> _get_txn_entry(TxnStateDynamicCache* cache, int64_t txn_id,
                                                         bool create_if_not_exist);
 
     size_t _capacity;
+    std::unique_ptr<ThreadPoolToken> _poller_token;
     TxnStateDynamicCachePtr _shards[kNumShards];
+    std::unique_ptr<TxnStatePoller> _txn_state_poller;
     bthreads::BThreadSharedMutex _rw_mutex;
     bool _stopped{false};
 };

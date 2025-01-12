@@ -28,7 +28,9 @@ namespace starrocks {
 BatchWriteMgr::BatchWriteMgr(std::unique_ptr<bthreads::ThreadPoolExecutor> executor) : _executor(std::move(executor)) {}
 
 Status BatchWriteMgr::init() {
-    _txn_state_cache = std::make_unique<TxnStateCache>(config::merge_commit_txn_state_cache_capacity);
+    std::unique_ptr<ThreadPoolToken> token =
+            _executor->get_thread_pool()->new_token(ThreadPool::ExecutionMode::CONCURRENT);
+    _txn_state_cache = std::make_unique<TxnStateCache>(config::merge_commit_txn_state_cache_capacity, std::move(token));
     return _txn_state_cache->init();
 }
 
@@ -115,6 +117,7 @@ void BatchWriteMgr::stop() {
     if (_txn_state_cache) {
         _txn_state_cache->stop();
     }
+    _executor->get_thread_pool()->shutdown();
 }
 
 StatusOr<StreamLoadContext*> BatchWriteMgr::create_and_register_pipe(

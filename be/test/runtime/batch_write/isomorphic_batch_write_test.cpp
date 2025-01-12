@@ -42,7 +42,9 @@ public:
                           .set_idle_timeout(MonoDelta::FromMilliseconds(10000))
                           .build(&thread_pool));
         _executor = std::make_unique<bthreads::ThreadPoolExecutor>(thread_pool.release(), kTakesOwnership);
-        _txn_state_cache = std::make_unique<TxnStateCache>(2048);
+        std::unique_ptr<ThreadPoolToken> token =
+                _executor->get_thread_pool()->new_token(ThreadPool::ExecutionMode::CONCURRENT);
+        _txn_state_cache = std::make_unique<TxnStateCache>(2048, std::move(token));
         ASSERT_OK(_txn_state_cache->init());
     }
 
@@ -52,6 +54,9 @@ public:
         }
         if (_txn_state_cache) {
             _txn_state_cache->stop();
+        }
+        if (_executor) {
+            _executor->get_thread_pool()->shutdown();
         }
     }
 
