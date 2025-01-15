@@ -3399,4 +3399,9 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = false)
     public static int query_deploy_threadpool_size = max(50, getRuntime().availableProcessors() * 10);
+
+    @ConfField(mutable = true)
+    public static long min_compaction_interval_ms_on_success = 10000;
+    @ConfField(mutable = true)
+    public static long min_compaction_interval_ms_on_failure = 60000;
 }
