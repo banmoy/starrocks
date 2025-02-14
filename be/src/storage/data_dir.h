@@ -134,6 +134,8 @@ public:
     // this is a producer function. After scan, it will notify the perform_path_gc function to gc
     void perform_path_scan();
 
+    std::set<std::string> debug_perform_path_scan();
+
     // this function scans the tmp path to collect files that need to gc.
     void perform_tmp_path_scan();
 

@@ -36,6 +36,7 @@
 #include <fmt/format.h>
 #include <gflags/gflags.h>
 
+#include <cstdint>
 #include <iostream>
 #include <set>
 #include <string>
@@ -73,6 +74,7 @@
 #include "util/coding.h"
 #include "util/crc32c.h"
 #include "util/path_util.h"
+#include "util/string_parser.hpp"
 
 using starrocks::DataDir;
 using starrocks::KVStore;
@@ -220,6 +222,49 @@ void get_meta(DataDir* data_dir) {
         }
     }
     std::cout << value << std::endl;
+}
+
+bool has_meta(DataDir* data_dir, const std::string& tablet_id) {
+    std::string value;
+    starrocks::StringParser::ParseResult parse_result = starrocks::StringParser::PARSE_SUCCESS;
+    int64_t id = starrocks::StringParser::string_to_int<int64_t>(tablet_id.c_str(), tablet_id.size(), &parse_result);
+    if (UNLIKELY(parse_result != starrocks::StringParser::PARSE_SUCCESS)) {
+        std::cout << "can't parse tablet_id: " << tablet_id << ", error: " << parse_result << std::endl;
+        return false;
+    }
+    auto s = TabletMetaManager::get_json_meta(data_dir, id, &value);
+    if (!s.ok()) {
+        if (s.is_not_found()) {
+            std::cout << "no tablet meta for tablet_id: " << tablet_id << std::endl;
+        } else {
+            std::cout << "get tablet meta failed, tablet_id: " << tablet_id << ", error: " << s.to_string()
+                      << std::endl;
+        }
+        return false;
+    }
+    return !value.empty();
+}
+
+void scan_tablets(DataDir* data_dir) {
+    auto all_tablet_ids = data_dir->debug_perform_path_scan();
+    std::set<std::string> valid_tablets;
+    std::set<std::string> invalid_tablets;
+    for (auto& tablet_id : all_tablet_ids) {
+        bool valid = has_meta(data_dir, tablet_id);
+        if (valid) {
+            valid_tablets.insert(tablet_id);
+        } else {
+            invalid_tablets.insert(tablet_id);
+        }
+    }
+    std::cout << "valid tablets: " << valid_tablets.size() << std::endl;
+    for (auto& tablet_id : valid_tablets) {
+        std::cout << tablet_id << "\n";
+    }
+    std::cout << "invalid tablets: " << invalid_tablets.size() << std::endl;
+    for (auto& tablet_id : invalid_tablets) {
+        std::cout << tablet_id << "\n";
+    }
 }
 
 void load_meta(DataDir* data_dir) {
@@ -1281,6 +1326,8 @@ int meta_tool_main(int argc, char** argv) {
             check_meta_consistency(data_dir.get());
         } else if (FLAGS_operation == "scan_dcgs") {
             scan_dcgs(data_dir.get());
+        } else if (FLAGS_operation == "scan_tablets") {
+            scan_tablets(data_dir.get());
         } else {
             std::cout << "invalid operation: " << FLAGS_operation << std::endl << std::endl;
             show_usage();

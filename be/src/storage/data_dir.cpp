@@ -749,6 +749,33 @@ void DataDir::perform_path_scan() {
     }
 }
 
+std::set<std::string> DataDir::debug_perform_path_scan() {
+    std::cout << "start to scan data dir path:" << _path << std::endl;
+    std::set<std::string> shards;
+    std::string data_path = _path + DATA_PREFIX;
+
+    Status ret = fs::list_dirs_files(_fs.get(), data_path, &shards, nullptr);
+    if (!ret.ok()) {
+        std::cout << "fail to walk dir. path=[" + data_path << "] error[" << ret.to_string() << "]" << std::endl;
+        return std::set<std::string>();
+    }
+
+    std::set<std::string> all_tablet_ids;
+    for (const auto& shard : shards) {
+        std::string shard_path = data_path + "/" + shard;
+        std::set<std::string> tablet_ids;
+        ret = fs::list_dirs_files(_fs.get(), shard_path, &tablet_ids, nullptr);
+        if (!ret.ok()) {
+            std::cout << "fail to walk dir. [path=" << shard_path << "] error[" << ret.to_string() << "]" << std::endl;
+            continue;
+        }
+        all_tablet_ids.insert(tablet_ids.begin(), tablet_ids.end());
+    }
+    std::cout << "scan data dir path:" << _path << " finished. number of tablets:" << all_tablet_ids.size()
+              << std::endl;
+    return all_tablet_ids;
+}
+
 void DataDir::_process_garbage_path(const std::string& path) {
     if (_fs->path_exists(path).ok()) {
         LOG(INFO) << "collect garbage dir path: " << path;
