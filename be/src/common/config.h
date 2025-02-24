@@ -483,6 +483,8 @@ CONF_mInt32(load_fp_brpc_timeout_ms, "-1");
 // Used in load fail point. The block time to simulate TabletsChannel::add_chunk spends much time
 CONF_mInt32(load_fp_tablets_channel_add_chunk_block_ms, "-1");
 
+CONF_mInt64(diagnose_stack_trace_interval_ms, "1800000");
+
 CONF_Bool(enable_load_segment_parallel, "false");
 CONF_Int32(load_segment_thread_pool_num_max, "128");
 CONF_Int32(load_segment_thread_pool_queue_size, "10240");

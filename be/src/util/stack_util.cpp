@@ -231,8 +231,8 @@ std::string get_stack_trace_for_threads(const std::vector<int>& tids, int timeou
     return get_stack_trace_for_threads_with_pattern(tids, "", timeout_ms);
 }
 
-std::string get_stack_trace_for_all_threads() {
-    return get_stack_trace_for_threads(get_thread_id_list(), 3000);
+std::string get_stack_trace_for_all_threads(int timeout_ms) {
+    return get_stack_trace_for_threads(get_thread_id_list(), timeout_ms);
 }
 
 std::string get_stack_trace_for_function(const std::string& function_pattern) {

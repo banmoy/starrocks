@@ -44,6 +44,7 @@
 #include "common/config.h"
 #include "common/configbase.h"
 #include "common/logging.h"
+#include "diagnose/diagnose_daemon.h"
 #include "exec/pipeline/driver_limiter.h"
 #include "exec/pipeline/pipeline_driver_executor.h"
 #include "exec/pipeline/query_context.h"
@@ -588,6 +589,8 @@ Status ExecEnv::init(const std::vector<StorePath>& store_paths, bool as_cn) {
     _spill_dir_mgr = std::make_shared<spill::DirManager>();
     RETURN_IF_ERROR(_spill_dir_mgr->init(config::spill_local_storage_dir));
 
+    _diagnose_daemon = new DiagnoseDaemon();
+    RETURN_IF_ERROR(_diagnose_daemon->init());
 #ifdef STARROCKS_JIT_ENABLE
     auto jit_engine = JITEngine::get_instance();
     status = jit_engine->init();
@@ -692,6 +695,10 @@ void ExecEnv::stop() {
         _dictionary_cache_pool->shutdown();
     }
 
+    if (_diagnose_daemon) {
+        _diagnose_daemon->stop();
+    }
+
 #ifndef BE_TEST
     close_s3_clients();
 #endif
@@ -750,6 +757,7 @@ void ExecEnv::destroy() {
     SAFE_DELETE(_lake_replication_txn_manager);
     SAFE_DELETE(_cache_mgr);
     SAFE_DELETE(_put_combined_txn_log_thread_pool);
+    SAFE_DELETE(_diagnose_daemon);
     _dictionary_cache_pool.reset();
     _automatic_partition_pool.reset();
     _metrics = nullptr;

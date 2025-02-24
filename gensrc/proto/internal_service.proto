@@ -315,12 +315,15 @@ message PLoadDiagnoseRequest {
     // whether to use profile as the diagnose method.
     // If true, will return the profile in the response
     optional bool profile = 3;
+    optional bool stack_trace = 4;
 };
 
 message PLoadDiagnoseResult {
     // The result of the profile diagnose
     optional StatusPB profile_status = 1;
     optional bytes profile_data = 2;
+
+    optional StatusPB stack_trace_status = 3;
 };
 
 message PExecPlanFragmentRequest {
