@@ -44,7 +44,7 @@
 #include "common/config.h"
 #include "common/configbase.h"
 #include "common/logging.h"
-#include "diagnose/diagnose_daemon.h"
+#include "diagnose_daemon.h"
 #include "exec/pipeline/driver_limiter.h"
 #include "exec/pipeline/pipeline_driver_executor.h"
 #include "exec/pipeline/query_context.h"
