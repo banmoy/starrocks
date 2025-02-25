@@ -65,7 +65,7 @@ void DiagnoseDaemon::_perform_stack_trace(const std::string& context) {
     int64_t start_time = MonotonicMillis();
     std::string stack_trace = get_stack_trace_for_all_threads(30000);
     _last_stack_trace_time_ms = MonotonicMillis();
-    std::cout << "diagnose stack trace, cost: " << (_last_stack_trace_time_ms - start_time)
+    LOG(INFO) << "diagnose stack trace, cost: " << (_last_stack_trace_time_ms - start_time)
               << " ms, size: " << stack_trace.size() << ", context: " << context << "\n"
               << stack_trace;
 }

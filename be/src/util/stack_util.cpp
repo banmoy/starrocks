@@ -249,7 +249,8 @@ std::string get_stack_trace_for_threads_with_pattern(const std::vector<int>& tid
     ret += strings::Substitute(
             "total $0 threads, $1 identical groups, traced $2 threads, cost $3 us, thread block(avg/min/max) $4/$5/$6 "
             "us",
-            tids.size(), task_map.size(), task_done_count, avg_block_time_us, min_block_time_us, max_block_time_us);
+            tids.size(), task_map.size(), (MonotonicMicros() - start_us), task_done_count, avg_block_time_us,
+            min_block_time_us, max_block_time_us);
     return ret;
 }
 
