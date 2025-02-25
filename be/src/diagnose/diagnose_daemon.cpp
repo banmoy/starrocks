@@ -31,50 +31,23 @@ static std::string diagnose_type_name(DiagnoseType type) {
 }
 
 Status DiagnoseDaemon::init() {
-    _daemon = std::make_unique<std::thread>([this] { _schedule(); });
-    return Status::OK();
+    return ThreadPoolBuilder("diagnose").set_min_threads(0).set_max_threads(1).build(&_single_thread_pool);
 }
 
-Status DiagnoseDaemon::diagnose(starrocks::DiagnoseRequest request) {
-    std::lock_guard<bthread::Mutex> l(_mutex);
-    if (_stopped) {
-        return Status::InternalError("diagnose daemon is stopped");
-    }
-    _requests.push_back(std::move(request));
-    _cv.notify_all();
-    return Status::OK();
+Status DiagnoseDaemon::diagnose(const starrocks::DiagnoseRequest& request) {
+    return _single_thread_pool->submit_func([this, request]() { _execute_request(request); });
 }
 
 void DiagnoseDaemon::stop() {
-    {
-        std::lock_guard<bthread::Mutex> l(_mutex);
-        _stopped = true;
-        _cv.notify_all();
-    }
-    if (_daemon && _daemon->joinable()) {
-        _daemon->join();
-    }
-}
-
-void DiagnoseDaemon::_schedule() {
-    std::unique_lock<bthread::Mutex> lock(_mutex);
-    while (!_stopped) {
-        if (!_requests.empty()) {
-            auto request = _requests.front();
-            _requests.pop_front();
-            lock.unlock();
-            _execute_request(request);
-            lock.lock();
-        } else {
-            _cv.wait(lock);
-        }
+    if (_single_thread_pool) {
+        _single_thread_pool->shutdown();
     }
 }
 
 void DiagnoseDaemon::_execute_request(const starrocks::DiagnoseRequest& request) {
     switch (request.type) {
     case DiagnoseType::STACK_TRACE:
-        _diagnose_stack_trace(request.context);
+        _perform_stack_trace(request.context);
         break;
     default:
         LOG(WARNING) << "unknown diagnose type: " << diagnose_type_name(request.type)
@@ -82,15 +55,19 @@ void DiagnoseDaemon::_execute_request(const starrocks::DiagnoseRequest& request)
     }
 }
 
-void DiagnoseDaemon::_diagnose_stack_trace(const std::string& context) {
+void DiagnoseDaemon::_perform_stack_trace(const std::string& context) {
     int64_t interval = MonotonicMillis() - _last_stack_trace_time_ms;
     if (interval < config::diagnose_stack_trace_interval_ms) {
-        LOG(WARNING) << "diagnose stack trace is too frequent, interval: " << interval << "ms";
+        VLOG(2) << "skip to diagnose stack trace, last time: " << _last_stack_trace_time_ms
+                << " ms, interval: " << interval << " ms";
         return;
     }
+    int64_t start_time = MonotonicMillis();
     std::string stack_trace = get_stack_trace_for_all_threads(30000);
     _last_stack_trace_time_ms = MonotonicMillis();
-    LOG(INFO) << "diagnose stack trace: " << context << "\n" << stack_trace;
+    std::cout << "diagnose stack trace, cost: " << (_last_stack_trace_time_ms - start_time)
+              << " ms, size: " << stack_trace.size() << ", context: " << context << "\n"
+              << stack_trace;
 }
 
 } // namespace starrocks

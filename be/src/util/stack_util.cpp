@@ -51,6 +51,7 @@ struct StackTraceTask {
     void* addrs[kMaxStackDepth];
     int depth{0};
     bool done = false;
+    int64_t cost_us = -1;
     string to_string() const {
         string ret;
         for (int i = 0; i < depth; ++i) {
@@ -89,8 +90,12 @@ struct StackTraceTaskHash {
 };
 
 void get_stack_trace_sighandler(int signum, siginfo_t* siginfo, void* ucontext) {
+    int64_t start_us = MonotonicMicros();
     auto task = reinterpret_cast<StackTraceTask*>(siginfo->si_value.sival_ptr);
     task->depth = google::glog_internal_namespace_::GetStackTrace(task->addrs, StackTraceTask::kMaxStackDepth, 2);
+    // get_stack_trace_for_thread first checks done flag then gets the cost.
+    // To ensure the cost is valid, sset cost before done flag
+    task->cost_us = MonotonicMicros() - start_us;
     task->done = true;
 }
 
@@ -153,6 +158,7 @@ std::string get_stack_trace_for_thread(int tid, int timeout_ms) {
 
 std::string get_stack_trace_for_threads_with_pattern(const std::vector<int>& tids, const string& pattern,
                                                      int timeout_ms) {
+    int64_t start_us = MonotonicMicros();
     static bool sighandler_installed = false;
     if (!sighandler_installed) {
         if (!install_stack_trace_sighandler()) {
@@ -195,11 +201,21 @@ std::string get_stack_trace_for_threads_with_pattern(const std::vector<int>& tid
             break;
         }
     }
+
+    int64_t task_done_count = 0;
+    int64_t max_block_time_us = 0;
+    int64_t min_block_time_us = std::numeric_limits<int64_t>::max();
+    int64_t total_block_time_us = 0;
+
     // group threads with same stack trace together
     std::unordered_map<StackTraceTask, std::vector<int>, StackTraceTaskHash> task_map;
     for (int i = 0; i < tids.size(); ++i) {
         if (tasks[i].done) {
             task_map[tasks[i]].push_back(tids[i]);
+            task_done_count += 1;
+            max_block_time_us = std::max(max_block_time_us, tasks[i].cost_us);
+            min_block_time_us = std::min(min_block_time_us, tasks[i].cost_us);
+            total_block_time_us += tasks[i].cost_us;
         }
     }
     string ret;
@@ -223,7 +239,17 @@ std::string get_stack_trace_for_threads_with_pattern(const std::vector<int>& tid
         ret += stack_trace;
         ret += "\n";
     }
-    ret += strings::Substitute("total $0 threads, $1 identical groups", tids.size(), task_map.size());
+    int64_t avg_block_time_us = 0;
+    if (task_done_count == 0) {
+        min_block_time_us = 0;
+        max_block_time_us = 0;
+    } else {
+        avg_block_time_us = total_block_time_us / task_done_count;
+    }
+    ret += strings::Substitute(
+            "total $0 threads, $1 identical groups, traced $2 threads, cost $3 us, thread block(avg/min/max) $4/$5/$6 "
+            "us",
+            tids.size(), task_map.size(), task_done_count, avg_block_time_us, min_block_time_us, max_block_time_us);
     return ret;
 }
 

@@ -21,6 +21,7 @@
 #include "bthread/condition_variable.h"
 #include "bthread/mutex.h"
 #include "common/status.h"
+#include "util/threadpool.h"
 
 namespace starrocks {
 
@@ -38,21 +39,15 @@ public:
 
     Status init();
 
-    Status diagnose(DiagnoseRequest request);
+    Status diagnose(const DiagnoseRequest& request);
 
     void stop();
 
 private:
-    void _schedule();
     void _execute_request(const DiagnoseRequest& request);
-    void _diagnose_stack_trace(const std::string& context);
+    void _perform_stack_trace(const std::string& context);
 
-    std::unique_ptr<std::thread> _daemon;
-    bthread::Mutex _mutex;
-    bthread::ConditionVariable _cv;
-    std::list<DiagnoseRequest> _requests;
-    bool _stopped = false;
-
+    std::unique_ptr<ThreadPool> _single_thread_pool;
     int64_t _last_stack_trace_time_ms = 0;
 };
 
