@@ -37,8 +37,8 @@
 #include <memory>
 
 #include "common/closure_guard.h"
-#include "diagnose_daemon.h"
 #include "fmt/format.h"
+#include "runtime/diagnose_daemon.h"
 #include "runtime/exec_env.h"
 #include "runtime/lake_tablets_channel.h"
 #include "runtime/load_channel_mgr.h"
