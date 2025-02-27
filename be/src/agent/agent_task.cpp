@@ -225,6 +225,13 @@ void run_create_tablet_task(const std::shared_ptr<CreateTabletAgentTaskRequest>&
     TStatusCode::type status_code = TStatusCode::OK;
     std::vector<std::string> error_msgs;
 
+    auto sleep_sec = config::create_tablet_sleep_sec;
+    if (sleep_sec > 0) {
+        LOG(INFO) << "start to sleep " << sleep_sec << " seconds";
+        sleep(sleep_sec);
+        LOG(INFO) << "finish to sleep " << sleep_sec << " seconds";
+    }
+
     auto tablet_type = create_tablet_req.tablet_type;
     Status create_status;
 

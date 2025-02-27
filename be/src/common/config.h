@@ -88,7 +88,8 @@ CONF_Int32(heartbeat_service_port, "9050");
 // The count of heart beat service.
 CONF_Int32(heartbeat_service_thread_count, "1");
 // The count of thread to create table.
-CONF_mInt32(create_tablet_worker_count, "3");
+CONF_mInt32(create_tablet_worker_count, "1");
+CONF_mInt32(create_tablet_sleep_sec, "0");
 // The count of thread to drop table.
 CONF_mInt32(drop_tablet_worker_count, "0");
 // The count of thread to batch load.
