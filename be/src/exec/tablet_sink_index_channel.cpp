@@ -1114,9 +1114,9 @@ void NodeChannel::_try_diagnose(const std::string& error_text) {
     request.set_stack_trace(enable_stack_trace);
     _diagnose_closure->ref();
 #ifndef BE_TEST
-    _stub->load_diagnose(&_diagnose_closure->cntl, &request, &_diagnose_closure->result, _diagnose_closure.get());
+    _stub->load_diagnose(&_diagnose_closure->cntl, &request, &_diagnose_closure->result, _diagnose_closure);
 #else
-    std::pair<PLoadDiagnoseRequest*, RefCountClosure<PLoadDiagnoseResult>*> rpc_pair{&request, _diagnose_closure.get()};
+    std::pair<PLoadDiagnoseRequest*, RefCountClosure<PLoadDiagnoseResult>*> rpc_pair{&request, _diagnose_closure};
     TEST_SYNC_POINT_CALLBACK("NodeChannel::rpc::load_diagnose_send", &rpc_pair);
 #endif
     request.release_id();
@@ -1136,7 +1136,7 @@ void NodeChannel::_wait_diagnose(RuntimeState* state) {
 #ifndef BE_TEST
     _diagnose_closure->join();
 #else
-    TEST_SYNC_POINT_CALLBACK("NodeChannel::rpc::load_diagnose_join", _diagnose_closure.get());
+    TEST_SYNC_POINT_CALLBACK("NodeChannel::rpc::load_diagnose_join", _diagnose_closure);
 #endif
     if (_diagnose_closure->cntl.Failed()) {
         LOG(WARNING) << "NodeChannel[" << _load_info << "] diagnose failed, node: [" << _node_info->host << ":"
