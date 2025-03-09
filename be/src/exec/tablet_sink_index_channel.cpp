@@ -71,6 +71,12 @@ NodeChannel::~NodeChannel() noexcept {
         _rpc_request.mutable_requests(i)->release_id();
     }
     _rpc_request.release_id();
+    if (_diagnose_closure) {
+        if (_diagnose_closure->unref()) {
+            delete _diagnose_closure;
+        }
+        _diagnose_closure = nullptr;
+    }
 }
 
 Status NodeChannel::init(RuntimeState* state) {
@@ -1097,7 +1103,7 @@ void NodeChannel::_try_diagnose(const std::string& error_text) {
     if (!enable_profile && !enable_stack_trace) {
         return;
     }
-    _diagnose_closure = std::make_unique<RefCountClosure<PLoadDiagnoseResult>>();
+    _diagnose_closure = new RefCountClosure<PLoadDiagnoseResult>();
     _diagnose_closure->ref();
     SET_IGNORE_OVERCROWDED(_diagnose_closure->cntl, load);
     _diagnose_closure->cntl.set_timeout_ms(config::load_diagnose_send_rpc_timeout_ms);
