@@ -32,6 +32,8 @@
 #include "storage/tablet_schema.h"
 #include "testutil/assert.h"
 #include "testutil/id_generator.h"
+#include "util/failpoint/fail_point.h"
+#include "util/reusable_closure.h"
 #include "util/runtime_profile.h"
 
 namespace starrocks {
@@ -60,8 +62,9 @@ protected:
         auto load_mem_tracker = std::make_unique<MemTracker>(-1, "", _mem_tracker.get());
         _load_channel = std::make_shared<LoadChannel>(_load_channel_mgr.get(), nullptr, _load_id, _txn_id, string(),
                                                       1000, std::move(load_mem_tracker));
-        _open_primary_request = _create_open_request(true);
-        _open_secondary_request = _create_open_request(false);
+        _open_primary_request = _create_open_request(ReplicaState::Primary);
+        _open_secondary_request = _create_open_request(ReplicaState::Secondary);
+        _open_peer_request = _create_open_request(ReplicaState::Peer);
         TabletsChannelKey key{_load_id, 0, _index_id};
         _schema_param.reset(new OlapTableSchemaParam());
         ASSERT_OK(_schema_param->init(_open_primary_request.schema()));
@@ -105,14 +108,14 @@ protected:
         return StorageEngine::instance()->tablet_manager()->get_tablet(tablet_id, false);
     }
 
-    PTabletWriterOpenRequest _create_open_request(bool primary) {
+    PTabletWriterOpenRequest _create_open_request(ReplicaState replica_state) {
         PTabletWriterOpenRequest request;
         request.mutable_id()->CopyFrom(_load_id);
         request.set_index_id(_index_id);
         request.set_txn_id(_txn_id);
         request.set_is_lake_tablet(false);
-        request.set_is_replicated_storage(true);
-        request.set_node_id(primary ? _primary_node_id : _secondary_node_id);
+        request.set_is_replicated_storage(replica_state != Peer);
+        request.set_node_id(replica_state != ReplicaState::Secondary ? _primary_node_id : _secondary_node_id);
         request.set_write_quorum(WriteQuorumTypePB::MAJORITY);
         request.set_miss_auto_increment_column(false);
         request.set_table_id(_table_id);
@@ -201,13 +204,67 @@ protected:
 
     PTabletWriterOpenRequest _open_primary_request;
     PTabletWriterOpenRequest _open_secondary_request;
+    PTabletWriterOpenRequest _open_peer_request;
     PTabletWriterOpenResult _open_response;
 };
 
-TEST_F(LocalTabletsChannelTest, diagnose_stack_trace) {}
+using RpcLoadDisagnosePair = std::pair<PLoadDiagnoseRequest*, ReusableClosure<PLoadDiagnoseResult>*>;
+
+TEST_F(LocalTabletsChannelTest, diagnose_stack_trace) {
+    _open_secondary_request.set_timeout_ms(100);
+    ASSERT_OK(_tablets_channel->open(_open_secondary_request, &_open_response, _schema_param, false));
+    PTabletWriterAddChunkRequest add_chunk_request;
+    add_chunk_request.mutable_id()->CopyFrom(_load_id);
+    add_chunk_request.set_index_id(_index_id);
+    add_chunk_request.set_sender_id(0);
+    add_chunk_request.set_eos(true);
+    add_chunk_request.set_packet_seq(0);
+
+    auto old_threshold = config::load_diagnose_rpc_timeout_stack_trace_threshold_ms;
+    DeferOp defer([&]() {
+        SyncPoint::GetInstance()->ClearCallBack("LocalTabletsChannel::rpc::load_diagnose_send");
+        SyncPoint::GetInstance()->DisableProcessing();
+        PFailPointTriggerMode trigger_mode;
+        trigger_mode.set_mode(FailPointTriggerModeType::DISABLE);
+        auto fp = starrocks::failpoint::FailPointRegistry::GetInstance()->get(
+                "tablets_channel_wait_secondary_replica_block");
+        fp->setMode(trigger_mode);
+        config::load_fp_tablets_channel_wait_secondary_replica_block_ms = -1;
+        config::load_diagnose_rpc_timeout_stack_trace_threshold_ms = old_threshold;
+    });
+
+    PFailPointTriggerMode trigger_mode;
+    trigger_mode.set_mode(FailPointTriggerModeType::ENABLE);
+    auto fp =
+            starrocks::failpoint::FailPointRegistry::GetInstance()->get("tablets_channel_wait_secondary_replica_block");
+    fp->setMode(trigger_mode);
+    config::load_fp_tablets_channel_wait_secondary_replica_block_ms = 50;
+    config::load_diagnose_rpc_timeout_stack_trace_threshold_ms = 0;
+
+    int32_t num_diagnose = 0;
+    SyncPoint::GetInstance()->EnableProcessing();
+    SyncPoint::GetInstance()->SetCallBack("LocalTabletsChannel::rpc::load_diagnose_send", [&](void* arg) {
+        RpcLoadDisagnosePair* rpc_pair = (RpcLoadDisagnosePair*)arg;
+        PLoadDiagnoseRequest* request = rpc_pair->first;
+        ReusableClosure<PLoadDiagnoseResult>* closure = rpc_pair->second;
+        EXPECT_FALSE(request->has_profile());
+        EXPECT_TRUE(request->has_stack_trace() && request->stack_trace());
+        closure->result.mutable_stack_trace_status()->set_status_code(TStatusCode::OK);
+        closure->Run();
+        num_diagnose += 1;
+    });
+
+    bool close_channel;
+    PTabletWriterAddBatchResult add_chunk_response;
+    _tablets_channel->add_chunk(nullptr, add_chunk_request, &add_chunk_response, &close_channel);
+    ASSERT_TRUE(add_chunk_response.status().status_code() == TStatusCode::OK)
+            << add_chunk_response.status().error_msgs(0);
+    ASSERT_TRUE(close_channel);
+    ASSERT_EQ(1, num_diagnose);
+}
 
 TEST_F(LocalTabletsChannelTest, test_profile) {
-    ASSERT_OK(_tablets_channel->open(_open_primary_request, &_open_response, _schema_param, false));
+    ASSERT_OK(_tablets_channel->open(_open_peer_request, &_open_response, _schema_param, false));
 
     PTabletWriterAddChunkRequest add_chunk_request;
     add_chunk_request.mutable_id()->CopyFrom(_load_id);

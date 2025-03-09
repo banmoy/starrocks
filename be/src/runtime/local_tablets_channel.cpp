@@ -55,6 +55,7 @@
 namespace starrocks {
 
 DEFINE_FAIL_POINT(tablets_channel_add_chunk_wait_write_block);
+DEFINE_FAIL_POINT(tablets_channel_wait_secondary_replica_block);
 
 std::atomic<uint64_t> LocalTabletsChannel::_s_tablet_writer_count;
 
@@ -359,8 +360,14 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
                     i++;
                     // only sleep in bthread
                     bthread_usleep(10000); // 10ms
-                    if (!trigger_diagnose && MonotonicMillis() - start_wait_time_ms >
-                                                     config::load_diagnose_rpc_timeout_stack_trace_threshold_ms) {
+                    FAIL_POINT_TRIGGER_EXECUTE(tablets_channel_wait_secondary_replica_block, {
+                        int32_t timeout_ms = config::load_fp_tablets_channel_wait_secondary_replica_block_ms;
+                        if (timeout_ms > 0) {
+                            bthread_usleep(timeout_ms * 1000);
+                        }
+                    });
+                    if (!trigger_diagnose && (MonotonicMillis() - start_wait_time_ms >
+                                              config::load_diagnose_rpc_timeout_stack_trace_threshold_ms)) {
                         _diagnose_primary_replica_stack_trace(tablet_id, request.id(), delta_writer.get());
                         trigger_diagnose = true;
                     }
@@ -1188,8 +1195,13 @@ void LocalTabletsChannel::_diagnose_primary_replica_stack_trace(int64_t tablet_i
     request.set_txn_id(_txn_id);
     request.set_stack_trace(true);
     closure->ref();
+#ifndef BE_TEST
     // best effort to diagnose so do not wait the result
     stub->load_diagnose(&closure->cntl, &request, &closure->result, closure);
+#else
+    std::pair<PLoadDiagnoseRequest*, ReusableClosure<PLoadDiagnoseResult>*> rpc_pair{&request, closure};
+    TEST_SYNC_POINT_CALLBACK("LocalTabletsChannel::rpc::load_diagnose_send", &rpc_pair);
+#endif
     LOG(INFO) << "send request to diagnose primary replica, txn_id: " << _txn_id << ", load_id: " << print_id(load_id)
               << ", tablet_id: " << tablet_id << ", primary_replica: [" << primary_replica.host() << ":"
               << primary_replica.port() << "]";

@@ -270,7 +270,7 @@ private:
     ExprContext* _where_clause = nullptr;
 
     bool _has_primary_replica = false;
-    RefCountClosure<PLoadDiagnoseResult>* _diagnose_closure;
+    RefCountClosure<PLoadDiagnoseResult>* _diagnose_closure = nullptr;
 };
 
 class IndexChannel {
