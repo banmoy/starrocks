@@ -64,7 +64,6 @@ protected:
                                                       1000, std::move(load_mem_tracker));
         _open_primary_request = _create_open_request(ReplicaState::Primary);
         _open_secondary_request = _create_open_request(ReplicaState::Secondary);
-        _open_peer_request = _create_open_request(ReplicaState::Peer);
         TabletsChannelKey key{_load_id, 0, _index_id};
         _schema_param.reset(new OlapTableSchemaParam());
         ASSERT_OK(_schema_param->init(_open_primary_request.schema()));
@@ -114,7 +113,7 @@ protected:
         request.set_index_id(_index_id);
         request.set_txn_id(_txn_id);
         request.set_is_lake_tablet(false);
-        request.set_is_replicated_storage(replica_state != Peer);
+        request.set_is_replicated_storage(true);
         request.set_node_id(replica_state != ReplicaState::Secondary ? _primary_node_id : _secondary_node_id);
         request.set_write_quorum(WriteQuorumTypePB::MAJORITY);
         request.set_miss_auto_increment_column(false);
@@ -135,10 +134,12 @@ protected:
         primary_replica->set_host("127.0.0.1");
         primary_replica->set_port(8060);
         primary_replica->set_node_id(_primary_node_id);
-        auto secondary_replica = tablet->add_replicas();
-        secondary_replica->set_host("127.0.0.2");
-        secondary_replica->set_port(8060);
-        secondary_replica->set_node_id(_secondary_node_id);
+        if (replica_state == ReplicaState::Secondary) {
+            auto secondary_replica = tablet->add_replicas();
+            secondary_replica->set_host("127.0.0.2");
+            secondary_replica->set_port(8060);
+            secondary_replica->set_node_id(_secondary_node_id);
+        }
 
         auto schema = request.mutable_schema();
         schema->set_db_id(_db_id);
@@ -204,7 +205,6 @@ protected:
 
     PTabletWriterOpenRequest _open_primary_request;
     PTabletWriterOpenRequest _open_secondary_request;
-    PTabletWriterOpenRequest _open_peer_request;
     PTabletWriterOpenResult _open_response;
 };
 
@@ -264,7 +264,7 @@ TEST_F(LocalTabletsChannelTest, diagnose_stack_trace) {
 }
 
 TEST_F(LocalTabletsChannelTest, test_profile) {
-    ASSERT_OK(_tablets_channel->open(_open_peer_request, &_open_response, _schema_param, false));
+    ASSERT_OK(_tablets_channel->open(_open_primary_request, &_open_response, _schema_param, false));
 
     PTabletWriterAddChunkRequest add_chunk_request;
     add_chunk_request.mutable_id()->CopyFrom(_load_id);
