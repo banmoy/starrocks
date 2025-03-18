@@ -554,7 +554,7 @@ void* PublishVersionTaskWorkerPool::_worker_thread_callback(void* arg_this) {
         batch_publish_latency += MonotonicMillis() - start_ts;
         priority_tasks.pop();
 
-        auto block_sec = config::publish_block_sec;
+        auto block_sec = config::publish_response_block_sec;
         if (block_sec > 0) {
             auto start = MonotonicMillis();
             LOG(INFO) << "start sleeping, txn_id: " << publish_version_task.task_req.transaction_id

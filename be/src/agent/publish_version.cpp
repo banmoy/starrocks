@@ -121,6 +121,15 @@ void run_publish_version_task(ThreadPoolToken* token, const TPublishVersionReque
     span->SetAttribute("num_partition", num_partition);
     span->SetAttribute("num_tablet", num_active_tablet);
 
+    auto block_sec = config::publish_tablet_block_sec;
+    if (block_sec > 0) {
+        auto start = MonotonicMillis();
+        LOG(INFO) << "start sleeping, txn_id: " << publish_version_req.transaction_id << ", block_sec=" << block_sec;
+        sleep(block_sec);
+        LOG(INFO) << "finish sleeping, txn_id: " << publish_version_req.transaction_id
+                  << ", block_ms=" << (MonotonicMillis() - start);
+    }
+
     std::mutex affected_dirs_lock;
     for (auto& tablet_task : tablet_tasks) {
         uint32_t retry_time = 0;
