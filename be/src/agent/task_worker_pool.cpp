@@ -554,6 +554,16 @@ void* PublishVersionTaskWorkerPool::_worker_thread_callback(void* arg_this) {
         batch_publish_latency += MonotonicMillis() - start_ts;
         priority_tasks.pop();
 
+        auto block_sec = config::publish_block_sec;
+        if (block_sec > 0) {
+            auto start = MonotonicMillis();
+            LOG(INFO) << "start sleeping, txn_id: " << publish_version_task.task_req.transaction_id
+                      << ", block_sec=" << block_sec;
+            sleep(block_sec);
+            LOG(INFO) << "finish sleeping, txn_id: " << publish_version_task.task_req.transaction_id
+                      << ", block_ms=" << (MonotonicMillis() - start);
+        }
+
         if (!enable_sync_publish) {
             if (priority_tasks.empty() || finish_task_requests.size() > PUBLISH_VERSION_BATCH_SIZE ||
                 batch_publish_latency > config::max_batch_publish_latency_ms) {
