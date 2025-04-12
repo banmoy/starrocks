@@ -38,7 +38,9 @@ import com.starrocks.catalog.Type;
 import com.starrocks.common.AnalysisException;
 import com.starrocks.common.ExceptionChecker;
 import com.starrocks.common.StarRocksException;
+import com.starrocks.qe.SqlModeHelper;
 import com.starrocks.sql.ast.ImportColumnDesc;
+import com.starrocks.sql.ast.ImportColumnsStmt;
 import com.starrocks.thrift.TBrokerScanRangeParams;
 import com.starrocks.thrift.TFileFormatType;
 import mockit.Expectations;
@@ -307,5 +309,30 @@ public class LoadTest {
         Assert.assertEquals(TFileFormatType.FORMAT_CSV_DEFLATE, Load.getFormatType("csv", "hdfs://127.0.0.1:9000/some_file.deflate"));
         Assert.assertEquals(TFileFormatType.FORMAT_CSV_ZSTD, Load.getFormatType("csv", "hdfs://127.0.0.1:9000/some_file.zst"));
         Assert.assertEquals(TFileFormatType.FORMAT_CSV_PLAIN, Load.getFormatType("csv", "hdfs://127.0.0.1:9000/some_file"));
+    }
+
+    @Test
+    public void testLambda() throws Exception {
+        String c0Name = "c0";
+        columns.add(new Column(c0Name, Type.ARRAY_INT, true, null, true, null, ""));
+
+        new Expectations() {
+            {
+                table.getBaseSchema();
+                result = columns;
+                table.getColumn(c0Name);
+                result = columns.get(0);
+            }
+        };
+
+        // String columnsSQL = "COLUMNS (`tmp`,`c0`=get_json_string(array_filter(" +
+        //          "item -> get_json_string(item, '$.type')='visitId', CAST(parse_json(tmp) AS ARRAY<JSON>))[1], 'id'))";
+        String columnsSQL = "COLUMNS (`k1`,`k2`,`c0`=array_filter(item->item<2, CAST(k2 AS ARRAY<int>)))";
+        ImportColumnsStmt columnsStmt =
+                com.starrocks.sql.parser.SqlParser.parseImportColumns(columnsSQL, SqlModeHelper.MODE_DEFAULT);
+        columnExprs.addAll(columnsStmt.getColumns());
+        Load.initColumns(table, columnExprs, null, exprsByName, analyzer, srcTupleDesc,
+                slotDescByName, params, true, true, columnsFromPath);
+        System.out.println();
     }
 }

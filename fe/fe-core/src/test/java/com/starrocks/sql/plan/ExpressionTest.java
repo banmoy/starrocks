@@ -1979,4 +1979,11 @@ public class ExpressionTest extends PlanTestBase {
         Assert.assertNotNull(func);
         Assert.assertEquals(PrimitiveType.BIGINT, func.getReturnType().getPrimitiveType());
     }
+
+    @Test
+    public void testArrayFilter() throws Exception {
+        String sql = "select array_filter(x->x<2,[1,2,3]);";
+        String plan = getFragmentPlan(sql);
+        System.out.println(plan);
+    }
 }
