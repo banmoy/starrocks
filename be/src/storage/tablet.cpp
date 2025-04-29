@@ -100,7 +100,9 @@ Tablet::Tablet() {
 Tablet::~Tablet() {
     MEM_TRACKER_SAFE_RELEASE(GlobalEnv::GetInstance()->tablet_metadata_mem_tracker(), _mem_usage());
 #ifndef BE_TEST
-    StarRocksMetrics::instance()->table_metrics_mgr()->unregister_table(_tablet_meta->table_id());
+    if (config::enable_register_tablet) {
+        StarRocksMetrics::instance()->table_metrics_mgr()->unregister_table(_tablet_meta->table_id());
+    }
 #endif
 }
 
