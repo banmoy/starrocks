@@ -23,8 +23,8 @@ import com.starrocks.http.ActionController;
 import com.starrocks.http.BaseRequest;
 import com.starrocks.http.BaseResponse;
 import com.starrocks.http.IllegalArgException;
-import com.starrocks.load.batchwrite.RequestCoordinatorBackendResult;
-import com.starrocks.load.batchwrite.TableId;
+import com.starrocks.load.mergecommit.RequestCoordinatorBackendResult;
+import com.starrocks.load.mergecommit.TableId;
 import com.starrocks.load.streamload.StreamLoadHttpHeader;
 import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.qe.ConnectContext;
@@ -45,7 +45,7 @@ public class StreamLoadMetaAction extends RestBaseAction {
 
     private static final Logger LOG = LogManager.getLogger(StreamLoadMetaAction.class);
 
-    // batch write stream load parameters =====================================================
+    // merge commit stream load parameters =====================================================
 
     // The parameter name to specify the type of metas.
     private static final String TYPE_PARAM_NAME = "type";
@@ -79,9 +79,9 @@ public class StreamLoadMetaAction extends RestBaseAction {
     @Override
     public void executeWithoutPassword(BaseRequest request, BaseResponse response) throws DdlException,
             AccessDeniedException {
-        boolean enableBatchWrite = "true".equalsIgnoreCase(
-                request.getRequest().headers().get(StreamLoadHttpHeader.HTTP_ENABLE_BATCH_WRITE));
-        if (enableBatchWrite && redirectToLeader(request, response)) {
+        boolean enableMergeCommit = "true".equalsIgnoreCase(
+                request.getRequest().headers().get(StreamLoadHttpHeader.HTTP_ENABLE_MERGE_COMMIT));
+        if (enableMergeCommit && redirectToLeader(request, response)) {
             return;
         }
 
@@ -101,10 +101,10 @@ public class StreamLoadMetaAction extends RestBaseAction {
 
         Authorizer.checkTableAction(ConnectContext.get(), dbName, tableName, PrivilegeType.INSERT);
 
-        if (!enableBatchWrite) {
+        if (!enableMergeCommit) {
             processNormalStreamLoad(request, response, dbName, tableName);
         } else {
-            processBatchWriteStreamLoad(request, response, dbName, tableName);
+            processMergeCommitStreamLoad(request, response, dbName, tableName);
         }
     }
 
@@ -115,12 +115,12 @@ public class StreamLoadMetaAction extends RestBaseAction {
         sendResult(request, response, responseResult);
     }
 
-    private void processBatchWriteStreamLoad(
+    private void processMergeCommitStreamLoad(
             BaseRequest request, BaseResponse response, String dbName, String tableName) {
         TableId tableId = new TableId(dbName, tableName);
         StreamLoadKvParams params = StreamLoadKvParams.fromHttpHeaders(request.getRequest().headers());
         RequestCoordinatorBackendResult result = GlobalStateMgr.getCurrentState()
-                .getBatchWriteMgr().requestCoordinatorBackends(tableId, params);
+                .getMergeCommitMgr().requestCoordinatorBackends(tableId, params);
         if (!result.isOk()) {
             StreamLoadMetaResult responseResult = new StreamLoadMetaResult(
                     result.getStatus().status_code.name(), ActionStatus.FAILED,
@@ -156,7 +156,7 @@ public class StreamLoadMetaAction extends RestBaseAction {
 
     public static class StreamLoadMetaResult extends RestBaseResult {
 
-        // metas for batch write ========================================
+        // metas for merge commit ========================================
 
         // service type -> nodes list in format "be_ip1:port1,be_ip2:port2"
         @SerializedName(NODES_TYPE)

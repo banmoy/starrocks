@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
+package com.starrocks.load.mergecommit;
 
 import com.starrocks.common.Config;
 import com.starrocks.common.ThreadPoolManager;
@@ -166,7 +166,7 @@ public final class CoordinatorBackendAssignerImpl implements CoordinatorBackendA
 
     // Registers a load, and try to wait for the node assignment to finish
     @Override
-    public void registerBatchWrite(long loadId, long warehouseId, TableId tableId, int expectParallel) {
+    public void registerMergeCommit(long loadId, long warehouseId, TableId tableId, int expectParallel) {
         LoadMeta loadMeta = registeredLoadMetas.computeIfAbsent(
                 loadId, k -> new LoadMeta(loadId, warehouseId, tableId, expectParallel));
         LOG.info("Register load, load id: {}, warehouse: {}, {}, parallel: {}",
@@ -202,7 +202,7 @@ public final class CoordinatorBackendAssignerImpl implements CoordinatorBackendA
 
     // Unregisters a load.
     @Override
-    public void unregisterBatchWrite(long loadId) {
+    public void unregisterMergeCommit(long loadId) {
         LoadMeta loadMeta = registeredLoadMetas.remove(loadId);
         if (loadMeta == null) {
             return;

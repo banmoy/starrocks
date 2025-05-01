@@ -16,9 +16,9 @@ package com.starrocks.http;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
-import com.starrocks.load.batchwrite.BatchWriteMgr;
-import com.starrocks.load.batchwrite.RequestCoordinatorBackendResult;
-import com.starrocks.load.batchwrite.TableId;
+import com.starrocks.load.mergecommit.MergeCommitMgr;
+import com.starrocks.load.mergecommit.RequestCoordinatorBackendResult;
+import com.starrocks.load.mergecommit.TableId;
 import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.thrift.TStatus;
@@ -38,7 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_BATCH_WRITE;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_MERGE_COMMIT;
 import static org.junit.Assert.assertEquals;
 
 public class StreamLoadMetaActionTest extends StarRocksHttpTestCase {
@@ -66,24 +66,24 @@ public class StreamLoadMetaActionTest extends StarRocksHttpTestCase {
     }
 
     @Test
-    public void testBatchWriteRequireOnlyHttpNodes() throws Exception {
-        testBatchWriteRequireNodesBase(Collections.singletonList("http"));
+    public void testMergeCommitRequireOnlyHttpNodes() throws Exception {
+        testMergeCommitRequireNodesBase(Collections.singletonList("http"));
     }
 
     @Test
-    public void testBatchWriteRequireOnlyBrpcNodes() throws Exception {
-        testBatchWriteRequireNodesBase(Collections.singletonList("brpc"));
+    public void testMergeCommitRequireOnlyBrpcNodes() throws Exception {
+        testMergeCommitRequireNodesBase(Collections.singletonList("brpc"));
     }
 
     @Test
-    public void testBatchWriteRequireAllTypeNodes() throws Exception {
-        testBatchWriteRequireNodesBase(List.of("http", "brpc"));
-        testBatchWriteRequireNodesBase(Collections.emptyList());
+    public void testMergeCommitRequireAllTypeNodes() throws Exception {
+        testMergeCommitRequireNodesBase(List.of("http", "brpc"));
+        testMergeCommitRequireNodesBase(Collections.emptyList());
     }
 
-    private void testBatchWriteRequireNodesBase(List<String> serviceTypes) throws Exception {
+    private void testMergeCommitRequireNodesBase(List<String> serviceTypes) throws Exception {
         Map<String, String> headers = new HashMap<>();
-        headers.put(HTTP_ENABLE_BATCH_WRITE, "true");
+        headers.put(HTTP_ENABLE_MERGE_COMMIT, "true");
         Multimap<String, String> parameters = HashMultimap.create();
         parameters.put("type", "nodes");
         for (String serviceType : serviceTypes) {
@@ -105,7 +105,7 @@ public class StreamLoadMetaActionTest extends StarRocksHttpTestCase {
             expectedNodes.put("brpc", "192.0.0.1:8060,192.0.0.2:8060,192.0.0.3:8060");
         }
 
-        new MockUp<BatchWriteMgr>() {
+        new MockUp<MergeCommitMgr>() {
             @Mock
             public RequestCoordinatorBackendResult requestCoordinatorBackends(TableId tableId, StreamLoadKvParams params) {
                 return new RequestCoordinatorBackendResult(new TStatus(TStatusCode.OK), computeNodes);
@@ -125,11 +125,11 @@ public class StreamLoadMetaActionTest extends StarRocksHttpTestCase {
     }
 
     @Test
-    public void testBatchWriteRequireAllMetas() throws Exception {
+    public void testMergeCommitRequireAllMetas() throws Exception {
         Map<String, String> headers = new HashMap<>();
-        headers.put(HTTP_ENABLE_BATCH_WRITE, "true");
+        headers.put(HTTP_ENABLE_MERGE_COMMIT, "true");
         Request request = buildRequest(headers, HashMultimap.create());
-        new MockUp<BatchWriteMgr>() {
+        new MockUp<MergeCommitMgr>() {
             @Mock
             public RequestCoordinatorBackendResult requestCoordinatorBackends(TableId tableId, StreamLoadKvParams params) {
                 ComputeNode node = new ComputeNode(1, "192.0.0.1", 9050);
@@ -156,12 +156,12 @@ public class StreamLoadMetaActionTest extends StarRocksHttpTestCase {
     }
 
     @Test
-    public void testBatchWriteFail() throws Exception {
+    public void testMergeCommitFail() throws Exception {
         Map<String, String> headers = new HashMap<>();
-        headers.put(HTTP_ENABLE_BATCH_WRITE, "true");
+        headers.put(HTTP_ENABLE_MERGE_COMMIT, "true");
         Request request = buildRequest(headers, HashMultimap.create());
 
-        new MockUp<BatchWriteMgr>() {
+        new MockUp<MergeCommitMgr>() {
             @Mock
             public RequestCoordinatorBackendResult requestCoordinatorBackends(TableId tableId, StreamLoadKvParams params) {
                 TStatus status = new TStatus();

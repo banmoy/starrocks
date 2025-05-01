@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
+package com.starrocks.load.mergecommit;
+
+import com.starrocks.common.StatusOr;
+import com.starrocks.thrift.TStatus;
 
 /**
- * Callback interface for load execution.
+ * Represents the result of a load request. The value is a label
+ * that can be used to track the load.
  */
-public interface LoadExecuteCallback {
+public class RequestLoadResult extends StatusOr<String> {
 
-    /**
-     * Called when the load operation is finished.
-     *
-     * @param loadExecutor The executor associated with the load operation.
-     */
-    void finishLoad(LoadExecutor loadExecutor);
+    public RequestLoadResult(TStatus status, String label) {
+        super(status, label);
+    }
 }

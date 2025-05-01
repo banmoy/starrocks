@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
+package com.starrocks.load.mergecommit;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
@@ -65,7 +65,7 @@ public class LoadExecutor implements Runnable {
     private final StreamLoadInfo streamLoadInfo;
     private final StreamLoadKvParams loadParameters;
     private final Set<Long> coordinatorBackendIds;
-    private final int batchWriteIntervalMs;
+    private final int mergeCommitIntervalMs;
     private final Coordinator.Factory coordinatorFactory;
     private final LoadExecuteCallback loadExecuteCallback;
     private final TimeTrace timeTrace;
@@ -85,7 +85,7 @@ public class LoadExecutor implements Runnable {
             String label,
             TUniqueId loadId,
             StreamLoadInfo streamLoadInfo,
-            int batchWriteIntervalMs,
+            int mergeCommitIntervalMs,
             StreamLoadKvParams loadParameters,
             Set<Long> coordinatorBackendIds,
             Coordinator.Factory coordinatorFactory,
@@ -94,7 +94,7 @@ public class LoadExecutor implements Runnable {
         this.label = label;
         this.loadId = loadId;
         this.streamLoadInfo = streamLoadInfo;
-        this.batchWriteIntervalMs = batchWriteIntervalMs;
+        this.mergeCommitIntervalMs = mergeCommitIntervalMs;
         this.loadParameters = loadParameters;
         this.coordinatorBackendIds = coordinatorBackendIds;
         this.coordinatorFactory = coordinatorFactory;
@@ -149,7 +149,7 @@ public class LoadExecutor implements Runnable {
             return false;
         }
         long joinPlanTimeMs = timeTrace.joinPlanTimeMs.get();
-        return joinPlanTimeMs <= 0 || (System.currentTimeMillis() - joinPlanTimeMs < batchWriteIntervalMs);
+        return joinPlanTimeMs <= 0 || (System.currentTimeMillis() - joinPlanTimeMs < mergeCommitIntervalMs);
     }
 
     public Throwable getFailure() {
@@ -211,7 +211,7 @@ public class LoadExecutor implements Runnable {
                     streamLoadInfo.getNegative(), coordinatorBackendIds.size(), streamLoadInfo.getColumnExprDescs(),
                     streamLoadInfo, label, streamLoadInfo.getTimeout());
             loadPlanner.setWarehouseId(streamLoadInfo.getWarehouseId());
-            loadPlanner.setBatchWrite(batchWriteIntervalMs,
+            loadPlanner.setMergeCommit(mergeCommitIntervalMs,
                     ImmutableMap.<String, String>builder()
                             .putAll(loadParameters.toMap()).build(), coordinatorBackendIds);
             loadPlanner.plan();

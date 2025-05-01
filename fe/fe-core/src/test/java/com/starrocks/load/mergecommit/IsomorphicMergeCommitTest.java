@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
+package com.starrocks.load.mergecommit;
 
 import com.google.common.collect.ImmutableMap;
 import com.starrocks.load.loadv2.LoadJob;
@@ -55,7 +55,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
-public class IsomorphicBatchWriteTest extends BatchWriteTestBase {
+public class IsomorphicMergeCommitTest extends BatchWriteTestBase {
 
     @Mocked
     private CoordinatorBackendAssigner assigner;
@@ -63,7 +63,7 @@ public class IsomorphicBatchWriteTest extends BatchWriteTestBase {
     private TxnStateDispatcher txnStateDispatcher;
     private int parallel;
 
-    private IsomorphicBatchWrite load;
+    private IsomorphicMergeCommit load;
 
     @Before
     public void setup() throws Exception {
@@ -73,12 +73,12 @@ public class IsomorphicBatchWriteTest extends BatchWriteTestBase {
         assertTrue("Number nodes " + allNodes.size(), parallel < allNodes.size());
         Map<String, String> map = new HashMap<>();
         map.put(StreamLoadHttpHeader.HTTP_FORMAT, "json");
-        map.put(StreamLoadHttpHeader.HTTP_ENABLE_BATCH_WRITE, "true");
-        map.put(StreamLoadHttpHeader.HTTP_BATCH_WRITE_ASYNC, "false");
+        map.put(StreamLoadHttpHeader.HTTP_ENABLE_MERGE_COMMIT, "true");
+        map.put(StreamLoadHttpHeader.HTTP_MERGE_COMMIT_ASYNC, "false");
         StreamLoadKvParams params = new StreamLoadKvParams(map);
         StreamLoadInfo streamLoadInfo =
                 StreamLoadInfo.fromHttpStreamLoadRequest(null, -1, Optional.empty(), params);
-        load = new IsomorphicBatchWrite(
+        load = new IsomorphicMergeCommit(
                 1,
                 new TableId(DB_NAME_1, TABLE_NAME_1_1),
                 WarehouseManager.DEFAULT_WAREHOUSE_NAME,

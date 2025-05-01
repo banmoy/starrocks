@@ -24,13 +24,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static com.starrocks.http.rest.RestBaseAction.WAREHOUSE_KEY;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_BATCH_WRITE_ASYNC;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_BATCH_WRITE_INTERVAL_MS;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_BATCH_WRITE_PARALLEL;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_COLUMNS;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_COLUMN_SEPARATOR;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_COMPRESSION;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_BATCH_WRITE;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_MERGE_COMMIT;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_REPLICATED_STORAGE;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENCLOSE;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ESCAPE;
@@ -41,6 +38,9 @@ import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_LOAD_DOP;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_LOAD_MEM_LIMIT;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_LOG_REJECTED_RECORD_NUM;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MAX_FILTER_RATIO;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_COMMIT_ASYNC;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_COMMIT_INTERVAL_MS;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_COMMIT_PARALLEL;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_CONDITION;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_NEGATIVE;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_PARTIAL_UPDATE;
@@ -305,26 +305,26 @@ public class StreamLoadKvParamsTest extends StreamLoadParamsTestBase {
     }
 
     @Test
-    public void testBatchWrite() {
+    public void testMergeCommit() {
         {
             StreamLoadKvParams params = new StreamLoadKvParams(new HashMap<>());
-            assertFalse(params.getEnableBatchWrite().isPresent());
-            assertFalse(params.getBatchWriteAsync().isPresent());
-            assertFalse(params.getBatchWriteIntervalMs().isPresent());
-            assertFalse(params.getBatchWriteParallel().isPresent());
+            assertFalse(params.getEnableMergeCommit().isPresent());
+            assertFalse(params.getMergeCommitAsync().isPresent());
+            assertFalse(params.getMergeCommitIntervalMs().isPresent());
+            assertFalse(params.getMergeCommitParallel().isPresent());
         }
 
         {
             Map<String, String> map = new HashMap<>();
-            map.put(HTTP_ENABLE_BATCH_WRITE, "true");
-            map.put(HTTP_BATCH_WRITE_ASYNC, "true");
-            map.put(HTTP_BATCH_WRITE_INTERVAL_MS, "1000");
-            map.put(HTTP_BATCH_WRITE_PARALLEL, "4");
+            map.put(HTTP_ENABLE_MERGE_COMMIT, "true");
+            map.put(HTTP_MERGE_COMMIT_ASYNC, "true");
+            map.put(HTTP_MERGE_COMMIT_INTERVAL_MS, "1000");
+            map.put(HTTP_MERGE_COMMIT_PARALLEL, "4");
             StreamLoadKvParams params = new StreamLoadKvParams(map);
-            assertEquals(true, params.getEnableBatchWrite().orElse(null));
-            assertEquals(true, params.getBatchWriteAsync().orElse(null));
-            assertEquals(Integer.valueOf(1000), params.getBatchWriteIntervalMs().orElse(null));
-            assertEquals(Integer.valueOf(4), params.getBatchWriteParallel().orElse(null));
+            assertEquals(true, params.getEnableMergeCommit().orElse(null));
+            assertEquals(true, params.getMergeCommitAsync().orElse(null));
+            assertEquals(Integer.valueOf(1000), params.getMergeCommitIntervalMs().orElse(null));
+            assertEquals(Integer.valueOf(4), params.getMergeCommitParallel().orElse(null));
         }
     }
 

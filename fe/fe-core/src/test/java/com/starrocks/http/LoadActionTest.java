@@ -15,9 +15,9 @@
 package com.starrocks.http;
 
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.starrocks.load.batchwrite.BatchWriteMgr;
-import com.starrocks.load.batchwrite.RequestCoordinatorBackendResult;
-import com.starrocks.load.batchwrite.TableId;
+import com.starrocks.load.mergecommit.MergeCommitMgr;
+import com.starrocks.load.mergecommit.RequestCoordinatorBackendResult;
+import com.starrocks.load.mergecommit.TableId;
 import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.qe.SimpleScheduler;
 import com.starrocks.server.GlobalStateMgr;
@@ -57,7 +57,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_BATCH_WRITE;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_MERGE_COMMIT;
 import static com.starrocks.server.WarehouseManager.DEFAULT_WAREHOUSE_NAME;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -70,9 +70,9 @@ public class LoadActionTest extends StarRocksHttpTestCase {
             .build();
 
     @Test
-    public void testBatchWriteStreamLoadSuccess() throws Exception {
+    public void testMergeCommitStreamLoadSuccess() throws Exception {
         Map<String, String> map = new HashMap<>();
-        map.put(HTTP_ENABLE_BATCH_WRITE, "true");
+        map.put(HTTP_ENABLE_MERGE_COMMIT, "true");
         Request request = buildRequest(map);
         List<ComputeNode> computeNodes = new ArrayList<>();
         List<String> redirectLocations = new ArrayList<>();
@@ -84,7 +84,7 @@ public class LoadActionTest extends StarRocksHttpTestCase {
             redirectLocations.add(getLoadUrl(host, httpPort));
         }
 
-        new MockUp<BatchWriteMgr>() {
+        new MockUp<MergeCommitMgr>() {
             @Mock
             public RequestCoordinatorBackendResult requestCoordinatorBackends(TableId tableId, StreamLoadKvParams params) {
                 return new RequestCoordinatorBackendResult(new TStatus(TStatusCode.OK), computeNodes);
@@ -99,12 +99,12 @@ public class LoadActionTest extends StarRocksHttpTestCase {
     }
 
     @Test
-    public void testBatchWriteStreamLoadFailure() throws Exception {
+    public void testMergeCommitStreamLoadFailure() throws Exception {
         Map<String, String> map = new HashMap<>();
-        map.put(HTTP_ENABLE_BATCH_WRITE, "true");
+        map.put(HTTP_ENABLE_MERGE_COMMIT, "true");
         Request request = buildRequest(map);
 
-        new MockUp<BatchWriteMgr>() {
+        new MockUp<MergeCommitMgr>() {
             @Mock
             public RequestCoordinatorBackendResult requestCoordinatorBackends(TableId tableId, StreamLoadKvParams params) {
                 TStatus status = new TStatus();

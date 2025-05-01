@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
+package com.starrocks.load.mergecommit;
 
 import com.starrocks.system.ComputeNode;
 
@@ -30,27 +30,27 @@ public interface CoordinatorBackendAssigner {
     void start();
 
     /**
-     * Registers a batch write with the specified parameters.
+     * Registers a merge commit with the specified parameters.
      *
-     * @param id The ID of the batch write operation.
+     * @param id The ID of the merge commit operation.
      * @param warehouseId The id of the warehouse.
      * @param tableId The identifier of the table.
      * @param expectParallel The expected parallelism.
      */
-    void registerBatchWrite(long id, long warehouseId, TableId tableId, int expectParallel);
+    void registerMergeCommit(long id, long warehouseId, TableId tableId, int expectParallel);
 
     /**
-     * Unregisters a batch write.
+     * Unregisters a merge commit.
      *
-     * @param id The ID of the batch write to unregister.
+     * @param id The ID of the merge commit to unregister.
      */
-    void unregisterBatchWrite(long id);
+    void unregisterMergeCommit(long id);
 
     /**
-     * Retrieves the list of compute nodes assigned to the batch write.
+     * Retrieves the list of compute nodes assigned to the merge commit.
      *
-     * @param id The ID of the batch write.
-     * @return A list of compute nodes assigned to the batch write.
+     * @param id The ID of the merge commit.
+     * @return A list of compute nodes assigned to the merge commit.
      */
     Optional<List<ComputeNode>> getBackends(long id);
 }

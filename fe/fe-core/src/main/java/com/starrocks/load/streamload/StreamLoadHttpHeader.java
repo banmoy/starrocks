@@ -58,11 +58,11 @@ public class StreamLoadHttpHeader {
     public static final String HTTP_JSONROOT = "json_root";
     public static final String HTTP_STRIP_OUTER_ARRAY = "strip_outer_array";
 
-    // Headers for batch write ==========================
-    public static final String HTTP_ENABLE_BATCH_WRITE = "enable_merge_commit";
-    public static final String HTTP_BATCH_WRITE_ASYNC = "merge_commit_async";
-    public static final String HTTP_BATCH_WRITE_INTERVAL_MS = "merge_commit_interval_ms";
-    public static final String HTTP_BATCH_WRITE_PARALLEL = "merge_commit_parallel";
+    // Headers for merge commit ==========================
+    public static final String HTTP_ENABLE_MERGE_COMMIT = "enable_merge_commit";
+    public static final String HTTP_MERGE_COMMIT_ASYNC = "merge_commit_async";
+    public static final String HTTP_MERGE_COMMIT_INTERVAL_MS = "merge_commit_interval_ms";
+    public static final String HTTP_MERGE_COMMIT_PARALLEL = "merge_commit_parallel";
 
     // A list of all headers. If add a new header, should also add it to the list.
     public static final List<String> HTTP_HEADER_LIST = Arrays.asList(
@@ -71,7 +71,7 @@ public class StreamLoadHttpHeader {
             HTTP_TEMP_PARTITIONS, HTTP_NEGATIVE, HTTP_STRICT_MODE, HTTP_TIMEZONE, HTTP_LOAD_MEM_LIMIT,
             HTTP_JSONPATHS, HTTP_JSONROOT, HTTP_STRIP_OUTER_ARRAY, HTTP_PARTIAL_UPDATE, HTTP_PARTIAL_UPDATE_MODE,
             HTTP_TRANSMISSION_COMPRESSION_TYPE, HTTP_LOAD_DOP, HTTP_ENABLE_REPLICATED_STORAGE, HTTP_MERGE_CONDITION,
-            HTTP_LOG_REJECTED_RECORD_NUM, HTTP_COMPRESSION, HTTP_WAREHOUSE, HTTP_ENABLE_BATCH_WRITE,
-            HTTP_BATCH_WRITE_ASYNC, HTTP_BATCH_WRITE_INTERVAL_MS, HTTP_BATCH_WRITE_PARALLEL
+            HTTP_LOG_REJECTED_RECORD_NUM, HTTP_COMPRESSION, HTTP_WAREHOUSE, HTTP_ENABLE_MERGE_COMMIT,
+            HTTP_MERGE_COMMIT_ASYNC, HTTP_MERGE_COMMIT_INTERVAL_MS, HTTP_MERGE_COMMIT_PARALLEL
     );
 }

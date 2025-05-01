@@ -120,11 +120,11 @@ import com.starrocks.lake.compaction.CompactionMgr;
 import com.starrocks.leader.CheckpointController;
 import com.starrocks.leader.LeaderImpl;
 import com.starrocks.load.EtlJobType;
-import com.starrocks.load.batchwrite.RequestLoadResult;
-import com.starrocks.load.batchwrite.TableId;
 import com.starrocks.load.loadv2.LoadJob;
 import com.starrocks.load.loadv2.LoadMgr;
 import com.starrocks.load.loadv2.ManualLoadTxnCommitAttachment;
+import com.starrocks.load.mergecommit.RequestLoadResult;
+import com.starrocks.load.mergecommit.TableId;
 import com.starrocks.load.pipe.Pipe;
 import com.starrocks.load.pipe.PipeFileRecord;
 import com.starrocks.load.pipe.PipeId;
@@ -1820,7 +1820,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             TableId tableId = new TableId(request.getDb(), request.getTbl());
             StreamLoadKvParams params = new StreamLoadKvParams(request.getParams());
             RequestLoadResult loadResult = GlobalStateMgr.getCurrentState()
-                    .getBatchWriteMgr().requestLoad(tableId, params, request.getBackend_id(), request.getBackend_host());
+                    .getMergeCommitMgr().requestLoad(tableId, params, request.getBackend_id(), request.getBackend_host());
             result.setStatus(loadResult.getStatus());
             if (loadResult.isOk()) {
                 result.setLabel(loadResult.getValue());

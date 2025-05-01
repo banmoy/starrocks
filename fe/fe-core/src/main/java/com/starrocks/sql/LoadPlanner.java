@@ -145,10 +145,10 @@ public class LoadPlanner {
     private String mergeConditionStr;
 
     // Only valid for stream load
-    private boolean enableBatchWrite = false;
-    private int batchWriteIntervalMs;
-    private ImmutableMap<String, String> batchWriteParameters;
-    private Set<Long> batchWriteBackendIds;
+    private boolean enableMergeCommit = false;
+    private int mergeCommitIntervalMs;
+    private ImmutableMap<String, String> mergeCommitParameters;
+    private Set<Long> mergeCommitBackendIds;
 
     public LoadPlanner(long loadJobId, TUniqueId loadId, long txnId, long dbId, OlapTable destTable,
                        boolean strictMode, String timezone, long timeoutS,
@@ -247,12 +247,12 @@ public class LoadPlanner {
         return warehouseId;
     }
 
-    public void setBatchWrite(
-            int batchWriteIntervalMs, ImmutableMap<String, String> loadParameters, Set<Long> batchWriteBackendIds) {
-        this.enableBatchWrite = true;
-        this.batchWriteIntervalMs = batchWriteIntervalMs;
-        this.batchWriteParameters = loadParameters;
-        this.batchWriteBackendIds = new HashSet<>(batchWriteBackendIds);
+    public void setMergeCommit(
+            int mergeCommitIntervalMs, ImmutableMap<String, String> loadParameters, Set<Long> mergeCommitBackendIds) {
+        this.enableMergeCommit = true;
+        this.mergeCommitIntervalMs = mergeCommitIntervalMs;
+        this.mergeCommitParameters = loadParameters;
+        this.mergeCommitBackendIds = new HashSet<>(mergeCommitBackendIds);
     }
 
     public void setPartialUpdateMode(TPartialUpdateMode mode) {
@@ -433,8 +433,8 @@ public class LoadPlanner {
             StreamLoadScanNode streamScanNode = new StreamLoadScanNode(loadId, new PlanNodeId(0), tupleDesc,
                     destTable, streamLoadInfo, dbName, label, parallelInstanceNum, txnId, warehouseId);
             streamScanNode.setNeedAssignBE(true);
-            if (enableBatchWrite) {
-                streamScanNode.setBatchWrite(batchWriteIntervalMs, batchWriteParameters, batchWriteBackendIds);
+            if (enableMergeCommit) {
+                streamScanNode.setMergeCommit(mergeCommitIntervalMs, mergeCommitParameters, mergeCommitBackendIds);
             }
             streamScanNode.setUseVectorizedLoad(true);
             streamScanNode.init(analyzer);

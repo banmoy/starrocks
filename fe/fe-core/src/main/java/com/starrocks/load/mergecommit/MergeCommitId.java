@@ -12,32 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
+package com.starrocks.load.mergecommit;
+
+import com.starrocks.load.streamload.StreamLoadKvParams;
 
 import java.util.Objects;
 
 /**
- * Represents an identifier for a table in the database.
+ * Represents an identifier for a merge commit.
  */
-public class TableId {
+public class MergeCommitId {
 
-    /** The name of the database. */
-    private final String dbName;
+    /** The ID of the table associated with the merge commit. */
+    private final TableId tableId;
 
-    /** The name of the table. */
-    private final String tableName;
+    /** The parameters for the stream load associated with the merge commit. */
+    private final StreamLoadKvParams params;
 
-    public TableId(String dbName, String tableName) {
-        this.dbName = dbName;
-        this.tableName = tableName;
-    }
 
-    public String getDbName() {
-        return dbName;
-    }
-
-    public String getTableName() {
-        return tableName;
+    public MergeCommitId(TableId tableId, StreamLoadKvParams params) {
+        this.tableId = tableId;
+        this.params = params;
     }
 
     @Override
@@ -48,20 +43,12 @@ public class TableId {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        TableId tableId = (TableId) o;
-        return Objects.equals(dbName, tableId.dbName) && Objects.equals(tableName, tableId.tableName);
+        MergeCommitId that = (MergeCommitId) o;
+        return Objects.equals(tableId, that.tableId) && Objects.equals(params, that.params);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(dbName, tableName);
-    }
-
-    @Override
-    public String toString() {
-        return "TableId{" +
-                "dbName='" + dbName + '\'' +
-                ", tableName='" + tableName + '\'' +
-                '}';
+        return Objects.hash(tableId, params);
     }
 }

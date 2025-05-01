@@ -12,27 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
-
-import com.starrocks.load.streamload.StreamLoadKvParams;
+package com.starrocks.load.mergecommit;
 
 import java.util.Objects;
 
 /**
- * Represents an identifier for a batch write.
+ * Represents an identifier for a table in the database.
  */
-public class BatchWriteId {
+public class TableId {
 
-    /** The ID of the table associated with the batch write. */
-    private final TableId tableId;
+    /** The name of the database. */
+    private final String dbName;
 
-    /** The parameters for the stream load associated with the batch write. */
-    private final StreamLoadKvParams params;
+    /** The name of the table. */
+    private final String tableName;
 
+    public TableId(String dbName, String tableName) {
+        this.dbName = dbName;
+        this.tableName = tableName;
+    }
 
-    public BatchWriteId(TableId tableId, StreamLoadKvParams params) {
-        this.tableId = tableId;
-        this.params = params;
+    public String getDbName() {
+        return dbName;
+    }
+
+    public String getTableName() {
+        return tableName;
     }
 
     @Override
@@ -43,12 +48,20 @@ public class BatchWriteId {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        BatchWriteId that = (BatchWriteId) o;
-        return Objects.equals(tableId, that.tableId) && Objects.equals(params, that.params);
+        TableId tableId = (TableId) o;
+        return Objects.equals(dbName, tableId.dbName) && Objects.equals(tableName, tableId.tableName);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, params);
+        return Objects.hash(dbName, tableName);
+    }
+
+    @Override
+    public String toString() {
+        return "TableId{" +
+                "dbName='" + dbName + '\'' +
+                ", tableName='" + tableName + '\'' +
+                '}';
     }
 }

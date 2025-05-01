@@ -42,8 +42,8 @@ import com.starrocks.http.ActionController;
 import com.starrocks.http.BaseRequest;
 import com.starrocks.http.BaseResponse;
 import com.starrocks.http.IllegalArgException;
-import com.starrocks.load.batchwrite.RequestCoordinatorBackendResult;
-import com.starrocks.load.batchwrite.TableId;
+import com.starrocks.load.mergecommit.RequestCoordinatorBackendResult;
+import com.starrocks.load.mergecommit.TableId;
 import com.starrocks.load.streamload.StreamLoadHttpHeader;
 import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.qe.ConnectContext;
@@ -158,9 +158,9 @@ public class LoadAction extends RestBaseAction {
         // affect subsequent requests processing.
         response.setForceCloseConnection(true);
 
-        boolean enableBatchWrite = "true".equalsIgnoreCase(
-                request.getRequest().headers().get(StreamLoadHttpHeader.HTTP_ENABLE_BATCH_WRITE));
-        if (enableBatchWrite && redirectToLeader(request, response)) {
+        boolean enableMergeCommit = "true".equalsIgnoreCase(
+                request.getRequest().headers().get(StreamLoadHttpHeader.HTTP_ENABLE_MERGE_COMMIT));
+        if (enableMergeCommit && redirectToLeader(request, response)) {
             return;
         }
 
@@ -176,10 +176,10 @@ public class LoadAction extends RestBaseAction {
 
         Authorizer.checkTableAction(ConnectContext.get(), dbName, tableName, PrivilegeType.INSERT);
 
-        if (!enableBatchWrite) {
+        if (!enableMergeCommit) {
             processNormalStreamLoad(request, response, dbName, tableName);
         } else {
-            processBatchWriteStreamLoad(request, response, dbName, tableName);
+            processMergeCommitStreamLoad(request, response, dbName, tableName);
         }
     }
 
@@ -207,14 +207,14 @@ public class LoadAction extends RestBaseAction {
         redirectTo(request, response, redirectAddr);
     }
 
-    private void processBatchWriteStreamLoad(
+    private void processMergeCommitStreamLoad(
             BaseRequest request, BaseResponse response, String dbName, String tableName) throws DdlException {
         TableId tableId = new TableId(dbName, tableName);
         StreamLoadKvParams params = StreamLoadKvParams.fromHttpHeaders(request.getRequest().headers());
         RequestCoordinatorBackendResult result = GlobalStateMgr.getCurrentState()
-                .getBatchWriteMgr().requestCoordinatorBackends(tableId, params);
+                .getMergeCommitMgr().requestCoordinatorBackends(tableId, params);
         if (!result.isOk()) {
-            BatchWriteResponseResult responseResult = new BatchWriteResponseResult(
+            MergeCommitResponseResult responseResult = new MergeCommitResponseResult(
                     result.getStatus().status_code.name(), ActionStatus.FAILED,
                     result.getStatus().error_msgs.get(0));
             sendResult(request, response, responseResult);
@@ -225,13 +225,13 @@ public class LoadAction extends RestBaseAction {
         int index = ThreadLocalRandom.current().nextInt(nodes.size());
         ComputeNode node = nodes.get(index);
         TNetworkAddress redirectAddr = new TNetworkAddress(node.getHost(), node.getHttpPort());
-        LOG.info("redirect batch write to destination={}, db: {}, tbl: {}", redirectAddr, dbName, tableName);
+        LOG.info("redirect merge commit to destination={}, db: {}, tbl: {}", redirectAddr, dbName, tableName);
         redirectTo(request, response, redirectAddr);
     }
 
-    public static class BatchWriteResponseResult extends RestBaseResult {
+    public static class MergeCommitResponseResult extends RestBaseResult {
 
-        public BatchWriteResponseResult(String code, ActionStatus status, String msg) {
+        public MergeCommitResponseResult(String code, ActionStatus status, String msg) {
             super(code, status, msg);
         }
     }

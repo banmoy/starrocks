@@ -32,9 +32,9 @@ import com.starrocks.common.PatternMatcher;
 import com.starrocks.common.StarRocksException;
 import com.starrocks.common.util.concurrent.lock.LockTimeoutException;
 import com.starrocks.ha.FrontendNodeType;
-import com.starrocks.load.batchwrite.BatchWriteMgr;
-import com.starrocks.load.batchwrite.RequestLoadResult;
-import com.starrocks.load.batchwrite.TableId;
+import com.starrocks.load.mergecommit.MergeCommitMgr;
+import com.starrocks.load.mergecommit.RequestLoadResult;
+import com.starrocks.load.mergecommit.TableId;
 import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.qe.DDLStmtExecutor;
@@ -113,10 +113,9 @@ import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_BATCH_WRITE_ASYNC;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_BATCH_WRITE_INTERVAL_MS;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_BATCH_WRITE_PARALLEL;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_BATCH_WRITE;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_COMMIT_ASYNC;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_COMMIT_INTERVAL_MS;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_COMMIT_PARALLEL;
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
@@ -1271,12 +1270,12 @@ public class FrontendServiceImplTest {
         request.setPasswd("");
         request.setBackend_id(10001);
         request.setBackend_host("127.0.0.1");
-        request.putToParams(HTTP_ENABLE_BATCH_WRITE, "true");
-        request.putToParams(HTTP_BATCH_WRITE_ASYNC, "true");
-        request.putToParams(HTTP_BATCH_WRITE_INTERVAL_MS, "1000");
-        request.putToParams(HTTP_BATCH_WRITE_PARALLEL, "4");
+        request.putToParams(HTTP_MERGE_COMMIT_ASYNC, "true");
+        request.putToParams(HTTP_MERGE_COMMIT_ASYNC, "true");
+        request.putToParams(HTTP_MERGE_COMMIT_INTERVAL_MS, "1000");
+        request.putToParams(HTTP_MERGE_COMMIT_PARALLEL, "4");
 
-        new MockUp<BatchWriteMgr>() {
+        new MockUp<MergeCommitMgr>() {
 
             @Mock
             public RequestLoadResult requestLoad(

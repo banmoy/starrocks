@@ -26,13 +26,10 @@ import java.util.Objects;
 import java.util.Optional;
 
 import static com.starrocks.http.rest.RestBaseAction.WAREHOUSE_KEY;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_BATCH_WRITE_ASYNC;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_BATCH_WRITE_INTERVAL_MS;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_BATCH_WRITE_PARALLEL;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_COLUMNS;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_COLUMN_SEPARATOR;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_COMPRESSION;
-import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_BATCH_WRITE;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_MERGE_COMMIT;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENABLE_REPLICATED_STORAGE;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ENCLOSE;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_ESCAPE;
@@ -44,6 +41,9 @@ import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_LOAD_DOP;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_LOAD_MEM_LIMIT;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_LOG_REJECTED_RECORD_NUM;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MAX_FILTER_RATIO;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_COMMIT_ASYNC;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_COMMIT_INTERVAL_MS;
+import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_COMMIT_PARALLEL;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_MERGE_CONDITION;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_NEGATIVE;
 import static com.starrocks.load.streamload.StreamLoadHttpHeader.HTTP_PARTIAL_UPDATE;
@@ -296,20 +296,20 @@ public class StreamLoadKvParams implements StreamLoadParams {
         return getBoolParam(HTTP_STRIP_OUTER_ARRAY);
     }
 
-    public Optional<Boolean> getEnableBatchWrite() {
-        return getBoolParam(HTTP_ENABLE_BATCH_WRITE);
+    public Optional<Boolean> getEnableMergeCommit() {
+        return getBoolParam(HTTP_ENABLE_MERGE_COMMIT);
     }
 
-    public Optional<Boolean> getBatchWriteAsync() {
-        return getBoolParam(HTTP_BATCH_WRITE_ASYNC);
+    public Optional<Boolean> getMergeCommitAsync() {
+        return getBoolParam(HTTP_MERGE_COMMIT_ASYNC);
     }
 
-    public Optional<Integer> getBatchWriteIntervalMs() {
-        return getIntParam(HTTP_BATCH_WRITE_INTERVAL_MS);
+    public Optional<Integer> getMergeCommitIntervalMs() {
+        return getIntParam(HTTP_MERGE_COMMIT_INTERVAL_MS);
     }
 
-    public Optional<Integer> getBatchWriteParallel() {
-        return getIntParam(HTTP_BATCH_WRITE_PARALLEL);
+    public Optional<Integer> getMergeCommitParallel() {
+        return getIntParam(HTTP_MERGE_COMMIT_PARALLEL);
     }
 
     private Optional<Boolean> getBoolParam(String paramName) {

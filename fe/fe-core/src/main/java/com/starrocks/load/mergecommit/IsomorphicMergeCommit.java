@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
+package com.starrocks.load.mergecommit;
 
 import com.starrocks.common.Config;
 import com.starrocks.common.util.DebugUtil;
@@ -42,12 +42,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
 /**
- * Responsible for managing batch write operations with the isomorphic parameters.
+ * Responsible for managing merge commit operations with the isomorphic parameters.
  * It will allocate a load for each write operation, and monitor the status of the load.
  */
-public class IsomorphicBatchWrite implements LoadExecuteCallback {
+public class IsomorphicMergeCommit implements LoadExecuteCallback {
 
-    private static final Logger LOG = LoggerFactory.getLogger(IsomorphicBatchWrite.class);
+    private static final Logger LOG = LoggerFactory.getLogger(IsomorphicMergeCommit.class);
 
     private static final String LABEL_PREFIX = "merge_commit_";
 
@@ -55,8 +55,8 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
     private final TableId tableId;
     private final String warehouseName;
     private final StreamLoadInfo streamLoadInfo;
-    private final int batchWriteIntervalMs;
-    private final int batchWriteParallel;
+    private final int mergeCommitIntervalMs;
+    private final int mergeCommitParallel;
     private final boolean asyncMode;
     private final StreamLoadKvParams loadParameters;
 
@@ -66,7 +66,7 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
     private final CoordinatorBackendAssigner coordinatorBackendAssigner;
 
     /**
-     * The executor to run batch write tasks.
+     * The executor to run merge commit tasks.
      */
     private final Executor executor;
 
@@ -90,13 +90,13 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
 
     private final AtomicLong lastLoadCreateTimeMs;
 
-    public IsomorphicBatchWrite(
+    public IsomorphicMergeCommit(
             long id,
             TableId tableId,
             String warehouseName,
             StreamLoadInfo streamLoadInfo,
-            int batchWriteIntervalMs,
-            int batchWriteParallel,
+            int mergeCommitIntervalMs,
+            int mergeCommitParallel,
             StreamLoadKvParams loadParameters,
             CoordinatorBackendAssigner coordinatorBackendAssigner,
             Executor executor,
@@ -105,9 +105,9 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
         this.tableId = tableId;
         this.warehouseName = warehouseName;
         this.streamLoadInfo = streamLoadInfo;
-        this.batchWriteIntervalMs = batchWriteIntervalMs;
-        this.batchWriteParallel = batchWriteParallel;
-        this.asyncMode = loadParameters.getBatchWriteAsync().orElse(false);
+        this.mergeCommitIntervalMs = mergeCommitIntervalMs;
+        this.mergeCommitParallel = mergeCommitParallel;
+        this.asyncMode = loadParameters.getMergeCommitAsync().orElse(false);
         this.loadParameters = loadParameters;
         this.coordinatorBackendAssigner = coordinatorBackendAssigner;
         this.executor = executor;
@@ -130,8 +130,8 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
         return streamLoadInfo.getWarehouseId();
     }
 
-    public int getBatchWriteParallel() {
-        return batchWriteParallel;
+    public int getMergeCommitParallel() {
+        return mergeCommitParallel;
     }
 
     public int numRunningLoads() {
@@ -139,7 +139,7 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
     }
 
     /**
-     * Requests coordinator backends for the batch write operation.
+     * Requests coordinator backends for the merge commit operation.
      * The backend can accept write operations for the specified table.
      *
      * @return The result of the request for coordinator backends.
@@ -224,7 +224,7 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
             String label = LABEL_PREFIX + DebugUtil.printId(UUIDUtil.toTUniqueId(UUID.randomUUID()));
             TUniqueId loadId = UUIDUtil.toTUniqueId(UUID.randomUUID());
             LoadExecutor loadExecutor = new LoadExecutor(
-                    tableId, label, loadId, streamLoadInfo, batchWriteIntervalMs, loadParameters,
+                    tableId, label, loadId, streamLoadInfo, mergeCommitIntervalMs, loadParameters,
                     backendIds, queryCoordinatorFactory, this);
             loadExecutorMap.put(label, loadExecutor);
             try {
@@ -244,7 +244,7 @@ public class IsomorphicBatchWrite implements LoadExecuteCallback {
     }
 
     /**
-     * Checks if the batch write operation is active.
+     * Checks if the merge commit operation is active.
      *
      * @return true if there are active load executors or the idle time is less than
      *                  the configured threshold, false otherwise.

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
+package com.starrocks.load.mergecommit;
 
 import com.starrocks.common.Config;
 import com.starrocks.system.ComputeNode;
@@ -51,29 +51,29 @@ public class CoordinatorBackendAssignerTest extends BatchWriteTestBase {
     }
 
     @Test
-    public void testRegisterBatchWrite() throws Exception {
-        assigner.registerBatchWrite(
+    public void testRegisterMergeCommit() throws Exception {
+        assigner.registerMergeCommit(
                 1L, 1, new TableId(DB_NAME_1, TABLE_NAME_1_1), 1);
         Optional<List<ComputeNode>> nodes1 = assigner.getBackends(1);
         assertTrue(nodes1.isPresent());
         assertEquals(1, nodes1.get().size());
         assertEquals(1, nodes1.get().stream().map(ComputeNode::getId).collect(Collectors.toSet()).size());
 
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 2L, 1, new TableId(DB_NAME_1, TABLE_NAME_1_2), 2);
         Optional<List<ComputeNode>> nodes2 = assigner.getBackends(2);
         assertTrue(nodes2.isPresent());
         assertEquals(2, nodes2.get().size());
         assertEquals(2, nodes2.get().stream().map(ComputeNode::getId).collect(Collectors.toSet()).size());
 
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 3L, 2, new TableId(DB_NAME_2, TABLE_NAME_2_1), 4);
         Optional<List<ComputeNode>> nodes3 = assigner.getBackends(3);
         assertTrue(nodes3.isPresent());
         assertEquals(4, nodes3.get().size());
         assertEquals(4, nodes3.get().stream().map(ComputeNode::getId).collect(Collectors.toSet()).size());
 
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 4L, 2, new TableId(DB_NAME_2, TABLE_NAME_2_2), 10);
         Optional<List<ComputeNode>> nodes4 = assigner.getBackends(4);
         assertTrue(nodes4.isPresent());
@@ -82,39 +82,39 @@ public class CoordinatorBackendAssignerTest extends BatchWriteTestBase {
     }
 
     @Test
-    public void testUnRegisterBatchWrite() throws Exception {
-        assigner.registerBatchWrite(
+    public void testUnRegisterMergeCommit() throws Exception {
+        assigner.registerMergeCommit(
                 1L, 1, new TableId(DB_NAME_1, TABLE_NAME_1_1), 1);
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 2L, 1, new TableId(DB_NAME_1, TABLE_NAME_1_2), 2);
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 3L, 2, new TableId(DB_NAME_2, TABLE_NAME_2_1), 4);
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 4L, 2, new TableId(DB_NAME_2, TABLE_NAME_2_2), 10);
 
         final AtomicLong expectNumScheduledTask = new AtomicLong(assigner.numScheduledTasks());
-        assigner.unregisterBatchWrite(1);
+        assigner.unregisterMergeCommit(1);
         assertFalse(assigner.getBackends(1).isPresent());
         expectNumScheduledTask.incrementAndGet();
         Awaitility.await().atMost(5, TimeUnit.SECONDS)
                 .until(() -> assigner.numScheduledTasks() == expectNumScheduledTask.get());
         assertFalse(containsLoadMeta(1, 1));
 
-        assigner.unregisterBatchWrite(2);
+        assigner.unregisterMergeCommit(2);
         assertFalse(assigner.getBackends(2).isPresent());
         expectNumScheduledTask.incrementAndGet();
         Awaitility.await().atMost(5, TimeUnit.SECONDS)
                 .until(() -> assigner.numScheduledTasks() == expectNumScheduledTask.get());
         assertFalse(containsLoadMeta(2, 1));
 
-        assigner.unregisterBatchWrite(3);
+        assigner.unregisterMergeCommit(3);
         assertFalse(assigner.getBackends(3).isPresent());
         expectNumScheduledTask.incrementAndGet();
         Awaitility.await().atMost(5, TimeUnit.SECONDS)
                 .until(() -> assigner.numScheduledTasks() == expectNumScheduledTask.get());
         assertFalse(containsLoadMeta(3, 2));
 
-        assigner.unregisterBatchWrite(4);
+        assigner.unregisterMergeCommit(4);
         assertFalse(assigner.getBackends(4).isPresent());
         expectNumScheduledTask.incrementAndGet();
         Awaitility.await().atMost(5, TimeUnit.SECONDS)
@@ -124,13 +124,13 @@ public class CoordinatorBackendAssignerTest extends BatchWriteTestBase {
 
     @Test
     public void testDetectUnavailableNodesWhenGetBackends() throws Exception {
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 1L, 1, new TableId(DB_NAME_1, TABLE_NAME_1_1), 1);
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 2L, 1, new TableId(DB_NAME_1, TABLE_NAME_1_2), 2);
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 3L, 1, new TableId(DB_NAME_2, TABLE_NAME_2_1), 3);
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 4L, 1, new TableId(DB_NAME_2, TABLE_NAME_2_2), 4);
 
         assigner.disablePeriodicalScheduleForTest();
@@ -165,7 +165,7 @@ public class CoordinatorBackendAssignerTest extends BatchWriteTestBase {
     public void testPeriodicalCheck() throws Exception {
         Set<Long> backendIds = new HashSet<>();
         for (int i = 1; i <= 100; i++) {
-            assigner.registerBatchWrite(
+            assigner.registerMergeCommit(
                     i, 1, new TableId(DB_NAME_1, TABLE_NAME_1_1), 4);
             Optional<List<ComputeNode>> nodes = assigner.getBackends(i);
             assertTrue(nodes.isPresent());
@@ -177,10 +177,10 @@ public class CoordinatorBackendAssignerTest extends BatchWriteTestBase {
 
 
         // create empty warehouse meta
-        assigner.registerBatchWrite(
+        assigner.registerMergeCommit(
                 201, 2, new TableId(DB_NAME_1, TABLE_NAME_1_1), 4);
         long expectNumScheduledTask = assigner.numScheduledTasks() + 1;
-        assigner.unregisterBatchWrite(201);
+        assigner.unregisterMergeCommit(201);
         Awaitility.await().atMost(5, TimeUnit.SECONDS)
                 .until(() -> assigner.numScheduledTasks() == expectNumScheduledTask);
         CoordinatorBackendAssignerImpl.WarehouseMeta whMeta = assigner.getWarehouseMeta(2);
@@ -212,7 +212,7 @@ public class CoordinatorBackendAssignerTest extends BatchWriteTestBase {
     }
 
     @Test
-    public void testRegisterBatchWriteFailure() throws Exception {
+    public void testRegisterMergeCommitFailure() throws Exception {
         new Expectations(assigner) {
             {
                 assigner.getAvailableNodes(anyLong);
@@ -221,7 +221,7 @@ public class CoordinatorBackendAssignerTest extends BatchWriteTestBase {
         };
 
         try {
-            assigner.registerBatchWrite(
+            assigner.registerMergeCommit(
                     1L, 1, new TableId(DB_NAME_1, TABLE_NAME_1_1), 1);
             fail();
         } catch (Exception e) {

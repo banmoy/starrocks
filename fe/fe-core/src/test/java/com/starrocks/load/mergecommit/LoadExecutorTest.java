@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.starrocks.load.batchwrite;
+package com.starrocks.load.mergecommit;
 
 import com.starrocks.analysis.DescriptorTable;
 import com.starrocks.catalog.OlapTable;
@@ -95,8 +95,8 @@ public class LoadExecutorTest extends BatchWriteTestBase {
 
         Map<String, String> map = new HashMap<>();
         map.put(StreamLoadHttpHeader.HTTP_FORMAT, "json");
-        map.put(StreamLoadHttpHeader.HTTP_ENABLE_BATCH_WRITE, "true");
-        map.put(StreamLoadHttpHeader.HTTP_BATCH_WRITE_ASYNC, "true");
+        map.put(StreamLoadHttpHeader.HTTP_ENABLE_MERGE_COMMIT, "true");
+        map.put(StreamLoadHttpHeader.HTTP_MERGE_COMMIT_ASYNC, "true");
         kvParams = new StreamLoadKvParams(map);
         streamLoadInfo = StreamLoadInfo.fromHttpStreamLoadRequest(null, -1, Optional.empty(), kvParams);
         loadExecuteCallback = new TestLoadExecuteCallback();

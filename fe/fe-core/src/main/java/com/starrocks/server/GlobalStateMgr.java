@@ -152,13 +152,13 @@ import com.starrocks.load.ExportChecker;
 import com.starrocks.load.ExportMgr;
 import com.starrocks.load.InsertOverwriteJobMgr;
 import com.starrocks.load.Load;
-import com.starrocks.load.batchwrite.BatchWriteMgr;
 import com.starrocks.load.loadv2.LoadEtlChecker;
 import com.starrocks.load.loadv2.LoadJobScheduler;
 import com.starrocks.load.loadv2.LoadLoadingChecker;
 import com.starrocks.load.loadv2.LoadMgr;
 import com.starrocks.load.loadv2.LoadTimeoutChecker;
 import com.starrocks.load.loadv2.LoadsHistorySyncer;
+import com.starrocks.load.mergecommit.MergeCommitMgr;
 import com.starrocks.load.pipe.PipeListener;
 import com.starrocks.load.pipe.PipeManager;
 import com.starrocks.load.pipe.PipeScheduler;
@@ -308,7 +308,7 @@ public class GlobalStateMgr {
     private final LoadMgr loadMgr;
     private final RoutineLoadMgr routineLoadMgr;
     private final StreamLoadMgr streamLoadMgr;
-    private final BatchWriteMgr batchWriteMgr;
+    private final MergeCommitMgr mergeCommitMgr;
     private final ExportMgr exportMgr;
     private final MaterializedViewMgr materializedViewMgr;
 
@@ -662,7 +662,7 @@ public class GlobalStateMgr {
         this.load = new Load();
         this.streamLoadMgr = new StreamLoadMgr();
         this.routineLoadMgr = new RoutineLoadMgr();
-        this.batchWriteMgr = new BatchWriteMgr();
+        this.mergeCommitMgr = new MergeCommitMgr();
         this.exportMgr = new ExportMgr();
         this.materializedViewMgr = new MaterializedViewMgr();
 
@@ -1399,7 +1399,7 @@ public class GlobalStateMgr {
         // start routine load scheduler
         routineLoadScheduler.start();
         routineLoadTaskScheduler.start();
-        batchWriteMgr.start();
+        mergeCommitMgr.start();
         // start dynamic partition task
         dynamicPartitionScheduler.start();
         // start daemon thread to update db used data quota for db txn manager periodically
@@ -2213,8 +2213,8 @@ public class GlobalStateMgr {
         return streamLoadMgr;
     }
 
-    public BatchWriteMgr getBatchWriteMgr() {
-        return batchWriteMgr;
+    public MergeCommitMgr getMergeCommitMgr() {
+        return mergeCommitMgr;
     }
 
     public RoutineLoadTaskScheduler getRoutineLoadTaskScheduler() {

@@ -120,10 +120,10 @@ public class StreamLoadScanNode extends LoadScanNode {
 
     private boolean needAssignBE;
 
-    private boolean enableBatchWrite = false;
-    private int batchWriteIntervalMs;
-    private ImmutableMap<String, String> batchWriteParameters;
-    private Set<Long> batchWriteBackendIds;
+    private boolean enableMergeCommit = false;
+    private int mergeCommitIntervalMs;
+    private ImmutableMap<String, String> mergeCommitParameters;
+    private Set<Long> mergeCommitBackendIds;
 
     private List<ComputeNode> computeNodes;
     private int nextBe = 0;
@@ -183,12 +183,12 @@ public class StreamLoadScanNode extends LoadScanNode {
         this.needAssignBE = needAssignBE;
     }
 
-    public void setBatchWrite(int batchWriteIntervalMs, ImmutableMap<String, String> loadParameters, Set<Long> batchWriteBackendIds) {
+    public void setMergeCommit(int mergeCommitIntervalMs, ImmutableMap<String, String> loadParameters, Set<Long> mergeCommitBackendIds) {
         setNeedAssignBE(true);
-        this.enableBatchWrite = true;
-        this.batchWriteIntervalMs = batchWriteIntervalMs;
-        this.batchWriteParameters = loadParameters;
-        this.batchWriteBackendIds = new HashSet<>(batchWriteBackendIds);
+        this.enableMergeCommit = true;
+        this.mergeCommitIntervalMs = mergeCommitIntervalMs;
+        this.mergeCommitParameters = loadParameters;
+        this.mergeCommitBackendIds = new HashSet<>(mergeCommitBackendIds);
     }
 
     public boolean nullExprInAutoIncrement() {
@@ -267,17 +267,17 @@ public class StreamLoadScanNode extends LoadScanNode {
     }
 
     private void assignBackends() throws StarRocksException {
-        if (enableBatchWrite) {
+        if (enableMergeCommit) {
             computeNodes = Lists.newArrayList();
-            for (long backendId : batchWriteBackendIds) {
+            for (long backendId : mergeCommitBackendIds) {
                 // backendId is assigned by CoordinatorBackendAssignerImpl which have considered to use
                 // backend or cn for different deployment mode. Here just try to get the node from both
                 ComputeNode computeNode = GlobalStateMgr.getCurrentState().getNodeMgr().getClusterInfo().getBackendOrComputeNode(backendId);
                 if (computeNode == null) {
-                    throw new StarRocksException(String.format("Can't find batch write backend [%s]", backendId));
+                    throw new StarRocksException(String.format("Can't find merge commit backend [%s]", backendId));
                 }
                 if (!computeNode.isAvailable()) {
-                    throw new StarRocksException(String.format("Batch write backend [%s] is not available", backendId));
+                    throw new StarRocksException(String.format("merge commit backend [%s] is not available", backendId));
                 }
                 computeNodes.add(computeNode);
             }
@@ -425,9 +425,9 @@ public class StreamLoadScanNode extends LoadScanNode {
             brokerScanRange.setBroker_addresses(Lists.newArrayList());
             if (needAssignBE) {
                 brokerScanRange.setChannel_id(curChannelId++);
-                brokerScanRange.setEnable_batch_write(enableBatchWrite);
-                brokerScanRange.setBatch_write_interval_ms(batchWriteIntervalMs);
-                brokerScanRange.setBatch_write_parameters(batchWriteParameters);
+                brokerScanRange.setEnable_batch_write(enableMergeCommit);
+                brokerScanRange.setBatch_write_interval_ms(mergeCommitIntervalMs);
+                brokerScanRange.setBatch_write_parameters(mergeCommitParameters);
             }
             TScanRangeLocations locations = new TScanRangeLocations();
             TScanRange scanRange = new TScanRange();
