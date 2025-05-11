@@ -54,6 +54,7 @@
 
 namespace starrocks {
 
+DEFINE_FAIL_POINT(tablets_channel_decline_add_chunk);
 DEFINE_FAIL_POINT(tablets_channel_add_chunk_wait_write_block);
 DEFINE_FAIL_POINT(tablets_channel_wait_secondary_replica_block);
 
@@ -257,6 +258,13 @@ void LocalTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkReq
 
     std::unordered_map<int64_t, std::vector<int64_t>> node_id_to_abort_tablets;
     context->set_node_id_to_abort_tablets(&node_id_to_abort_tablets);
+
+    FAIL_POINT_TRIGGER_EXECUTE(tablets_channel_decline_add_chunk, {
+        while (true) {
+            bthread_usleep(2000000);
+            LOG(INFO) << "decline add chunk, txn_id: " << _txn_id << " load_id: " << print_id(request.id());
+        }
+    });
 
     auto start_submit_write_task_ts = watch.elapsed_time();
     int64_t wait_memtable_flush_time_us = 0;
