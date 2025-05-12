@@ -758,9 +758,9 @@ Status NodeChannel::_send_request(bool eos, bool finished) {
                     &_add_batch_closures[_current_request_index]->cntl, request.mutable_requests(0),
                     &_add_batch_closures[_current_request_index]->result, _add_batch_closures[_current_request_index]);
 #else
-            std::pair<PTabletWriterAddChunksRequest*, ReusableClosure<PTabletWriterAddBatchResult>*> rpc_pair{
-                    &request, _add_batch_closures[_current_request_index]};
-            TEST_SYNC_POINT_CALLBACK("NodeChannel::rpc::add_chunk_send", &rpc_pair);
+            std::tuple<int64_t, PTabletWriterAddChunksRequest*, ReusableClosure<PTabletWriterAddBatchResult>*>
+                    rpc_tuple{_node_id, &request, _add_batch_closures[_current_request_index]};
+            TEST_SYNC_POINT_CALLBACK("NodeChannel::rpc::add_chunk_send", &rpc_tuple);
 #endif
         }
     }
