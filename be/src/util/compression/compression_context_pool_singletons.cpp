@@ -82,6 +82,8 @@ Status ZSTD_CCtx_Resetter::operator()(ZSTDCompressionContext* context) const noe
     }
     [[maybe_unused]] size_t const err = ZSTD_CCtx_reset(context->ctx, ZSTD_reset_session_and_parameters);
     assert(!ZSTD_isError(err)); // This function doesn't actually fail (void)err;
+    LOG(INFO) << "zstd compress context: " << static_cast<void*>(context->ctx) << ", level: " << context->last_level
+              << ", size : " << ZSTD_sizeof_CCtx(context->ctx);
     return Status::OK();
 }
 
@@ -92,6 +94,8 @@ Status ZSTD_DCtx_Resetter::operator()(ZSTDDecompressContext* context) const noex
     }
     [[maybe_unused]] size_t const err = ZSTD_DCtx_reset(context->ctx, ZSTD_reset_session_and_parameters);
     assert(!ZSTD_isError(err)); // This function doesn't actually fail (void)err;
+    LOG(INFO) << "zstd decompress context: " << static_cast<void*>(context->ctx)
+              << ", size : " << ZSTD_sizeof_DCtx(context->ctx);
     return Status::OK();
 }
 

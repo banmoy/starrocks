@@ -782,11 +782,14 @@ private:
                 return Status::InternalError(strings::Substitute("ZSTD with invalid compression level: $0", _level));
             }
             ret = ZSTD_CCtx_setParameter(ctx, ZSTD_c_compressionLevel, _level);
+            context->last_level = _level;
             if (ZSTD_isError(ret)) {
                 context->compression_fail = true;
                 return Status::InternalError(
                         strings::Substitute("ZSTD set level failed: $0", ZSTD_getErrorString(ZSTD_getErrorCode(ret))));
             }
+        } else {
+            context->last_level = 3;
         }
 
         [[maybe_unused]] faststring* compression_buffer = nullptr;

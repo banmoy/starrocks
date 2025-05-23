@@ -28,6 +28,7 @@ struct ZSTDCompressionContext {
 
     // ZSTD compression context
     ZSTD_CCtx* ctx{nullptr};
+    int32_t last_level{3};
 
     bool compression_fail{false};
     uint32_t compression_count{0};
