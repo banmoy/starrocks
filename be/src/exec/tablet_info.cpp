@@ -680,6 +680,11 @@ Status OlapTablePartitionParam::find_tablets(Chunk* chunk, std::vector<OlapTable
                                              std::vector<uint32_t>* indexes, std::vector<uint8_t>* selection,
                                              std::vector<int>* invalid_row_indexs, int64_t txn_id,
                                              std::vector<std::vector<std::string>>* partition_not_exist_row_values) {
+    if (_distributed_slot_descs.size() == 0 && config::enable_shuffle_test) {
+        return _find_tablets_test(partitions, indexes, selection, invalid_row_indexs, txn_id,
+                                  partition_not_exist_row_values);
+    }
+
     size_t num_rows = chunk->num_rows();
     partitions->resize(num_rows);
 
@@ -726,6 +731,70 @@ Status OlapTablePartitionParam::find_tablets(Chunk* chunk, std::vector<OlapTable
                 (*indexes)[i] = (*indexes)[i] % (*partitions)[i]->num_buckets;
             }
         }
+    }
+    return Status::OK();
+}
+
+Status OlapTablePartitionParam::_find_tablets_test(
+        Chunk* chunk, std::vector<OlapTablePartition*>* partitions, std::vector<uint32_t>* indexes,
+        std::vector<uint8_t>* selection, std::vector<int>* invalid_row_indexs, int64_t txn_id,
+        std::vector<std::vector<std::string>>* partition_not_exist_row_values) {
+    const auto& id_column = chunk->get_column_by_index(0);
+    const auto& val_column = chunk->get_column_by_index(1);
+    const auto& loc_column = chunk->get_column_by_index(2);
+
+    ShuffleValueType value_type = ShuffleValueType::UNKNOWN;
+    std::string val = val_column->debug_item(0);
+    if (val.find("TEST") != std::string::npos) {
+        value_type = ShuffleValueType::TEST;
+    } else if (val.find("test") != std::string::npos) {
+        value_type = ShuffleValueType::test;
+    } else if (val.find("TesT") != std::string::npos) {
+        value_type = ShuffleValueType::TesT;
+    }
+
+    ShuffleType shuffle_type = ShuffleType::HASH;
+    if (value_type == ShuffleValueType::TEST) {
+        shuffle_type = (txn_id & 1) ? ShuffleType::RANGE : ShuffleType::HASH;
+    } else if (value_type == ShuffleValueType::test) {
+        shuffle_type = (txn_id & 1) ? ShuffleType::HASH : ShuffleType::FIRST_NODE;
+    } else if (value_type == ShuffleValueType::TesT) {
+        shuffle_type = (txn_id & 1) ? ShuffleType::FIRST_NODE : ShuffleType::RANGE;
+    }
+
+    size_t num_rows = chunk->num_rows();
+    partitions->resize(num_rows);
+    auto& part_ids = _partitions_map.begin()->second;
+    indexes->assign(num_rows, 0);
+    if (shuffle_type == ShuffleType::FIRST_NODE) {
+        for (size_t i = 0; i < num_rows; ++i) {
+            if ((*selection)[i]) {
+                (*partitions)[i] = _partitions[part_ids[(*indexes)[i] % _partitions.size()]];
+                (*indexes)[i] = 0;
+            }
+        }
+    } else if (shuffle_type == ShuffleType::RANGE) {
+        int num_buckets = _partitions.begin()->second->num_buckets;
+        int range_per_bucket = 30;
+        for (size_t i = 0; i < num_rows; ++i) {
+            if ((*selection)[i]) {
+                (*partitions)[i] = _partitions[part_ids[(*indexes)[i] % _partitions.size()]];
+                (*indexes)[i] = std::min(id_column->get(i).get_int32() / range_per_bucket, num_buckets - 1);
+            }
+        }
+    } else {
+        CHECK(shuffle_type == ShuffleType::HASH);
+        id_column->crc32_hash(&(*indexes)[0], 0, num_rows);
+        for (size_t i = 0; i < num_rows; ++i) {
+            if ((*selection)[i]) {
+                (*partitions)[i] = _partitions[part_ids[(*indexes)[i] % _partitions.size()]];
+                (*indexes)[i] = (*indexes)[i] % (*partitions)[i]->num_buckets;
+            }
+        }
+    }
+    loc_column->resize(0);
+    for (size_t i = 0; i < num_rows; ++i) {
+        loc_column->append_datum(Datum((*indexes)[i]));
     }
     return Status::OK();
 }

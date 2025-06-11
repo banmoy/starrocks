@@ -237,6 +237,16 @@ private:
     }
 };
 
+enum class ShuffleValueType { UNKNOWN, TEST, test, TesT };
+
+enum class ShuffleType {
+    FIRST_NODE,
+    // A alog
+    RANGE,
+    // B alog
+    HASH
+};
+
 // store an olap table's tablet information
 class OlapTablePartitionParam {
 public:
@@ -319,6 +329,11 @@ private:
         }
         return !PartionKeyComparator()(key, &part->start_key);
     }
+
+    Status _find_tablets_test(Chunk* chunk, std::vector<OlapTablePartition*>* partitions,
+                              std::vector<uint32_t>* indexes, std::vector<uint8_t>* selection,
+                              std::vector<int>* invalid_row_indexs, int64_t txn_id,
+                              std::vector<std::vector<std::string>>* partition_not_exist_row_values);
 
 private:
     std::shared_ptr<OlapTableSchemaParam> _schema;
