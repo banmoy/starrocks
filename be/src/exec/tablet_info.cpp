@@ -681,8 +681,7 @@ Status OlapTablePartitionParam::find_tablets(Chunk* chunk, std::vector<OlapTable
                                              std::vector<int>* invalid_row_indexs, int64_t txn_id,
                                              std::vector<std::vector<std::string>>* partition_not_exist_row_values) {
     if (_distributed_slot_descs.size() == 0 && config::enable_shuffle_test) {
-        return _find_tablets_test(partitions, indexes, selection, invalid_row_indexs, txn_id,
-                                  partition_not_exist_row_values);
+        return _find_tablets_test(chunk, partitions, indexes, selection, invalid_row_indexs, txn_id);
     }
 
     size_t num_rows = chunk->num_rows();
@@ -735,10 +734,9 @@ Status OlapTablePartitionParam::find_tablets(Chunk* chunk, std::vector<OlapTable
     return Status::OK();
 }
 
-Status OlapTablePartitionParam::_find_tablets_test(
-        Chunk* chunk, std::vector<OlapTablePartition*>* partitions, std::vector<uint32_t>* indexes,
-        std::vector<uint8_t>* selection, std::vector<int>* invalid_row_indexs, int64_t txn_id,
-        std::vector<std::vector<std::string>>* partition_not_exist_row_values) {
+Status OlapTablePartitionParam::_find_tablets_test(Chunk* chunk, std::vector<OlapTablePartition*>* partitions,
+                                                   std::vector<uint32_t>* indexes, std::vector<uint8_t>* selection,
+                                                   std::vector<int>* invalid_row_indexs, int64_t txn_id) {
     const auto& id_column = chunk->get_column_by_index(0);
     const auto& val_column = chunk->get_column_by_index(1);
     const auto& loc_column = chunk->get_column_by_index(2);

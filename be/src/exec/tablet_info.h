@@ -332,8 +332,7 @@ private:
 
     Status _find_tablets_test(Chunk* chunk, std::vector<OlapTablePartition*>* partitions,
                               std::vector<uint32_t>* indexes, std::vector<uint8_t>* selection,
-                              std::vector<int>* invalid_row_indexs, int64_t txn_id,
-                              std::vector<std::vector<std::string>>* partition_not_exist_row_values);
+                              std::vector<int>* invalid_row_indexs, int64_t txn_id);
 
 private:
     std::shared_ptr<OlapTableSchemaParam> _schema;
