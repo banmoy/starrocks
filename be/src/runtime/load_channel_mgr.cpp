@@ -151,6 +151,10 @@ Status LoadChannelMgr::init(MemTracker* mem_tracker) {
 
 void LoadChannelMgr::open(brpc::Controller* cntl, const PTabletWriterOpenRequest& request,
                           PTabletWriterOpenResult* response, google::protobuf::Closure* done) {
+    while (config::enable_rpc_block) {
+        LOG(INFO) << "block rpc, txn_id: " << request.txn_id();
+        bthread_usleep(100000);
+    }
     LoadChannelOpenContext open_context;
     open_context.cntl = cntl;
     open_context.request = &request;
