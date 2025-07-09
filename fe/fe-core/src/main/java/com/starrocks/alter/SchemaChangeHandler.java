@@ -1150,7 +1150,7 @@ public class SchemaChangeHandler extends AlterHandler {
         }
 
         //type key column do not allow light schema change.
-        if (newColumn.isKey()) {
+        if (newColumn.isKey() && KeysType.AGG_KEYS != olapTable.getKeysType()) {
             fastSchemaEvolution = false;
         }
 
@@ -1246,6 +1246,11 @@ public class SchemaChangeHandler extends AlterHandler {
             // 1. add to base index first
             List<Column> modIndexSchema = indexSchemaMap.get(baseIndexId);
             checkAndAddColumn(modIndexSchema, newColumn, columnPos, newColNameSet, true);
+            // for new key column, only use fast schema evolution if the cluster is shared-data
+            // and the column is added to the last position (columnPos == null)
+            if (newColumn.isKey() && (RunMode.isSharedNothingMode() || columnPos != null)) {
+                fastSchemaEvolution = false;
+            }
 
             if (targetIndexId == -1L) {
                 // no specified target index. return
@@ -1612,8 +1617,9 @@ public class SchemaChangeHandler extends AlterHandler {
                     }
                 }
             }
+            short newShortKeyCount;
             if (!sortKeyIdxes.isEmpty()) {
-                short newShortKeyCount = GlobalStateMgr.calcShortKeyColumnCount(alterSchema,
+                newShortKeyCount = GlobalStateMgr.calcShortKeyColumnCount(alterSchema,
                         indexIdToProperties.get(alterIndexId),
                         sortKeyIdxes);
                 LOG.debug("alter index[{}] short key column count: {}", alterIndexId, newShortKeyCount);
@@ -1622,11 +1628,14 @@ public class SchemaChangeHandler extends AlterHandler {
                 dataBuilder.withSortKeyIdxes(sortKeyIdxes);
                 dataBuilder.withSortKeyUniqueIds(sortKeyUniqueIds);
             } else {
-                short newShortKeyCount = GlobalStateMgr.calcShortKeyColumnCount(alterSchema,
+                newShortKeyCount = GlobalStateMgr.calcShortKeyColumnCount(alterSchema,
                         indexIdToProperties.get(alterIndexId));
                 LOG.debug("alter index[{}] short key column count: {}", alterIndexId, newShortKeyCount);
                 dataBuilder.withNewIndexShortKeyCount(alterIndexId,
                         newShortKeyCount).withNewIndexSchema(alterIndexId, alterSchema);
+            }
+            if (index.getShortKeyColumnCount() != newShortKeyCount) {
+                dataBuilder.withShortKeyCountChanged(true);
             }
 
             // 6. check the uniqueness of column unique id
@@ -2001,6 +2010,9 @@ public class SchemaChangeHandler extends AlterHandler {
         if (schemaChangeData.getNewIndexSchema().isEmpty() && !schemaChangeData.isHasIndexChanged()) {
             // Nothing changed.
             return null;
+        }
+        if (schemaChangeData.isShortKeyCountChanged()) {
+            fastSchemaEvolution = false;
         }
 
         if (!fastSchemaEvolution) {

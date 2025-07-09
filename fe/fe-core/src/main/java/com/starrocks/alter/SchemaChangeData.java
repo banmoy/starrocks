@@ -44,6 +44,7 @@ class SchemaChangeData {
     private final List<Integer> sortKeyIdxes;
     private final List<Integer> sortKeyUniqueIds;
     private final long warehouseId;
+    private final boolean shortKeyCountChanged;
 
     static Builder newBuilder() {
         return new Builder();
@@ -110,6 +111,10 @@ class SchemaChangeData {
         return warehouseId;
     }
 
+    public boolean isShortKeyCountChanged() {
+        return shortKeyCountChanged;
+    }
+
     private SchemaChangeData(Builder builder) {
         this.database = Objects.requireNonNull(builder.database, "database is null");
         this.table = Objects.requireNonNull(builder.table, "table is null");
@@ -124,6 +129,7 @@ class SchemaChangeData {
         this.sortKeyIdxes = builder.sortKeyIdxes;
         this.sortKeyUniqueIds = builder.sortKeyUniqueIds;
         this.warehouseId = builder.warehouseId;
+        this.shortKeyCountChanged = builder.shortKeyCountChanged;
     }
 
     static class Builder {
@@ -140,6 +146,7 @@ class SchemaChangeData {
         private List<Integer> sortKeyIdxes;
         private List<Integer> sortKeyUniqueIds;
         private long warehouseId;
+        private boolean shortKeyCountChanged = false;
 
         private Builder() {
         }
@@ -198,6 +205,11 @@ class SchemaChangeData {
 
         Builder withWarehouse(long warehouseId) {
             this.warehouseId = warehouseId;
+            return this;
+        }
+
+        Builder withShortKeyCountChanged(boolean shortKeyCountChanged) {
+            this.shortKeyCountChanged = shortKeyCountChanged;
             return this;
         }
 
