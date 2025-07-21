@@ -321,11 +321,11 @@ Status DeltaWriter::_init() {
         writer_context.tablet_schema = _tablet_schema;
     }
 
-    auto sort_key_idxes = _tablet_schema->sort_key_idxes();
+    auto sort_key_idxes = tablet_schema_ptr->sort_key_idxes();
     std::sort(sort_key_idxes.begin(), sort_key_idxes.end());
     bool auto_increment_in_sort_key = false;
     for (auto& idx : sort_key_idxes) {
-        auto& col = _tablet_schema->column(idx);
+        auto& col = tablet_schema_ptr->column(idx);
         if (col.is_auto_increment()) {
             auto_increment_in_sort_key = true;
             break;

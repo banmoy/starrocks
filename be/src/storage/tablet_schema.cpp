@@ -604,9 +604,6 @@ Status TabletSchema::_build_current_tablet_schema(int64_t schema_id, int32_t ver
             _cols[cid].set_is_sort_key(true);
         }
     }
-    if (column_param.has_short_key_column_count()) {
-        _num_short_key_columns = column_param.short_key_column_count();
-    }
     if (has_bf_columns) {
         _has_bf_fpp = true;
         _bf_fpp = ori_tablet_schema.bf_fpp();
