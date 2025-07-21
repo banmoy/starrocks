@@ -40,7 +40,7 @@
 
 namespace starrocks {
 
-#define LOG_DEBUG LOG(INFO) << "txn_id: " << _txn_id << ", "
+#define LOG_DEBUG LOG(INFO) << "txn_id: " << _parent->_txn_id << ", "
 
 DEFINE_FAIL_POINT(node_channel_set_brpc_timeout);
 
