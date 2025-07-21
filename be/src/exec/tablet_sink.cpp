@@ -79,6 +79,8 @@ static const uint8_t VALID_SEL_OK_AND_NULL = 0x3;
 
 namespace starrocks {
 
+#define LOG_DEBUG LOG(INFO) << "txn_id: " << _txn_id << ", "
+
 OlapTableSink::OlapTableSink(ObjectPool* pool, const std::vector<TExpr>& texprs, Status* status, RuntimeState* state)
         : _pool(pool), _rpc_http_min_size(state->get_rpc_http_min_size()) {
     if (!texprs.empty()) {
@@ -255,6 +257,7 @@ Status OlapTableSink::prepare(RuntimeState* state) {
         LOG(WARNING) << "unknown destination tuple descriptor, id=" << _tuple_desc_id;
         return Status::InternalError("unknown destination tuple descriptor");
     }
+    LOG_DEBUG << "output_tuple_desc: " << _output_tuple_desc->debug_string();
     if (!_output_expr_ctxs.empty()) {
         if (_output_expr_ctxs.size() != _output_tuple_desc->slots().size()) {
             LOG(WARNING) << "number of exprs is not same with slots, num_exprs=" << _output_expr_ctxs.size()
@@ -272,6 +275,7 @@ Status OlapTableSink::prepare(RuntimeState* state) {
                 return Status::InternalError(msg);
             }
         }
+        LOG_DEBUG << "output_expr_ctxs: " << _output_expr_ctxs.size();
     }
 
     _max_decimalv2_val.resize(_output_tuple_desc->slots().size());
@@ -620,7 +624,7 @@ Status OlapTableSink::_send_chunk(RuntimeState* state, Chunk* chunk, bool nonblo
     DCHECK(chunk->num_rows() > 0);
     size_t num_rows = chunk->num_rows();
     size_t serialize_size = serde::ProtobufChunkSerde::max_serialized_size(*chunk);
-
+    LOG_DEBUG << "send_chunk columns: " << chunk->num_columns();
     {
         SCOPED_TIMER(_ts_profile->prepare_data_timer);
         {

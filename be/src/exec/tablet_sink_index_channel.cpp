@@ -40,6 +40,8 @@
 
 namespace starrocks {
 
+#define LOG_DEBUG LOG(INFO) << "txn_id: " << _txn_id << ", "
+
 DEFINE_FAIL_POINT(node_channel_set_brpc_timeout);
 
 class OlapTableSink; // forward declaration
@@ -465,6 +467,8 @@ Status NodeChannel::add_chunk(Chunk* input, const std::vector<int64_t>& tablet_i
         return _err_st;
     }
 
+    LOG_DEBUG << "add_chunks columns: " << input->num_columns();
+
     DCHECK(_rpc_request.requests_size() == 1);
     if (UNLIKELY(_cur_chunk == nullptr)) {
         _reset_cur_chunk(input);
@@ -526,6 +530,8 @@ Status NodeChannel::add_chunks(Chunk* input, const std::vector<std::vector<int64
     if (_cancelled || _closed) {
         return _err_st;
     }
+
+    LOG_DEBUG << "add_chunks columns: " << input->num_columns();
 
     DCHECK(index_tablet_ids.size() == _rpc_request.requests_size());
     if (UNLIKELY(_cur_chunk == nullptr)) {

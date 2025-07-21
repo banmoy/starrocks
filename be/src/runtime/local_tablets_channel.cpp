@@ -56,6 +56,8 @@
 
 namespace starrocks {
 
+#define LOG_DEBUG LOG(INFO) << "txn_id: " << _txn_id << ", index_id: " << _index_id << ", "
+
 DEFINE_FAIL_POINT(tablets_channel_add_chunk_wait_write_block);
 DEFINE_FAIL_POINT(tablets_channel_abort_replica_failure);
 
@@ -679,6 +681,12 @@ Status LocalTabletsChannel::_open_all_writers(const PTabletWriterOpenRequest& pa
     if (index_slots == nullptr) {
         return Status::InvalidArgument(fmt::format("Unknown index_id: {}", _key.to_string()));
     }
+
+    LOG_DEBUG << "num slots: " << index_slots->size();
+    for (auto* slot : *index_slots) {
+        LOG_DEBUG << "slot: " << slot->debug_string();
+    }
+
     // init global dict info if needed
     for (auto& slot : params.schema().slot_descs()) {
         GlobalDictMap global_dict;

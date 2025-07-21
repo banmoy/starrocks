@@ -37,6 +37,8 @@
 
 namespace starrocks {
 
+#define LOG_DEBUG LOG(INFO) << "txn_id: " << _sink->txn_id() << ", tablet_id: " << _sink->tablet_id() << ", "
+
 // TODO(cbl): move to common space latter
 static const string LOAD_OP_COLUMN = "__op";
 
@@ -197,6 +199,11 @@ StatusOr<bool> MemTable::insert(const Chunk& chunk, const uint32_t* indexes, uin
 
     size_t cur_row_count = _chunk->num_rows();
     if (_slot_descs != nullptr) {
+        LOG_DEBUG << "slot_descs size: " << _slot_descs->size();
+        for (int i = 0; i < _slot_descs->size(); ++i) {
+            LOG_DEBUG << "slot: " << (*_slot_descs)[i]->debug_string();
+        }
+
         // For schema change, FE will construct a shadow column.
         // The shadow column is not exist in _vectorized_schema
         // So the chunk can only be accessed by the subscript
@@ -211,6 +218,7 @@ StatusOr<bool> MemTable::insert(const Chunk& chunk, const uint32_t* indexes, uin
             dest->append(*full_row_col.get());
         }
     } else {
+        LOG_DEBUG << "num fields: " << _vectorized_schema->num_fields();
         for (int i = 0; i < _vectorized_schema->num_fields(); i++) {
             const ColumnPtr& src = chunk.get_column_by_index(i);
             ColumnPtr& dest = _chunk->get_column_by_index(i);
