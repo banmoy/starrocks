@@ -109,14 +109,13 @@ public class MockedFrontend {
 
     static {
         MIN_FE_CONF = Maps.newHashMap();
-        MIN_FE_CONF.put("sys_log_level", "INFO");
+        MIN_FE_CONF.put("sys_log_level", "DEBUG");
         MIN_FE_CONF.put("http_port", "8030");
         MIN_FE_CONF.put("rpc_port", "9020");
         MIN_FE_CONF.put("query_port", "9030");
         MIN_FE_CONF.put("edit_log_port", "9010");
         MIN_FE_CONF.put("priority_networks", "127.0.0.1/24");
         MIN_FE_CONF.put("frontend_address", "127.0.0.1");
-        MIN_FE_CONF.put("sys_log_verbose_modules", "org");
         MIN_FE_CONF.put("cloud_native_meta_port", "6090");
 
         // UT don't need log
