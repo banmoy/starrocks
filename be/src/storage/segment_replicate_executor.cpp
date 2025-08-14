@@ -392,8 +392,8 @@ void ReplicateToken::_sync_segment(std::unique_ptr<SegmentPB> segment, bool eos)
                     failed_channels.push_back(channel.get());
                 }
             }
-            std::string failed_replica_hosts =
-                    JoinMapped(failed_channels, [](const ReplicateChannel* ch) { return ch->host(); }, ",");
+            std::string failed_replica_hosts = JoinMapped(
+                    failed_channels, [](const ReplicateChannel* ch) { return ch->host(); }, ",");
 
             auto err_msg = fmt::format(
                     "failed to sync segment to enough replicas. tablet_id={}, "
