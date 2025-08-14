@@ -1369,8 +1369,8 @@ void SecondaryReplicasWaiter::_process_replica_status_response(int unfinished_ta
                     delta_writer->cancel(Status::Cancelled(
                             fmt::format("secondary replica on host {} can't get status from primary replica on host "
                                         "{}, tablet_id: {}, num_retries: {}, rpc error: {}",
-                                        delta_writer->writer()->tablet()->tablet_id(), BackendOptions::get_localhost(),
-                                        primary_replica.host(), _replica_status_fail_num,
+                                        BackendOptions::get_localhost(), primary_replica.host(),
+                                        delta_writer->writer()->tablet()->tablet_id(), _replica_status_fail_num,
                                         _replica_status_closure->cntl.ErrorText())));
                     delta_writer->abort(true);
                 }
