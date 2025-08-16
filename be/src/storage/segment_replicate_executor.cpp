@@ -29,6 +29,7 @@
 #include "storage/delta_writer.h"
 #include "util/brpc_stub_cache.h"
 #include "util/raw_container.h"
+#include "service/backend_options.h"
 
 namespace starrocks {
 
