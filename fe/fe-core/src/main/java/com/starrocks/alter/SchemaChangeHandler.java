@@ -136,6 +136,9 @@ import com.starrocks.warehouse.cngroup.ComputeResource;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import javax.annotation.Nullable;
+import javax.validation.constraints.NotNull;
+
 import java.util.AbstractMap.SimpleEntry;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -150,8 +153,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.stream.Collectors;
-import javax.annotation.Nullable;
-import javax.validation.constraints.NotNull;
 
 public class SchemaChangeHandler extends AlterHandler {
 
@@ -1688,7 +1689,8 @@ public class SchemaChangeHandler extends AlterHandler {
         for (int i = 0; i < originShortKeyColumns.size(); i++) {
             Column originColumn = originShortKeyColumns.get(i);
             Column newColumn = newShortKeyColumns.get(i);
-            if (!originColumn.equals(newColumn)) {
+            if (!originColumn.getName().equalsIgnoreCase(newColumn.getName())
+                    || !originColumn.getType().equals(newColumn.getType())) {
                 return true;
             }
         }
