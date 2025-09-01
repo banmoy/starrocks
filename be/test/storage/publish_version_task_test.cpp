@@ -36,6 +36,7 @@
 #include "storage/chunk_helper.h"
 #include "storage/delta_writer.h"
 #include "storage/options.h"
+#include "storage/replication_txn_manager.h"
 #include "storage/rowset/rowset_factory.h"
 #include "storage/rowset/rowset_writer.h"
 #include "storage/rowset/rowset_writer_context.h"
