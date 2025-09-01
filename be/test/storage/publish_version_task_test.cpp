@@ -608,7 +608,8 @@ TEST_F(PublishVersionTaskTest, test_publish_version_overwrite_failed) {
     publish_version_req.partition_version_infos.push_back(pvinfo);
     publish_version_req.__set_is_version_overwrite(true);
 
-    run_publish_version_task(token.get(), publish_version_req, finish_task_request, affected_dirs, 0);
+    // Wait for apply so the injected commit error is observed deterministically
+    run_publish_version_task(token.get(), publish_version_req, finish_task_request, affected_dirs, 5000);
 
     // Disable failpoint
     trigger_mode.set_mode(FailPointTriggerModeType::DISABLE);
