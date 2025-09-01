@@ -586,12 +586,14 @@ TEST_F(PublishVersionTaskTest, test_publish_version_overwrite_failed) {
         ASSERT_TRUE(delta_writer->commit().ok());
     }
 
-    // Enable failpoint to force rowset_commit failure in PK updates path
-    PFailPointTriggerMode trigger_mode;
-    trigger_mode.set_mode(FailPointTriggerModeType::ENABLE);
-    auto fp = starrocks::failpoint::FailPointRegistry::GetInstance()->get(
-            "tablet_apply_normal_rowset_commit_internal_error");
-    fp->setMode(trigger_mode);
+    // Put tablet updates into error state so rowset_commit returns error
+    {
+        auto* tablet_manager = StorageEngine::instance()->tablet_manager();
+        auto tablet = tablet_manager->get_tablet(pk_tablet_id);
+        ASSERT_TRUE(tablet != nullptr);
+        ASSERT_TRUE(tablet->updates() != nullptr);
+        tablet->updates()->set_error("inject overwrite failure for testing");
+    }
 
     auto token = ExecEnv::GetInstance()
                          ->agent_server()
@@ -608,12 +610,8 @@ TEST_F(PublishVersionTaskTest, test_publish_version_overwrite_failed) {
     publish_version_req.partition_version_infos.push_back(pvinfo);
     publish_version_req.__set_is_version_overwrite(true);
 
-    // Wait for apply so the injected commit error is observed deterministically
-    run_publish_version_task(token.get(), publish_version_req, finish_task_request, affected_dirs, 5000);
-
-    // Disable failpoint
-    trigger_mode.set_mode(FailPointTriggerModeType::DISABLE);
-    fp->setMode(trigger_mode);
+    // No wait needed; rowset_commit will fail immediately due to error state
+    run_publish_version_task(token.get(), publish_version_req, finish_task_request, affected_dirs, 0);
 
     // Expect overwrite failure reported for the PK tablet
     ASSERT_EQ(1, finish_task_request.error_tablet_ids.size());
