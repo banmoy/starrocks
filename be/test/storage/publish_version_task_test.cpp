@@ -576,7 +576,8 @@ TEST_F(PublishVersionTaskTest, test_publish_version_overwrite_failed) {
             indexes.push_back(i);
             auto& cols = chunk->columns();
             cols[0]->append_datum(Datum(static_cast<int32_t>(i)));
-            Slice s("owf" + std::to_string(i));
+            std::string s_str = std::string("owf") + std::to_string(i);
+            Slice s(s_str);
             cols[1]->append_datum(Datum(s));
             cols[2]->append_datum(Datum(static_cast<int32_t>(i)));
         }
@@ -691,7 +692,8 @@ TEST_F(PublishVersionTaskTest, test_publish_version_tablet_dropped) {
             indexes.push_back(i);
             auto& cols = chunk->columns();
             cols[0]->append_datum(Datum(static_cast<int32_t>(i)));
-            Slice s("dropped" + std::to_string(i));
+            std::string s_str = std::string("dropped") + std::to_string(i);
+            Slice s(s_str);
             cols[1]->append_datum(Datum(s));
             cols[2]->append_datum(Datum(static_cast<int32_t>(i)));
         }
