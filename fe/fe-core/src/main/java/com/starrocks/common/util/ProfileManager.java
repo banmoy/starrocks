@@ -34,6 +34,16 @@
 
 package com.starrocks.common.util;
 
+import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.starrocks.common.Config;
+import com.starrocks.common.Pair;
+import com.starrocks.memory.MemoryTrackable;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -44,17 +54,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 import java.util.stream.Collectors;
-
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-
-import com.google.common.base.Strings;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import com.starrocks.common.Config;
-import com.starrocks.common.Pair;
-import com.starrocks.memory.MemoryTrackable;
 
 /*
  * if you want to visit the atrribute(such as queryID,defaultDb)
