@@ -1176,7 +1176,7 @@ public class StreamLoadTask extends AbstractStreamLoadTask {
             collectProfile(false);
         } else {
             LOG.debug("stream load does not collect profile, txn_id: {}, label: {}, load id: {}",
-                txnId, label, DebugUtil.printId(loadId));
+                    txnId, label, DebugUtil.printId(loadId));
         }
 
         writeLock();
