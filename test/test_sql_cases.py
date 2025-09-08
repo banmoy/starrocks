@@ -131,6 +131,16 @@ class TestSQLCases(sr_sql_lib.StarrocksSQLApiLib):
 
         res = None
         if record_mode:
+            # append CLEANUP block into recorded R content
+            try:
+                if hasattr(self.case_info, "cleanup") and len(self.case_info.cleanup) > 0:
+                    self.res_log.append("CLEANUP {")
+                    for stmt in self.case_info.cleanup:
+                        self.res_log.append(stmt)
+                    self.res_log.append("} END CLEANUP")
+            except Exception as e:
+                log.warning(f"record cleanup block error: {e}")
+
             # save case result into db
             res = self.save_r_into_db(self.case_info.file, self.case_info.name, self.res_log, self.version)
 
