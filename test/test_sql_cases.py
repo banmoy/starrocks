@@ -448,6 +448,18 @@ Start to run: %s
                 self_print(f"[LOOP] Finish!\n", color=ColorEnum.BLUE, logout=True, bold=True)
                 tools.ok_(loop_check_res, f"Loop checker fail: {''.join(sql['ori'])}!")
 
+            elif isinstance(sql, dict) and sql.get("type", "") == CLEANUP_FLAG:
+                # record mode: write cleanup block in-place to res_log to keep position
+                if record_mode:
+                    if isinstance(sql.get("ori"), list):
+                        self.res_log.append("".join(sql["ori"]))
+                    else:
+                        self.res_log.append("CLEANUP {")
+                        for stmt in sql.get("cmd", []):
+                            self.res_log.append(stmt)
+                        self.res_log.append("} END CLEANUP")
+                # do nothing during execution here; cleanup executes in tearDown
+                continue
             elif isinstance(sql, dict) and sql["type"] == sr_sql_lib.CONCURRENCY_FLAG:
                 # concurrency statement
                 self_print(f"[CONCURRENCY] Start...", color=ColorEnum.CYAN, logout=True)

@@ -566,6 +566,7 @@ class ChooseCase(object):
                     re.compile(f'{CLEANUP_FLAG}(\\s)*{{(\\s)*').fullmatch(line_content) is not None,
                     f"Cleanup struct illegal: file: {file}, line: {line_id}"
                 )
+                l_cleanup_line = line_id
                 line_id += 1
                 # read cleanup statements (no result expected)
                 tmp_cleanup_lines = []
@@ -573,7 +574,16 @@ class ChooseCase(object):
                     line_content = f_lines[line_id].strip()
                     line_id = __read_single_stat_and_result(line_content, line_id, tmp_cleanup_lines, [])
                 tools.assert_less(line_id, len(f_lines), "CLEANUP FORMAT ERROR!")
+                r_cleanup_line = line_id
+                # collect for execution in tearDown
                 tmp_cleanup_stat.extend(tmp_cleanup_lines)
+                # also keep position for recording into R at the same place
+                tmp_sql.append({
+                    "type": CLEANUP_FLAG,
+                    "cmd": tmp_cleanup_lines,
+                    "ori": f_lines[l_cleanup_line: r_cleanup_line + 1]
+                })
+                tmp_res.append(None)
                 line_id += 1
 
             else:
