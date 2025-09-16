@@ -1365,7 +1365,12 @@ void SecondaryReplicasWaiter::_send_replica_status_request(int unfinished_tablet
 #else
     std::pair<PLoadReplicaStatusRequest*, ReusableClosure<PLoadReplicaStatusResult>*> rpc_pair{&request,
                                                                                                _replica_status_closure};
-    TEST_SYNC_POINT_CALLBACK("LocalTabletsChannel::rpc::get_load_replica_status", &rpc_pair);
+    std::function<void(void*)> default_cb = [](void* arg) {
+        auto* pair = (std::pair<PLoadReplicaStatusRequest*, ReusableClosure<PLoadReplicaStatusResult>*>*)arg;
+        ReusableClosure<PLoadReplicaStatusResult>* closure = pair->second;
+        closure->Run();
+    };
+    TEST_SYNC_POINT_CALLBACK_OR_DEFAULT("LocalTabletsChannel::rpc::get_load_replica_status", &rpc_pair, &default_cb);
 #endif
     LOG(INFO) << "send request to get load replica status, txn_id: " << _txn_id << ", load_id: " << print_id(_load_id)
               << ", primary replica: [" << primary_replica.host() << ":" << primary_replica.port()

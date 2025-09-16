@@ -78,7 +78,7 @@ struct SyncPoint::Data {
         auto marked_point_iter = marked_thread_id_.find(point);
         return marked_point_iter != marked_thread_id_.end() && thread_id != marked_point_iter->second;
     }
-    void Process(const std::string_view& point, void* cb_arg);
+    void Process(const std::string_view& point, void* cb_arg, const std::function<void(void*)>* default_cb = nullptr);
 };
 } // namespace starrocks
 #endif

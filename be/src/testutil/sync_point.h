@@ -70,6 +70,7 @@ public:
 #define TEST_SYNC_POINT(x)
 #define TEST_IDX_SYNC_POINT(x, index)
 #define TEST_SYNC_POINT_CALLBACK(x, y)
+#define TEST_SYNC_POINT_CALLBACK_OR_DEFAULT(point, cb_arg, default_cb)
 #define INIT_SYNC_POINT_SINGLETONS()
 #define TEST_ERROR_POINT(x)
 #define TEST_SUCC_POINT(x)
@@ -133,16 +134,19 @@ public:
 
     // triggered by TEST_SYNC_POINT, blocking execution until all predecessors
     // are executed.
-    // And/or call registered callback function, with argument `cb_arg`
-    void Process(const std::string_view& point, void* cb_arg = nullptr);
+    // And/or call registered callback function, with argument `cb_arg`.
+    // If sync point is not enabled or no callback is registered, the non-null `default_cb` will be called.
+    void Process(const std::string_view& point, void* cb_arg = nullptr,
+                 const std::function<void(void*)>* default_cb = nullptr);
 
     // template gets length of const string at compile time,
     //  avoiding strlen() at runtime
     template <size_t kLen>
-    void Process(const char (&point)[kLen], void* cb_arg = nullptr) {
+    void Process(const char (&point)[kLen], void* cb_arg = nullptr,
+                 const std::function<void(void*)>* default_cb = nullptr) {
         static_assert(kLen > 0, "Must not be empty");
         assert(point[kLen - 1] == '\0');
-        Process(std::string_view(point, kLen - 1), cb_arg);
+        Process(std::string_view(point, kLen - 1), cb_arg, default_cb);
     }
 
     // TODO: it might be useful to provide a function that blocks until all
@@ -169,6 +173,10 @@ private:
 #define TEST_SYNC_POINT(x) starrocks::SyncPoint::GetInstance()->Process(x)
 #define TEST_IDX_SYNC_POINT(x, index) starrocks::SyncPoint::GetInstance()->Process(x + std::to_string(index))
 #define TEST_SYNC_POINT_CALLBACK(x, y) starrocks::SyncPoint::GetInstance()->Process(x, y)
+// Process sync point with default callback which is used
+// when sync point is not enabled or no callback is registered
+#define TEST_SYNC_POINT_CALLBACK_OR_DEFAULT(point, cb_arg, default_cb) \
+    starrocks::SyncPoint::GetInstance()->Process(point, cb_arg, default_cb)
 #define INIT_SYNC_POINT_SINGLETONS() (void)starrocks::SyncPoint::GetInstance();
 #define TEST_ERROR_POINT(x)                                   \
     do {                                                      \
