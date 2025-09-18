@@ -117,12 +117,8 @@ void SyncPoint::Data::ClearAllCallBacks() {
     callbacks_.clear();
 }
 
-void SyncPoint::Data::Process(const std::string_view& point, void* cb_arg,
-                              const std::function<void(void*)>* default_cb) {
+void SyncPoint::Data::Process(const std::string_view& point, void* cb_arg) {
     if (!enabled_) {
-        if (default_cb) {
-            (*default_cb)(cb_arg);
-        }
         return;
     }
 
@@ -151,11 +147,10 @@ void SyncPoint::Data::Process(const std::string_view& point, void* cb_arg,
     }
 
     auto callback_pair = callbacks_.find(point_string);
-    auto* callback = callback_pair != callbacks_.end() ? &callback_pair->second : default_cb;
-    if (callback) {
+    if (callback_pair != callbacks_.end()) {
         num_callbacks_running_++;
         mutex_.unlock();
-        (*callback)(cb_arg);
+        callback_pair->second(cb_arg);
         mutex_.lock();
         num_callbacks_running_--;
     }

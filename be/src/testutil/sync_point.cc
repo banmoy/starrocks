@@ -75,8 +75,8 @@ void SyncPoint::ClearTrace() {
     impl_->ClearTrace();
 }
 
-void SyncPoint::Process(const std::string_view& point, void* cb_arg, const std::function<void(void*)>* default_cb) {
-    impl_->Process(point, cb_arg, default_cb);
+void SyncPoint::Process(const std::string_view& point, void* cb_arg) {
+    impl_->Process(point, cb_arg);
 }
 
 } // namespace starrocks
