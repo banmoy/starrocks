@@ -109,8 +109,7 @@ public:
 
     const std::shared_ptr<const TabletSchema> tablet_schema() const override;
 
-    // NOTE: This method may update the version hint
-    StatusOr<std::shared_ptr<const TabletSchema>> get_schema();
+    StatusOr<std::shared_ptr<const TabletSchema>> get_schema() const;
 
     StatusOr<std::shared_ptr<const TabletSchema>> get_schema_by_id(int64_t schema_id);
 

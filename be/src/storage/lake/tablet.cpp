@@ -97,20 +97,23 @@ StatusOr<std::unique_ptr<TabletWriter>> Tablet::new_writer(WriterType type, int6
 }
 
 const std::shared_ptr<const TabletSchema> Tablet::tablet_schema() const {
-    auto tablet_schema_or = _mgr->get_tablet_schema(_id, nullptr);
-    if (!tablet_schema_or.ok()) {
+    auto ret = get_schema();
+    if (!ret.ok()) {
         return nullptr;
     }
-    return tablet_schema_or.value();
+    return ret.value();
 }
 
-StatusOr<std::shared_ptr<const TabletSchema>> Tablet::get_schema() {
+StatusOr<std::shared_ptr<const TabletSchema>> Tablet::get_schema() const {
     if (_tablet_schema) {
         return _tablet_schema;
     } else if (_tablet_metadata) {
         return std::make_shared<TabletSchema>(_tablet_metadata->schema());
+    } else if (_version_hint != 0) {
+        ASSIGN_OR_RETURN(auto versioned, _mgr->get_tablet(_id, _version_hint));
+        return versioned.get_schema();
     } else {
-        return _mgr->get_tablet_schema(_id, &_version_hint);
+        return Status::InternalError("Can't decide tablet schema because of lacking metadata or version hint");
     }
 }
 

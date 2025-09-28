@@ -226,8 +226,6 @@ public:
     StatusOr<SegmentPtr> load_segment(const FileInfo& segment_info, int segment_id, const LakeIOOptions& lake_io_opts,
                                       bool fill_metadata_cache, TabletSchemaPtr tablet_schema);
 
-    StatusOr<TabletSchemaPtr> get_tablet_schema(int64_t tablet_id, int64_t* version_hint = nullptr);
-
     Status create_schema_file(int64_t tablet_id, const TabletSchemaPB& schema_pb);
     StatusOr<TabletAndRowsets> capture_tablet_and_rowsets(int64_t tablet_id, int64_t from_version, int64_t to_version);
 

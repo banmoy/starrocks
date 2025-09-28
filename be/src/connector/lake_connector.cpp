@@ -994,20 +994,16 @@ StatusOr<bool> LakeDataSourceProvider::_could_tablet_internal_parallel(
 StatusOr<bool> LakeDataSourceProvider::_could_split_tablet_physically(
         const std::vector<TScanRangeParams>& scan_ranges) const {
     // Keys type needn't merge or aggregate.
+    int64_t tablet_id = scan_ranges[0].scan_range.internal_scan_range.tablet_id;
     int64_t version = std::stoll(scan_ranges[0].scan_range.internal_scan_range.version);
-    KeysType keys_type;
+    lake::TabletManager* tablet_manager;
 #ifdef BE_TEST
-    ASSIGN_OR_RETURN(
-            auto first_tablet_schema,
-            _tablet_manager->get_tablet_schema(scan_ranges[0].scan_range.internal_scan_range.tablet_id, &version));
-    keys_type = first_tablet_schema->keys_type();
+    tablet_manager = _tablet_manager;
 #else
-    ASSIGN_OR_RETURN(auto first_tablet_schema,
-                     ExecEnv::GetInstance()->lake_tablet_manager()->get_tablet_schema(
-                             scan_ranges[0].scan_range.internal_scan_range.tablet_id, &version));
-    keys_type = first_tablet_schema->keys_type();
+    tablet_manager = ExecEnv::GetInstance()->lake_tablet_manager();
 #endif
-
+    ASSIGN_OR_RETURN(auto tablet, tablet_manager->get_tablet(tablet_id, version));
+    KeysType keys_type = tablet.get_schema()->keys_type();
     const auto skip_aggr = _t_lake_scan_node.is_preaggregation;
     bool is_keys_type_matched = keys_type == PRIMARY_KEYS || keys_type == DUP_KEYS ||
                                 ((keys_type == UNIQUE_KEYS || keys_type == AGG_KEYS) && skip_aggr);
