@@ -3927,6 +3927,9 @@ public class Config extends ConfigBase {
             "avoid stack over flow")
     public static int compound_predicate_flatten_threshold = 512;
 
-    @ConfField(mutable = true, comment = "Enable query schema")
-    public static boolean enable_query_schema = false;
+    @ConfField(mutable = true, comment = "Enable olap query schema")
+    public static boolean enable_olap_query_schema = true;
+
+    @ConfField(mutable = true, comment = "Enable lake query schema")
+    public static boolean enable_lake_query_schema = false;
 }

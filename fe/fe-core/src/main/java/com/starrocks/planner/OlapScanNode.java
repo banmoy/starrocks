@@ -1035,7 +1035,7 @@ public class OlapScanNode extends ScanNode {
         if (selectedIndexId != -1) {
             MaterializedIndexMeta indexMeta = olapTable.getIndexMetaByIndexId(selectedIndexId);
             if (indexMeta != null) {
-                if (!olapTable.isCloudNativeTableOrMaterializedView()) {
+                if (!olapTable.isCloudNativeTableOrMaterializedView() && Config.enable_olap_query_schema) {
                     schemaId = indexMeta.getSchemaId();
                     for (Column col : olapTable.getSchemaByIndexId(selectedIndexId)) {
                         TColumn tColumn = col.toThrift();
@@ -1109,7 +1109,7 @@ public class OlapScanNode extends ScanNode {
 
             msg.lake_scan_node.setOutput_asc_hint(sortKeyAscHint);
 
-            if (Config.enable_query_schema) {
+            if (Config.enable_lake_query_schema) {
                 msg.lake_scan_node.setQuery_schema(buildQuerySchema(olapTable.getIndexMetaByIndexId(selectedIndexId)));
             }
         } else { // If you find yourself changing this code block, see also the above code block
