@@ -652,6 +652,21 @@ struct TJDBCScanNode {
   5: optional i64 limit
 }
 
+struct TQuerySchema {
+    1: required i16 short_key_column_count
+    2: required Types.TSchemaHash schema_hash
+    3: required Types.TKeysType keys_type
+    4: required Types.TStorageType storage_type
+    5: required list<Descriptors.TColumn> columns
+    6: optional double bloom_filter_fpp
+    7: optional list<Descriptors.TOlapTableIndex> indexes
+    8: optional bool is_in_memory // Deprecated
+    9: optional i64 id;
+    10: optional list<i32> sort_key_idxes
+    11: optional list<i32> sort_key_unique_ids
+    12: optional i32 schema_version;
+}
+
 // If you find yourself changing this struct, see also TOlapScanNode
 struct TLakeScanNode {
   1: required Types.TTupleId tuple_id
@@ -682,6 +697,8 @@ struct TLakeScanNode {
   40: optional i64 back_pressure_throttle_time
   41: optional i64 back_pressure_throttle_time_upper_bound
   42: optional i64 back_pressure_num_rows
+
+  43: optional TQuerySchema query_schema
 }
 
 struct TEqJoinCondition {

@@ -50,6 +50,7 @@ import com.starrocks.catalog.ExpressionRangePartitionInfo;
 import com.starrocks.catalog.ExpressionRangePartitionInfoV2;
 import com.starrocks.catalog.FunctionSet;
 import com.starrocks.catalog.HashDistributionInfo;
+import com.starrocks.catalog.Index;
 import com.starrocks.catalog.KeysType;
 import com.starrocks.catalog.LocalTablet;
 import com.starrocks.catalog.MaterializedIndex;
@@ -99,9 +100,11 @@ import com.starrocks.thrift.TNetworkAddress;
 import com.starrocks.thrift.TNormalOlapScanNode;
 import com.starrocks.thrift.TNormalPlanNode;
 import com.starrocks.thrift.TOlapScanNode;
+import com.starrocks.thrift.TOlapTableIndex;
 import com.starrocks.thrift.TPlanNode;
 import com.starrocks.thrift.TPlanNodeType;
 import com.starrocks.thrift.TPrimitiveType;
+import com.starrocks.thrift.TQuerySchema;
 import com.starrocks.thrift.TScanRange;
 import com.starrocks.thrift.TScanRangeLocation;
 import com.starrocks.thrift.TScanRangeLocations;
@@ -983,6 +986,44 @@ public class OlapScanNode extends ScanNode {
         }
     }
 
+    private TQuerySchema buildQuerySchema(MaterializedIndexMeta indexMeta) {
+        TQuerySchema querySchema = new TQuerySchema();
+
+        querySchema.setShort_key_column_count(indexMeta.getShortKeyColumnCount());
+        querySchema.setKeys_type(indexMeta.getKeysType().toThrift());
+        querySchema.setStorage_type(indexMeta.getStorageType());
+        querySchema.setId(indexMeta.getSchemaId());
+        querySchema.setSchema_version(indexMeta.getSchemaVersion());
+        querySchema.setSchema_hash(indexMeta.getSchemaHash());
+        querySchema.setIs_in_memory(false/*unused now*/);
+
+        List<TColumn> tColumns = new ArrayList<TColumn>();
+        for (Column column : indexMeta.getSchema()) {
+            TColumn tColumn = column.toThrift();
+            // is bloom filter column
+            if (olapTable.getBfColumnIds() != null && olapTable.getBfColumnIds().contains(column.getColumnId())) {
+                tColumn.setIs_bloom_filter_column(true);
+            }
+            tColumns.add(tColumn);
+        }
+        querySchema.setColumns(tColumns);
+        querySchema.setSort_key_idxes(indexMeta.getSortKeyIdxes());
+        querySchema.setSort_key_unique_ids(indexMeta.getSortKeyUniqueIds());
+
+        if (CollectionUtils.isNotEmpty(olapTable.getIndexes())) {
+            List<TOlapTableIndex> tIndexes = new ArrayList<>();
+            for (Index index : olapTable.getIndexes()) {
+                tIndexes.add(index.toThrift());
+            }
+            querySchema.setIndexes(tIndexes);
+        }
+
+        if (olapTable.getBfColumnIds() != null) {
+            querySchema.setBloom_filter_fpp(olapTable.getBfFpp());
+        }
+        return querySchema;
+    }
+
     @Override
     protected void toThrift(TPlanNode msg) {
         List<String> keyColumnNames = new ArrayList<String>();
@@ -994,12 +1035,14 @@ public class OlapScanNode extends ScanNode {
         if (selectedIndexId != -1) {
             MaterializedIndexMeta indexMeta = olapTable.getIndexMetaByIndexId(selectedIndexId);
             if (indexMeta != null) {
-                schemaId = indexMeta.getSchemaId();
-                for (Column col : olapTable.getSchemaByIndexId(selectedIndexId)) {
-                    TColumn tColumn = col.toThrift();
-                    tColumn.setColumn_name(col.getColumnId().getId());
-                    col.setIndexFlag(tColumn, olapTable.getIndexes(), bfColumns);
-                    columnsDesc.add(tColumn);
+                if (!olapTable.isCloudNativeTableOrMaterializedView()) {
+                    schemaId = indexMeta.getSchemaId();
+                    for (Column col : olapTable.getSchemaByIndexId(selectedIndexId)) {
+                        TColumn tColumn = col.toThrift();
+                        tColumn.setColumn_name(col.getColumnId().getId());
+                        col.setIndexFlag(tColumn, olapTable.getIndexes(), bfColumns);
+                        columnsDesc.add(tColumn);
+                    }
                 }
                 // process schema has order by columns
                 if (indexMeta.getSortKeyIdxes() != null) {
@@ -1065,6 +1108,10 @@ public class OlapScanNode extends ScanNode {
             }
 
             msg.lake_scan_node.setOutput_asc_hint(sortKeyAscHint);
+
+            if (Config.enable_query_schema) {
+                msg.lake_scan_node.setQuery_schema(buildQuerySchema(olapTable.getIndexMetaByIndexId(selectedIndexId)));
+            }
         } else { // If you find yourself changing this code block, see also the above code block
             msg.node_type = TPlanNodeType.OLAP_SCAN_NODE;
             msg.olap_scan_node =
