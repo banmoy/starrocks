@@ -642,6 +642,8 @@ struct TOlapScanNode {
   52: optional i64 back_pressure_throttle_time
   53: optional i64 back_pressure_throttle_time_upper_bound
   54: optional i64 back_pressure_num_rows
+
+  55: optional binary compressed_query_schema;
 }
 
 struct TJDBCScanNode {

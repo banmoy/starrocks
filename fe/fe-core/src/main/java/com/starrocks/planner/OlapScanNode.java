@@ -34,6 +34,26 @@
 
 package com.starrocks.planner;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.spark.util.SizeEstimator;
+import org.apache.thrift.TException;
+import org.apache.thrift.TSerializer;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
 import com.google.common.base.MoreObjects;
@@ -73,11 +93,13 @@ import com.starrocks.common.FeConstants;
 import com.starrocks.common.Pair;
 import com.starrocks.common.StarRocksException;
 import com.starrocks.common.VectorSearchOptions;
+import com.starrocks.common.util.Util;
 import com.starrocks.connector.BucketProperty;
 import com.starrocks.lake.LakeTablet;
 import com.starrocks.persist.ColumnIdExpr;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.rowstore.RowStoreUtils;
+import com.starrocks.rpc.ConfigurableSerDesFactory;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
 import com.starrocks.server.WarehouseManager;
@@ -111,22 +133,6 @@ import com.starrocks.thrift.TScanRangeLocations;
 import com.starrocks.thrift.TTableSampleOptions;
 import com.starrocks.warehouse.Warehouse;
 import com.starrocks.warehouse.cngroup.ComputeResource;
-import org.apache.commons.collections4.CollectionUtils;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.apache.spark.util.SizeEstimator;
-
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.function.Predicate;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 public class OlapScanNode extends ScanNode {
     private static final Logger LOG = LogManager.getLogger(OlapScanNode.class);
@@ -1024,6 +1030,17 @@ public class OlapScanNode extends ScanNode {
         return querySchema;
     }
 
+    private byte[] compressQuerySchema(TQuerySchema querySchema) {
+        try {
+            TSerializer serializer = ConfigurableSerDesFactory.getTSerializer();
+            byte[] bytes = serializer.serialize(querySchema);
+            byte[] compressedBytes = Util.compress(bytes);
+            return compressedBytes;
+        } catch (TException | IOException e) {
+            throw new RuntimeException("Failed to compress query schema", e);
+        }
+    }
+
     @Override
     protected void toThrift(TPlanNode msg) {
         List<String> keyColumnNames = new ArrayList<String>();
@@ -1117,6 +1134,11 @@ public class OlapScanNode extends ScanNode {
             msg.olap_scan_node =
                     new TOlapScanNode(desc.getId().asInt(), keyColumnNames, keyColumnTypes, isPreAggregation);
             msg.olap_scan_node.setColumns_desc(columnsDesc);
+            if (Config.enable_olap_query_schema_compression) {
+                TQuerySchema querySchema = buildQuerySchema(olapTable.getIndexMetaByIndexId(selectedIndexId));
+                byte[] compressedBytes = compressQuerySchema(querySchema);
+                msg.olap_scan_node.setCompressed_query_schema(compressedBytes);
+            }
             msg.olap_scan_node.setSchema_id(schemaId);
             msg.olap_scan_node.setSort_key_column_names(keyColumnNames);
             msg.olap_scan_node.setRollup_name(olapTable.getIndexNameById(selectedIndexId));

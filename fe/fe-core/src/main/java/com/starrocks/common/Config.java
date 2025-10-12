@@ -3930,6 +3930,9 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, comment = "Enable olap query schema")
     public static boolean enable_olap_query_schema = true;
 
+    @ConfField(mutable = true, comment = "Enable olap query schema compression")
+    public static boolean enable_olap_query_schema_compression = false;
+
     @ConfField(mutable = true, comment = "Enable lake query schema")
     public static boolean enable_lake_query_schema = false;
 }
