@@ -825,6 +825,10 @@ public class LakeTableSchemaChangeJob extends LakeTableSchemaChangeJobBase {
                     }
                 }
 
+                if (Config.inject_publish_failure) {
+                    throw new RuntimeException("Inject publish failure");
+                }
+
                 // For indexes whose schema have not changed, we still need to upgrade the version
                 List<MaterializedIndex> originMaterializedIndex;
                 List<Tablet> allOtherPartitionTablets = new ArrayList<>();
