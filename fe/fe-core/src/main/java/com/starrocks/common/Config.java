@@ -3931,5 +3931,8 @@ public class Config extends ConfigBase {
     public static int compound_predicate_flatten_threshold = 512;
 
     @ConfField(mutable = true)
+    public static boolean inject_running_wait = false;
+
+    @ConfField(mutable = true)
     public static boolean inject_publish_failure = false;
 }

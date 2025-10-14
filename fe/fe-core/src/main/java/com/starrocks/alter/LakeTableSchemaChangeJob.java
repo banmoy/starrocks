@@ -701,6 +701,14 @@ public class LakeTableSchemaChangeJob extends LakeTableSchemaChangeJobBase {
             }
         }
 
+        while (Config.inject_running_wait) {
+            try {
+                Thread.sleep(100);
+            } catch (Exception e) {
+                // ignore
+            }
+        }
+
         try (WriteLockedDatabase db = getWriteLockedDatabase(dbId)) {
             OlapTable table = getTableOrThrow(db, tableId);
             commitVersionMap = new HashMap<>();
