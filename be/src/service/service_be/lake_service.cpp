@@ -474,6 +474,12 @@ void LakeServiceImpl::aggregate_publish_version(::google::protobuf::RpcControlle
 
     // wait for publish task finish
     ctx.wait();
+
+    if (config::inject_publish_failure) {
+        Status inject_status = Status::InternalError("inject publish failure");
+        inject_status.to_protobuf(response->mutable_status());
+        return;
+    }
     // write aggregate metadata
     ctx.put_aggregate_metadata(_env);
 
