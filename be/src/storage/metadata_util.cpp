@@ -278,8 +278,10 @@ Status convert_t_schema_to_pb_schema(const TTabletSchema& tablet_schema, uint32_
         uint32_t col_unique_id;
         if (tcolumn.col_unique_id >= 0) {
             col_unique_id = tcolumn.col_unique_id;
+            LOG(INFO) << "column name: " << tcolumn.column_name << " col_unique_id: " << col_unique_id;
         } else {
             col_unique_id = col_ordinal_to_unique_id.at(col_ordinal);
+            LOG(INFO) << "column name: " << tcolumn.column_name << " col_unique_id: " << col_unique_id;
         }
         max_col_unique_id = col_unique_id > max_col_unique_id ? col_unique_id : max_col_unique_id;
         col_ordinal++;
