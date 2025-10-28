@@ -173,6 +173,9 @@ private:
         std::shared_ptr<WriteContext> _context;
     };
 
+    DeltaWriterOptions _build_delta_writer_options(const PTabletWriterOpenRequest& params,
+        const PTabletWithPartition& tablet, int32_t schema_hash);
+
     Status _open_all_writers(const PTabletWriterOpenRequest& params);
 
     StatusOr<std::shared_ptr<WriteContext>> _create_write_context(Chunk* chunk,
