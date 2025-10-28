@@ -75,6 +75,7 @@ void MemTable::_init_aggregator_if_needed() {
         // which is not suitable for obtaining Chunk from ColumnPool,
         // otherwise it will take up a lot of memory and may not be released.
         _aggregator = std::make_unique<ChunkAggregator>(_vectorized_schema, 0, INT_MAX, 0);
+        LOG(INFO) << "init aggregator, tablet_id: " << _tablet_id << ", schema: " << _vectorized_schema->to_string();
     }
 }
 
@@ -314,6 +315,7 @@ Status MemTable::finalize() {
                     RETURN_IF_ERROR(_sort(true, true));
                 }
             }
+            LOG(INFO) << "aggregator final, tablet_id: " << _tablet_id << ", merged_rows: " << _aggregator->merged_rows();
             _aggregator.reset();
             _aggregator_memory_usage = 0;
             _aggregator_bytes_usage = 0;
@@ -541,6 +543,7 @@ Status MemTable::_sort_column_inc(bool by_sort_key) {
             if (_vectorized_schema->field(i)->name() == _merge_condition) {
                 columns.push_back(_chunk->get_column_by_index(i));
                 sort_descs.descs.emplace_back(1, -1);
+                LOG(INFO) << "add merge condition, tablet_id: " << _tablet_id << ", column: " << _merge_condition << ", index: " << i;
                 break;
             }
         }
