@@ -93,22 +93,15 @@ LocalTabletsChannel::LocalTabletsChannel(LoadChannel* load_channel, const Tablet
 }
 
 DeltaWriterOptions LocalTabletsChannel::_build_delta_writer_options(const PTabletWriterOpenRequest& params,
-                                                                   const PTabletWithPartition& tablet,
-                                                                   int32_t schema_hash) {
+                                                                    const PTabletWithPartition& tablet,
+                                                                    int32_t schema_hash,
+                                                                    const std::vector<SlotDescriptor*>* index_slots) {
     DeltaWriterOptions options;
     options.tablet_id = tablet.tablet_id();
     options.schema_hash = schema_hash;
     options.txn_id = _txn_id;
     options.partition_id = tablet.partition_id();
     options.load_id = params.id();
-    // find slots for current index
-    std::vector<SlotDescriptor*>* index_slots = nullptr;
-    for (auto& index : _schema->indexes()) {
-        if (index->index_id == _index_id) {
-            index_slots = &index->slots;
-            break;
-        }
-    }
     options.slots = index_slots;
     options.global_dicts = &_global_dicts;
     options.parent_span = _load_channel->get_span();
@@ -782,7 +775,7 @@ Status LocalTabletsChannel::_open_all_writers(const PTabletWriterOpenRequest& pa
     tablet_ids.reserve(params.tablets_size());
     std::vector<int64_t> failed_tablet_ids;
     for (const PTabletWithPartition& tablet : params.tablets()) {
-        DeltaWriterOptions options = _build_delta_writer_options(params, tablet, schema_hash);
+        DeltaWriterOptions options = _build_delta_writer_options(params, tablet, schema_hash, index_slots);
 
         auto res = AsyncDeltaWriter::open(options, _mem_tracker);
         if (res.status().ok()) {
@@ -954,7 +947,7 @@ Status LocalTabletsChannel::incremental_open(const PTabletWriterOpenRequest& par
         }
         incremental_tablet_num++;
 
-        DeltaWriterOptions options = _build_delta_writer_options(params, tablet, schema_hash);
+        DeltaWriterOptions options = _build_delta_writer_options(params, tablet, schema_hash, index_slots);
 
         auto res = AsyncDeltaWriter::open(options, _mem_tracker);
         RETURN_IF_ERROR(res.status());
