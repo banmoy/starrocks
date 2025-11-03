@@ -1816,6 +1816,15 @@ ADMIN SET FRONTEND CONFIG ("key" = "value");
 - 説明: クラウドネイティブテーブルに対してファイルバンドリング最適化を有効にするかどうか。この機能を有効に設定（`true` に設定）すると、システムはロード、コンパクション、またはパブリッシュ操作によって生成されたデータファイルを自動的にバンドルし、外部ストレージシステムへの高頻度アクセスによる API コストを削減します。この動作は、CREATE TABLE プロパティ `file_bundling` を使用してテーブルレベルで制御することもできます。詳細な手順については、[CREATE TABLE](../../sql-reference/sql-statements/table_bucket_part_index/CREATE_TABLE.md) を参照してください。
 - 導入バージョン: v4.0
 
+##### txn_latency_metric_report_groups
+
+- デフォルト: ""
+- タイプ: String
+- 単位: -
+- 変更可能: はい
+- 説明: 報告するトランザクションレイテンシメトリックグループのカンマ区切りリスト。ロードタイプはモニタリングのために論理グループに分類されます。グループが有効になると、その名前がトランザクションメトリックに「group」ラベルとして追加されます。一般的なグループには、「stream_load」、「routine_load」、「broker_load」、「insert」、「compaction」（共有データクラスタ用）などがあります。例：「stream_load,routine_load」。
+- 導入バージョン: -
+
 ### ストレージ
 
 ##### default_replication_num

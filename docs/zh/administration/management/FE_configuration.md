@@ -2552,6 +2552,15 @@ ADMIN SET FRONTEND CONFIG ("key" = "value");
 - 描述：是否为云原生表启用 File Bundling 优化功能。当启用该功能（设置为 `true`）时，系统会自动将导入、Compaction 或 Publish 操作生成的数据文件进行打包，从而减少因频繁访问外部存储系统而产生的 API 成本。您还可以通过 CREATE TABLE 语句的 `file_bundling` 属性在表级别控制此行为。有关详细说明，请参阅 [CREATE TABLE](../../sql-reference/sql-statements/table_bucket_part_index/CREATE_TABLE.md)。
 - 引入版本：v4.0
 
+##### txn_latency_metric_report_groups
+
+- 默认值: ""
+- 类型: String
+- 单位: -
+- 是否可变: 是
+- 描述:  一个逗号分隔的列表，包含要汇报的事务延迟监控指标 `group`。导入类型被归类为用于监控的 `group`，被启用的 `group` 其名称会作为 'group' 标签添加到监控指标中。常见的 `group` 包括 'stream_load'、'routine_load'、'broker_load'、'insert'，以及 'compaction' (适用于存算分离集群)。例如："stream_load,routine_load"。
+- 引入版本: -
+
 ### 存储
 
 ##### default_replication_num
