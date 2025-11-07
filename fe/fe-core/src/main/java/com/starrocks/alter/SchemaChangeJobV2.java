@@ -79,6 +79,7 @@ import com.starrocks.planner.SlotDescriptor;
 import com.starrocks.planner.TupleDescriptor;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
+import com.starrocks.server.RunMode;
 import com.starrocks.sql.analyzer.AnalyzeState;
 import com.starrocks.sql.analyzer.ExpressionAnalyzer;
 import com.starrocks.sql.analyzer.Field;
@@ -1208,6 +1209,9 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
             info.add(errMsg);
             info.add(progress);
             info.add(timeoutMs / 1000);
+            if (RunMode.getCurrentRunMode() == RunMode.SHARED_DATA) {
+                info.add("N/A");
+            }
             infos.add(info);
         }
     }
