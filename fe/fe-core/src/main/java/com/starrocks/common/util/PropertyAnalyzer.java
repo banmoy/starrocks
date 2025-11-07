@@ -1595,19 +1595,13 @@ public class PropertyAnalyzer {
         return TCompactionStrategy.DEFAULT;
     }
 
-    public static Boolean analyzeEnableDynamicTablet(Map<String, String> properties, boolean removeProperties)
-            throws AnalysisException {
+    public static Boolean analyzeEnableDynamicTablet(Map<String, String> properties, boolean removeProperties) {
         Boolean enableDynamicTablet = Config.enable_dynamic_tablet;
         if (properties != null) {
             String value = removeProperties ? properties.remove(PROPERTIES_ENABLE_DYNAMIC_TABLET)
                     : properties.get(PROPERTIES_ENABLE_DYNAMIC_TABLET);
             if (value != null) {
-                try {
-                    enableDynamicTablet = parseBoolean(value);
-                } catch (Exception e) {
-                    ErrorReport.reportAnalysisException(ErrorCode.ERR_INVALID_VALUE,
-                            PROPERTIES_ENABLE_DYNAMIC_TABLET, value, "`true` or `false`");
-                }
+                enableDynamicTablet = parseBooleanStrictly(PROPERTIES_ENABLE_DYNAMIC_TABLET, value);
             }
         }
         return enableDynamicTablet;
@@ -1958,6 +1952,15 @@ public class PropertyAnalyzer {
         }
     }
 
+    public static boolean analyzeSharedDataFastSchemaEvolutionV2(Map<String, String> properties) throws SemanticException {
+        boolean sharedDataFastSchemaEvolutionV2 = true;
+        String value = properties.get(PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2);
+        if (value != null) {
+            sharedDataFastSchemaEvolutionV2 = parseBooleanStrictly(PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2, value);
+        }
+        return sharedDataFastSchemaEvolutionV2;
+    }
+
     @NotNull
     private static String getExcludeString(List<TableName> tables) {
         StringBuilder tableSb = new StringBuilder();
@@ -2034,13 +2037,17 @@ public class PropertyAnalyzer {
         return sb.toString();
     }
 
-    public static boolean parseBoolean(String value) {
-        if (value.equalsIgnoreCase("true")) {
-            return true;
+    public static boolean parseBooleanStrictly(String property, String value) throws SemanticException {
+        boolean ret = false;
+        if ("true".equalsIgnoreCase(value)) {
+            ret = true;
+        } else if ("false".equalsIgnoreCase(value)) {
+            ret = false;
+        } else {
+            ErrorReport.reportSemanticException(ErrorCode.ERR_INVALID_VALUE,
+                    String.format("Property %s has invalid value: %s, only supports true/false",
+                            property, value));
         }
-        if (value.equalsIgnoreCase("false")) {
-            return false;
-        }
-        throw new IllegalArgumentException("Illegal boolean value: " + value);
+        return ret;
     }
 }

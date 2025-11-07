@@ -3800,6 +3800,15 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
                         ImmutableMap.of(key, propertiesToPersist.get(key)));
                 GlobalStateMgr.getCurrentState().getEditLog().logAlterTableProperties(info);
             }
+            if (propertiesToPersist.containsKey(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2)) {
+                String value = propertiesToPersist.get(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2);
+                tableProperty.getProperties().put(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2, value);
+                tableProperty.buildSharedDataFastSchemaEvolutionV2();
+                ModifyTablePropertyOperationLog info =
+                        new ModifyTablePropertyOperationLog(db.getId(), table.getId(),
+                                ImmutableMap.of(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2, value));
+                GlobalStateMgr.getCurrentState().getEditLog().logAlterTableProperties(info);
+            }
         }
     }
 
@@ -3881,12 +3890,12 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
             results.put(PropertyAnalyzer.PROPERTIES_LABELS_LOCATION, locations);
         }
         if (properties.containsKey(PropertyAnalyzer.PROPERTIES_ENABLE_DYNAMIC_TABLET)) {
-            try {
-                Boolean enableDynamicTablet = PropertyAnalyzer.analyzeEnableDynamicTablet(properties, true);
-                results.put(PropertyAnalyzer.PROPERTIES_ENABLE_DYNAMIC_TABLET, enableDynamicTablet);
-            } catch (AnalysisException e) {
-                throw new RuntimeException(e.getMessage());
-            }
+            Boolean enableDynamicTablet = PropertyAnalyzer.analyzeEnableDynamicTablet(properties, true);
+            results.put(PropertyAnalyzer.PROPERTIES_ENABLE_DYNAMIC_TABLET, enableDynamicTablet);
+        }
+        if (properties.containsKey(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2)) {
+            boolean value = PropertyAnalyzer.analyzeSharedDataFastSchemaEvolutionV2(properties);
+            results.put(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2, value);
         }
         if (!properties.isEmpty()) {
             throw new DdlException("Modify failed because unknown properties: " + properties);
