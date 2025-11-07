@@ -2887,6 +2887,23 @@ public class OlapTable extends Table {
         tableProperty.buildUseFastSchemaEvolution();
     }
 
+    public void setSharedDataFastSchemaEvolutionV2(boolean enabled) {
+        if (tableProperty == null) {
+            tableProperty = new TableProperty(new HashMap<>());
+        }
+        tableProperty.modifyTableProperties(
+                PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2,
+                Boolean.valueOf(enabled).toString());
+        tableProperty.buildSharedDataFastSchemaEvolutionV2();
+    }
+
+    public boolean isSharedDataFastSchemaEvolutionV2() {
+        if (tableProperty == null) {
+            return false;
+        }
+        return tableProperty.isSharedDataFastSchemaEvolutionV2();
+    }
+
     public Boolean getEnableDynamicTablet() {
         if (tableProperty != null) {
             return tableProperty.getEnableDynamicTablet();

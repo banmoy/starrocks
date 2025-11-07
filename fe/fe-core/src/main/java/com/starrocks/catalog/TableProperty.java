@@ -333,6 +333,9 @@ public class TableProperty implements Writable, GsonPostProcessable {
 
     private Boolean enableDynamicTablet = null;
 
+    // shared-data fast schema evolution v2 (LakeTable only); default false for upgraded tables
+    private boolean sharedDataFastSchemaEvolutionV2 = false;
+
     public TableProperty() {
         this(Maps.newLinkedHashMap());
     }
@@ -422,6 +425,7 @@ public class TableProperty implements Writable, GsonPostProcessable {
                 buildLocation();
                 buildStorageCoolDownTTL();
                 buildEnableDynamicTablet();
+                buildSharedDataFastSchemaEvolutionV2();
                 break;
             case OperationType.OP_MODIFY_TABLE_CONSTRAINT_PROPERTY:
                 buildConstraint();
@@ -861,6 +865,14 @@ public class TableProperty implements Writable, GsonPostProcessable {
         return this;
     }
 
+    public TableProperty buildSharedDataFastSchemaEvolutionV2() {
+        if (properties.containsKey(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2)) {
+            sharedDataFastSchemaEvolutionV2 = Boolean.parseBoolean(
+                    properties.get(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2));
+        }
+        return this;
+    }
+
     public TableProperty buildStorageCoolDownTTL() {
         if (properties.containsKey(PropertyAnalyzer.PROPERTIES_STORAGE_COOLDOWN_TTL)) {
             String storageCoolDownTTL = properties.get(PropertyAnalyzer.PROPERTIES_STORAGE_COOLDOWN_TTL);
@@ -1249,6 +1261,10 @@ public class TableProperty implements Writable, GsonPostProcessable {
         return enableDynamicTablet;
     }
 
+    public boolean isSharedDataFastSchemaEvolutionV2() {
+        return sharedDataFastSchemaEvolutionV2;
+    }
+
     @Override
     public void gsonPostProcess() throws IOException {
         try {
@@ -1276,6 +1292,7 @@ public class TableProperty implements Writable, GsonPostProcessable {
         buildBinlogAvailableVersion();
         buildDataCachePartitionDuration();
         buildUseFastSchemaEvolution();
+        buildSharedDataFastSchemaEvolutionV2();
         buildStorageType();
         buildMvProperties();
         buildLocation();

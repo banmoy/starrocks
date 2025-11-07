@@ -257,6 +257,8 @@ public class PropertyAnalyzer {
     // fast schema evolution
     public static final String PROPERTIES_USE_FAST_SCHEMA_EVOLUTION = "fast_schema_evolution";
     public static final String PROPERTIES_USE_LIGHT_SCHEMA_CHANGE = "light_schema_change";
+    // shared-data mode fast schema evolution v2 (LakeTable only)
+    public static final String PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2 = "shared_data_fast_schema_evolution_v2";
 
     public static final String PROPERTIES_DEFAULT_PREFIX = "default.";
 

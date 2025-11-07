@@ -458,6 +458,18 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
                 ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR, "The compaction strategy can be only " +
                         "update for a primary key table. ");
             }
+        } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2)) {
+            String val = properties.get(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2);
+            if (!val.equalsIgnoreCase("true") && !val.equalsIgnoreCase("false")) {
+                ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
+                        "Property " + PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2 +
+                                " must be bool type(false/true)");
+            }
+            if (!(table instanceof LakeTable)) {
+                ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
+                        "Property " + PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2 +
+                                " only applies to LakeTable");
+            }
         } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_ENABLE_DYNAMIC_TABLET)) {
             try {
                 PropertyAnalyzer.analyzeEnableDynamicTablet(properties, false);
