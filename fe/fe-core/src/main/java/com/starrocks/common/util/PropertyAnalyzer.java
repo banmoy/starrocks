@@ -2049,9 +2049,7 @@ public class PropertyAnalyzer {
         } else if ("false".equalsIgnoreCase(value)) {
             ret = false;
         } else {
-            ErrorReport.reportSemanticException(ErrorCode.ERR_INVALID_VALUE,
-                    String.format("Property %s has invalid value: %s, only supports true/false",
-                            property, value));
+            ErrorReport.reportSemanticException(ErrorCode.ERR_INVALID_VALUE, property, value, "'true' or 'false'");
         }
         return ret;
     }
