@@ -86,6 +86,7 @@ import com.starrocks.common.util.WriteQuorum;
 import com.starrocks.common.util.concurrent.MarkedCountDownLatch;
 import com.starrocks.common.util.concurrent.lock.LockType;
 import com.starrocks.common.util.concurrent.lock.Locker;
+import com.starrocks.lake.LakeTable;
 import com.starrocks.lake.LakeTablet;
 import com.starrocks.persist.ModifyColumnCommentLog;
 import com.starrocks.persist.TableAddOrDropColumnsInfo;
@@ -2088,7 +2089,7 @@ public class SchemaChangeHandler extends AlterHandler {
 
         if (!fastSchemaEvolution) {
             return createJob(schemaChangeData);
-        } else if (RunMode.isSharedNothingMode() || olapTable.isSharedDataFastSchemaEvolutionV2()) {
+        } else if (RunMode.isSharedNothingMode() || ((LakeTable) olapTable).isSharedDataFastSchemaEvolutionV2()) {
             fastSchemaEvolutionInShareNothingMode(schemaChangeData);
             return null;
         } else {
