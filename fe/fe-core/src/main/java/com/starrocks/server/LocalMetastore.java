@@ -3894,9 +3894,8 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
             results.put(PropertyAnalyzer.PROPERTIES_ENABLE_DYNAMIC_TABLET, enableDynamicTablet);
         }
         if (properties.containsKey(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2)) {
-            boolean value = PropertyAnalyzer.analyzeSharedDataFastSchemaEvolutionV2(properties);
+            boolean value = PropertyAnalyzer.analyzeSharedDataFastSchemaEvolutionV2(properties, true);
             results.put(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2, value);
-            properties.remove(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2);
         }
         if (!properties.isEmpty()) {
             throw new DdlException("Modify failed because unknown properties: " + properties);

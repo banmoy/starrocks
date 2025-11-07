@@ -473,7 +473,7 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
                                 PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2, table.getType().name()));
             }
             try {
-                PropertyAnalyzer.analyzeSharedDataFastSchemaEvolutionV2(properties);
+                PropertyAnalyzer.analyzeSharedDataFastSchemaEvolutionV2(properties, false);
             } catch (SemanticException e) {
                 ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR, e.getMessage());
             }

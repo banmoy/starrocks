@@ -1952,11 +1952,16 @@ public class PropertyAnalyzer {
         }
     }
 
-    public static boolean analyzeSharedDataFastSchemaEvolutionV2(Map<String, String> properties) throws SemanticException {
+    public static boolean analyzeSharedDataFastSchemaEvolutionV2(
+            Map<String, String> properties, boolean removeFromProperties) throws SemanticException {
         boolean sharedDataFastSchemaEvolutionV2 = true;
         String value = properties.get(PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2);
         if (value != null) {
-            sharedDataFastSchemaEvolutionV2 = parseBooleanStrictly(PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2, value);
+            sharedDataFastSchemaEvolutionV2 = parseBooleanStrictly(PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2,
+                    value);
+        }
+        if (removeFromProperties) {
+            properties.remove(PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2);
         }
         return sharedDataFastSchemaEvolutionV2;
     }
