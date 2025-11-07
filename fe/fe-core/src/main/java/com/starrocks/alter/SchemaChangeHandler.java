@@ -2088,7 +2088,7 @@ public class SchemaChangeHandler extends AlterHandler {
 
         if (!fastSchemaEvolution) {
             return createJob(schemaChangeData);
-        } else if (RunMode.isSharedNothingMode()) {
+        } else if (RunMode.isSharedNothingMode() || olapTable.isSharedDataFastSchemaEvolutionV2()) {
             fastSchemaEvolutionInShareNothingMode(schemaChangeData);
             return null;
         } else {
@@ -3101,7 +3101,6 @@ public class SchemaChangeHandler extends AlterHandler {
 
     private void fastSchemaEvolutionInShareNothingMode(SchemaChangeData schemaChangeData)
             throws DdlException, NotImplementedException {
-        Preconditions.checkState(RunMode.isSharedNothingMode());
         GlobalStateMgr globalStateMgr = GlobalStateMgr.getCurrentState();
         long jobId = globalStateMgr.getNextId();
         long txnId = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
