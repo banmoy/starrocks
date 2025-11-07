@@ -170,6 +170,9 @@ public class LakeTable extends OlapTable {
             properties.put(PropertyAnalyzer.PROPERTIES_ENABLE_DYNAMIC_TABLET, enableDynamicTablet.toString());
         }
 
+        properties.put(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2,
+                String.valueOf(isSharedDataFastSchemaEvolutionV2()));
+
         return properties;
     }
 
