@@ -72,9 +72,10 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema(const TUniqueId& qu
     // TODO: get compression type from tablet metadata
     auto compression_type = TCompressionType::LZ4_FRAME;
     TabletSchemaPB schema_pb;
-    RETURN_IF_ERROR(convert_t_schema_to_pb_schema(single_result.schema, compression_type, schema_pb));
-    TabletSchemaSPtr schema = TabletSchema::create(schema_pb);
-    return schema;
+    RETURN_IF_ERROR(convert_t_schema_to_pb_schema(single_result.schema, compression_type, &schema_pb));
+    TabletSchemaSPtr schema_ptr = TabletSchema::create(schema_pb);
+    TabletSchemaCSPtr const_schema_ptr = schema_ptr;
+    return const_schema_ptr;
 }
 
 } // namespace starrocks
