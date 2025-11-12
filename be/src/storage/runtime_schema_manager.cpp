@@ -16,6 +16,7 @@
 
 #include "agent/master_info.h"
 #include "runtime/client_cache.h"
+#include "storage/metadata_util.h"
 #include "util/thrift_rpc_helper.h"
 
 namespace starrocks {
@@ -26,22 +27,22 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(const PUniqueI
     query_id.__set_hi(load_id.hi());
     query_id.__set_lo(load_id.lo());
     TNetworkAddress master = get_master_address();
-    return get_schema(TRuntimeSchemaType::LOAD, query_id, schema_id, db_id, table_id, tablet_id, master, nullptr);
+    return get_schema(query_id, schema_id, db_id, table_id, tablet_id, TRuntimeSchemaType::LOAD, master, nullptr);
 }
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_scan_schema(const TUniqueId& query_id, int64_t schema_id,
                                                                   int64_t db_id, int64 table_id, int64_t tablet_id,
                                                                   const TNetworkAddress& coordinator_address,
                                                                   const TabletMetadataPtr& tablet_meta) {
-    return get_schema(TRuntimeSchemaType::SCAN, query_id, schema_id, db_id, table_id, tablet_id, coordinator_address, tablet_meta);
+    return get_schema(query_id, schema_id, db_id, table_id, tablet_id, TRuntimeSchemaType::SCAN, coordinator_address,
+                      tablet_meta);
 }
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema(const TUniqueId& query_id, int64_t schema_id,
-                                                                int64_t db_id, int64 table_id, int64_t tablet_id,
-                                                                TRuntimeSchemaType::type schema_type,
-                                                                const TNetworkAddress& coordiantor,
-                                                                const TabletMetadataPtr& tablet_meta) {
-
+                                                             int64_t db_id, int64 table_id, int64_t tablet_id,
+                                                             TRuntimeSchemaType::type schema_type,
+                                                             const TNetworkAddress& coordiantor,
+                                                             const TabletMetadataPtr& tablet_meta) {
     TBatchGetRuntimeSchemaRequest batch_request;
     TGetRuntimeSchemaRequest request;
     request.__set_schema_id(schema_id);
@@ -55,7 +56,9 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema(const TUniqueId& qu
     TBatchGetRuntimeSchemaResult result;
     RETURN_IF_ERROR(ThriftRpcHelper::rpc<FrontendServiceClient>(
             coordiantor.hostname, coordiantor.port,
-            [&batch_request, &result](FrontendServiceConnection& client) { client->getRuntimeSchema(result, batch_request); },
+            [&batch_request, &result](FrontendServiceConnection& client) {
+                client->getRuntimeSchema(result, batch_request);
+            },
             config::thrift_rpc_timeout_ms));
     if (result.results.empty()) {
         return Status::NotFound("Result is empty");
