@@ -20,11 +20,13 @@
 
 namespace starrocks {
 
-StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(const TUniqueId& load_id, int64_t schema_id,
+StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(const PUniqueId& load_id, int64_t schema_id,
                                                                   int64_t db_id, int64 table_id, int64_t tablet_id) {
-    // TODO get FE master address
+    TUniqueId query_id;
+    query_id.__set_hi(load_id.hi());
+    query_id.__set_lo(load_id.lo());
     TNetworkAddress master = get_master_address();
-    return get_schema(TRuntimeSchemaType::LOAD, load_id, schema_id, db_id, table_id, tablet_id, master, nullptr);
+    return get_schema(TRuntimeSchemaType::LOAD, query_id, schema_id, db_id, table_id, tablet_id, master, nullptr);
 }
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_scan_schema(const TUniqueId& query_id, int64_t schema_id,

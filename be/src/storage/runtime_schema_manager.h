@@ -25,7 +25,7 @@ public:
     RuntimeSchemaManager();
     ~RuntimeSchemaManager();
 
-    static StatusOr<TabletSchemaCSPtr> get_load_schema(const TUniqueId& load_id, int64_t schema_id, int64_t db_id, int64 table_id, int64_t tablet_id);
+    static StatusOr<TabletSchemaCSPtr> get_load_schema(const PUniqueId& load_id, int64_t schema_id, int64_t db_id, int64 table_id, int64_t tablet_id);
 
 
     static StatusOr<TabletSchemaCSPtr> get_scan_schema(const TUniqueId& query_id, int64_t schema_id, int64_t db_id, int64 table_id, int64_t tablet_id,

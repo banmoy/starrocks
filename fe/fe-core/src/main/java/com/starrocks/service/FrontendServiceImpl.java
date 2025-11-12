@@ -549,6 +549,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         final TBatchGetRuntimeSchemaResult result = new TBatchGetRuntimeSchemaResult();
         for (TGetRuntimeSchemaRequest singleRequest : request.getRequests()) {
             TGetRuntimeSchemaResult singleResult = new TGetRuntimeSchemaResult();
+            // TODO if can't find cooridnator, or can't find schema in cooridnator, try to get it in OlapTable, this is a protection
             DefaultCoordinator coordinator = (DefaultCoordinator) QeProcessorImpl.INSTANCE.getCoordinator(singleRequest.query_id);
             Optional<TTabletSchema> schema = coordinator.getSchema(singleRequest.schema_id, singleRequest.schema_type);
             if (schema.isPresent()) {
