@@ -552,6 +552,9 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             // TODO if can't find cooridnator, or can't find schema in cooridnator, try to get it in OlapTable, this is a protection
             DefaultCoordinator coordinator = (DefaultCoordinator) QeProcessorImpl.INSTANCE.getCoordinator(singleRequest.query_id);
             Optional<TTabletSchema> schema = coordinator.getSchema(singleRequest.schema_id, singleRequest.schema_type);
+            LOG.info("get schema from coordinator, query id: {}, schema_id: {}, db_id: {}, table_id: {}, tablet_id: {}, " +
+                    "schema_type: {}", DebugUtil.printId(singleRequest.query_id), singleRequest.schema_id, singleRequest.db_id,
+                    singleRequest.table_id, singleRequest.tablet_id, singleRequest.schema_type);
             if (schema.isPresent()) {
                 singleResult.setStatus(new TStatus(TStatusCode.OK));
                 singleResult.setSchema(schema.get());

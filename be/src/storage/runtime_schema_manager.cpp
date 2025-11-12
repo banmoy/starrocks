@@ -75,6 +75,9 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema(const TUniqueId& qu
     RETURN_IF_ERROR(convert_t_schema_to_pb_schema(single_result.schema, compression_type, &schema_pb));
     TabletSchemaSPtr schema_ptr = TabletSchema::create(schema_pb);
     TabletSchemaCSPtr const_schema_ptr = schema_ptr;
+    LOG(INFO) << "get_schema success, query_id: " << print_id(query_id) << ", schema_id: " << schema_id
+              << ", db_id: " << db_id << ", table_id: " << table_id << ", tablet_id: " << tablet_id
+              << ", schema_type: " << schema_type;
     return const_schema_ptr;
 }
 
