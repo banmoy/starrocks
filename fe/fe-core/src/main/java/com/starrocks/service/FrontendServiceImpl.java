@@ -184,6 +184,8 @@ import com.starrocks.thrift.TAllocateAutoIncrementIdResult;
 import com.starrocks.thrift.TAnalyzeStatusReq;
 import com.starrocks.thrift.TAnalyzeStatusRes;
 import com.starrocks.thrift.TAuthenticateParams;
+import com.starrocks.thrift.TBatchGetRuntimeSchemaRequest;
+import com.starrocks.thrift.TBatchGetRuntimeSchemaResult;
 import com.starrocks.thrift.TBatchReportExecStatusParams;
 import com.starrocks.thrift.TBatchReportExecStatusResult;
 import com.starrocks.thrift.TBeginRemoteTxnRequest;
@@ -246,6 +248,8 @@ import com.starrocks.thrift.TGetQueryStatisticsResponse;
 import com.starrocks.thrift.TGetRoleEdgesRequest;
 import com.starrocks.thrift.TGetRoleEdgesResponse;
 import com.starrocks.thrift.TGetRoutineLoadJobsResult;
+import com.starrocks.thrift.TGetRuntimeSchemaRequest;
+import com.starrocks.thrift.TGetRuntimeSchemaResult;
 import com.starrocks.thrift.TGetStreamLoadsResult;
 import com.starrocks.thrift.TGetTableMetaRequest;
 import com.starrocks.thrift.TGetTableMetaResponse;
@@ -351,6 +355,7 @@ import com.starrocks.thrift.TTablePrivDesc;
 import com.starrocks.thrift.TTableReplicationRequest;
 import com.starrocks.thrift.TTableReplicationResponse;
 import com.starrocks.thrift.TTabletLocation;
+import com.starrocks.thrift.TTabletSchema;
 import com.starrocks.thrift.TTaskInfo;
 import com.starrocks.thrift.TTrackingLoadInfo;
 import com.starrocks.thrift.TTransactionStatus;
@@ -535,6 +540,24 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
                 tablesResult.add(tableName);
             }
+        }
+        return result;
+    }
+
+    @Override
+    public TBatchGetRuntimeSchemaResult getRuntimeSchema(TBatchGetRuntimeSchemaRequest request) {
+        final TBatchGetRuntimeSchemaResult result = new TBatchGetRuntimeSchemaResult();
+        for (TGetRuntimeSchemaRequest singleRequest : request.getRequests()) {
+            TGetRuntimeSchemaResult singleResult = new TGetRuntimeSchemaResult();
+            DefaultCoordinator coordinator = (DefaultCoordinator) QeProcessorImpl.INSTANCE.getCoordinator(singleRequest.query_id);
+            Optional<TTabletSchema> schema = coordinator.getSchema(singleRequest.schema_id, singleRequest.schema_type);
+            if (schema.isPresent()) {
+                singleResult.setStatus(new TStatus(TStatusCode.OK));
+                singleResult.setSchema(schema.get());
+            } else {
+                singleResult.setStatus(new TStatus(TStatusCode.NOT_FOUND));
+            }
+            result.addToResults(singleResult);
         }
         return result;
     }

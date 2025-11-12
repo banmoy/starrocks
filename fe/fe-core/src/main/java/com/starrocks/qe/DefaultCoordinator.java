@@ -62,6 +62,8 @@ import com.starrocks.datacache.DataCacheSelectMetrics;
 import com.starrocks.metric.MetricRepo;
 import com.starrocks.mysql.MysqlCommand;
 import com.starrocks.planner.DescriptorTable;
+import com.starrocks.planner.OlapScanNode;
+import com.starrocks.planner.OlapTableSink;
 import com.starrocks.planner.PlanFragment;
 import com.starrocks.planner.PlanFragmentId;
 import com.starrocks.planner.ResultSink;
@@ -97,10 +99,12 @@ import com.starrocks.thrift.TReportAuditStatisticsParams;
 import com.starrocks.thrift.TReportExecStatusParams;
 import com.starrocks.thrift.TRuntimeFilterDestination;
 import com.starrocks.thrift.TRuntimeFilterProberParams;
+import com.starrocks.thrift.TRuntimeSchemaType;
 import com.starrocks.thrift.TSinkCommitInfo;
 import com.starrocks.thrift.TStatusCode;
 import com.starrocks.thrift.TTabletCommitInfo;
 import com.starrocks.thrift.TTabletFailInfo;
+import com.starrocks.thrift.TTabletSchema;
 import com.starrocks.thrift.TUniqueId;
 import com.starrocks.warehouse.cngroup.ComputeResource;
 import org.apache.commons.lang3.StringUtils;
@@ -114,6 +118,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -305,6 +310,27 @@ public class DefaultCoordinator extends Coordinator {
         this.queryProfile =
                 new QueryRuntimeProfile(connectContext, jobSpec,
                         isShortCircuit);
+    }
+
+    public Optional<TTabletSchema> getSchema(long schemaId, TRuntimeSchemaType schemaType) {
+        if (schemaType == TRuntimeSchemaType.SCAN) {
+            return getScanNodes().stream()
+                .filter(OlapScanNode.class::isInstance)
+                .map(OlapScanNode.class::cast)
+                .map(scan -> scan.getRuntimeTabletSchema(schemaId))
+                .filter(Optional::isPresent)
+                .findFirst().orElse(Optional.empty());
+        } else if (schemaType == TRuntimeSchemaType.LOAD) {
+            return getFragments().stream()
+                .map(PlanFragment::getSink)
+                .filter(OlapTableSink.class::isInstance)
+                .map(OlapTableSink.class::cast)
+                .map(sink -> sink.getRuntimeTabletSchema(schemaId))
+                .filter(Optional::isPresent)
+                .findFirst().orElse(Optional.empty());
+        } else {
+            return Optional.empty();
+        }
     }
 
     @Override

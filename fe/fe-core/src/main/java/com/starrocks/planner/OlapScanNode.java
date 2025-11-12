@@ -61,6 +61,7 @@ import com.starrocks.catalog.PartitionKey;
 import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.catalog.RangePartitionInfo;
 import com.starrocks.catalog.Replica;
+import com.starrocks.catalog.RuntimeOlapTableSchema;
 import com.starrocks.catalog.Tablet;
 import com.starrocks.common.AnalysisException;
 import com.starrocks.common.Config;
@@ -108,6 +109,7 @@ import com.starrocks.thrift.TScanRange;
 import com.starrocks.thrift.TScanRangeLocation;
 import com.starrocks.thrift.TScanRangeLocations;
 import com.starrocks.thrift.TTableSampleOptions;
+import com.starrocks.thrift.TTabletSchema;
 import com.starrocks.type.Type;
 import com.starrocks.type.TypeSerializer;
 import com.starrocks.warehouse.Warehouse;
@@ -211,6 +213,8 @@ public class OlapScanNode extends ScanNode {
     int backPressureMaxRounds = -1;
     long backPressureThrottleTime = -1;
     long backPressureNumRows = -1;
+
+    private RuntimeOlapTableSchema runtimeOlapTableSchema;
 
     // Constructs node to scan given data files of table 'tbl'.
     // Constructs node to scan given data files of table 'tbl'.
@@ -1020,6 +1024,10 @@ public class OlapScanNode extends ScanNode {
         }
     }
 
+    public Optional<TTabletSchema> getRuntimeTabletSchema(long schemaId) {
+        return runtimeOlapTableSchema == null ? Optional.empty() : runtimeOlapTableSchema.getRuntimeTabletSchema(schemaId);
+    }
+
     @Override
     protected void toThrift(TPlanNode msg) {
         List<String> keyColumnNames = new ArrayList<String>();
@@ -1027,6 +1035,7 @@ public class OlapScanNode extends ScanNode {
         List<TColumn> columnsDesc = new ArrayList<TColumn>();
         Set<ColumnId> bfColumns = olapTable.getBfColumnIds();
         long schemaId = 0;
+        this.runtimeOlapTableSchema = new RuntimeOlapTableSchema(olapTable.getCopiedIndexes(), bfColumns, olapTable.getBfFpp());
 
         if (!getHeavyExprs().isEmpty()) {
             TPlanNodeCommon common = new TPlanNodeCommon();
@@ -1038,6 +1047,7 @@ public class OlapScanNode extends ScanNode {
         if (selectedIndexId != -1) {
             MaterializedIndexMeta indexMeta = olapTable.getIndexMetaByIndexId(selectedIndexId);
             if (indexMeta != null) {
+                this.runtimeOlapTableSchema.addMaterializedIndexMeta(indexMeta);
                 schemaId = indexMeta.getSchemaId();
                 for (Column col : olapTable.getSchemaByIndexId(selectedIndexId)) {
                     TColumn tColumn = col.toThrift();
@@ -1072,6 +1082,7 @@ public class OlapScanNode extends ScanNode {
                     new TLakeScanNode(desc.getId().asInt(), keyColumnNames, keyColumnTypes, isPreAggregation);
             msg.lake_scan_node.setSort_key_column_names(keyColumnNames);
             msg.lake_scan_node.setRollup_name(olapTable.getIndexNameById(selectedIndexId));
+            msg.lake_scan_node.setSchema_id(schemaId);
             if (enableTopnFilterBackPressure) {
                 msg.lake_scan_node.setEnable_topn_filter_back_pressure(true);
                 msg.lake_scan_node.setBack_pressure_max_rounds(backPressureMaxRounds);

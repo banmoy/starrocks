@@ -2193,6 +2193,33 @@ struct TDynamicTabletJobsResponse {
     2: optional list<TDynamicTabletJobsItem> items;
 }
 
+enum TRuntimeSchemaType {
+    SCAN = 0,
+    LOAD = 1
+}
+
+struct TGetRuntimeSchemaRequest {
+    1: optional i64 schema_id;
+    2: optional TRuntimeSchemaType schema_type;
+    3: optional Types.TUniqueId query_id;
+    4: optional i64 db_id;
+    5: optional i64 table_id;
+    6: optional i64 tablet_id;
+}
+
+struct TGetRuntimeSchemaResult {
+    1: optional Status.TStatus status;
+    2: optional AgentService.TTabletSchema schema;
+}
+
+struct TBatchGetRuntimeSchemaRequest {
+    1: optional list<TGetRuntimeSchemaRequest> requests;
+}
+
+struct TBatchGetRuntimeSchemaResult {
+    1: optional list<TGetRuntimeSchemaResult> results;
+}
+
 service FrontendService {
     TGetDbsResult getDbNames(1:TGetDbsParams params)
     TGetTablesResult getTableNames(1:TGetTablesParams params)
@@ -2337,5 +2364,7 @@ service FrontendService {
     TUpdateFailPointResponse updateFailPointStatus(1: TUpdateFailPointRequest request)
 
     TDynamicTabletJobsResponse getDynamicTabletJobsInfo(1: TDynamicTabletJobsRequest request)
+
+    TBatchGetRuntimeSchemaResult getRuntimeSchema(1: TBatchGetRuntimeSchemaRequest request)
 }
 

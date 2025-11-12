@@ -61,6 +61,7 @@ import com.starrocks.catalog.PartitionType;
 import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.catalog.RangePartitionInfo;
 import com.starrocks.catalog.Replica;
+import com.starrocks.catalog.RuntimeOlapTableSchema;
 import com.starrocks.catalog.Tablet;
 import com.starrocks.common.AnalysisException;
 import com.starrocks.common.Config;
@@ -109,6 +110,7 @@ import com.starrocks.thrift.TOlapTableSchemaParam;
 import com.starrocks.thrift.TOlapTableSink;
 import com.starrocks.thrift.TPartialUpdateMode;
 import com.starrocks.thrift.TTabletLocation;
+import com.starrocks.thrift.TTabletSchema;
 import com.starrocks.thrift.TUniqueId;
 import com.starrocks.thrift.TWriteQuorumType;
 import com.starrocks.transaction.TransactionState;
@@ -153,6 +155,7 @@ public class OlapTableSink extends DataSink {
     private boolean enableDynamicOverwrite = false;
     private boolean isFromOverwrite = false;
     private boolean isMultiStatementTxn = false;
+    private RuntimeOlapTableSchema runtimeOlapTableSchema;
 
     public OlapTableSink(OlapTable dstTable, TupleDescriptor tupleDescriptor, List<Long> partitionIds,
                          TWriteQuorumType writeQuorum, boolean enableReplicatedStorage,
@@ -356,7 +359,14 @@ public class OlapTableSink extends DataSink {
             }
         }
 
+        this.runtimeOlapTableSchema = new RuntimeOlapTableSchema(dstTable.getCopiedIndexes(), dstTable.getBfColumnIds(), dstTable.getBfFpp());
+        dstTable.getIndexIdToMeta().values().forEach(this.runtimeOlapTableSchema::addMaterializedIndexMeta);
+
         LOG.debug("tDataSink: {}", tDataSink);
+    }
+    
+    public Optional<TTabletSchema> getRuntimeTabletSchema(long schemaId) {
+        return runtimeOlapTableSchema == null ? Optional.empty() : runtimeOlapTableSchema.getRuntimeTabletSchema(schemaId);
     }
 
     @Override
