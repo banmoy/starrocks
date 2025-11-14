@@ -21,41 +21,36 @@
 
 namespace starrocks {
 
-StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(const PUniqueId& load_id, int64_t schema_id,
-                                                                  int64_t db_id, int64 table_id, int64_t tablet_id) {
-    TUniqueId query_id;
-    query_id.__set_hi(load_id.hi());
-    query_id.__set_lo(load_id.lo());
+StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(int64_t schema_id, int64_t tablet_id,
+                                                                  int64_t txn_id) {
+    // TODO check schema cache
+    TGetRuntimeSchemaRequest request;
+    request.__set_schema_type(TRuntimeSchemaType::LOAD);
+    request.__set_schema_id(schema_id);
+    request.__set_tablet_id(tablet_id);
+    request.__set_txn_id(txn_id);
     TNetworkAddress master = get_master_address();
-    return get_schema(query_id, schema_id, db_id, table_id, tablet_id, TRuntimeSchemaType::LOAD, master, nullptr);
+    return get_schema_from_fe(request, master);
 }
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_scan_schema(const TUniqueId& query_id, int64_t schema_id,
-                                                                  int64_t db_id, int64 table_id, int64_t tablet_id,
-                                                                  const TNetworkAddress& coordinator_address,
+                                                                  int64_t tablet_id, const TNetworkAddress& fe_addr,
                                                                   const TabletMetadataPtr& tablet_meta) {
-    return get_schema(query_id, schema_id, db_id, table_id, tablet_id, TRuntimeSchemaType::SCAN, coordinator_address,
-                      tablet_meta);
+    // TODO check schema cache and tablet metadata
+    TGetRuntimeSchemaRequest request;
+    request.__set_schema_type(TRuntimeSchemaType::SCAN);
+    request.__set_schema_id(schema_id);
+    request.__set_query_id(query_id);
+    request.__set_tablet_id(tablet_id);
+    return get_schema_from_fe(request, fe_addr);
 }
 
-StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema(const TUniqueId& query_id, int64_t schema_id,
-                                                             int64_t db_id, int64 table_id, int64_t tablet_id,
-                                                             TRuntimeSchemaType::type schema_type,
-                                                             const TNetworkAddress& coordiantor,
-                                                             const TabletMetadataPtr& tablet_meta) {
+StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetRuntimeSchemaRequest& request, const TNetworkAddress& fe_addr) {
     TBatchGetRuntimeSchemaRequest batch_request;
-    TGetRuntimeSchemaRequest request;
-    request.__set_schema_id(schema_id);
-    request.__set_schema_type(schema_type);
-    request.__set_query_id(query_id);
-    request.__set_db_id(db_id);
-    request.__set_table_id(table_id);
-    request.__set_tablet_id(tablet_id);
     batch_request.__set_requests(std::vector<TGetRuntimeSchemaRequest>{request});
-
     TBatchGetRuntimeSchemaResult result;
     RETURN_IF_ERROR(ThriftRpcHelper::rpc<FrontendServiceClient>(
-            coordiantor.hostname, coordiantor.port,
+        fe_addr.hostname, fe_addr.port,
             [&batch_request, &result](FrontendServiceConnection& client) {
                 client->getRuntimeSchema(result, batch_request);
             },
@@ -76,9 +71,10 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema(const TUniqueId& qu
     TabletSchemaSPtr schema_ptr = TabletSchema::create(schema_pb);
     TabletSchemaCSPtr const_schema_ptr = schema_ptr;
     LOG(INFO) << "get_schema success, query_id: " << print_id(query_id) << ", schema_id: " << schema_id
-              << ", db_id: " << db_id << ", table_id: " << table_id << ", tablet_id: " << tablet_id
-              << ", schema_type: " << schema_type;
+                << ", db_id: " << db_id << ", table_id: " << table_id << ", tablet_id: " << tablet_id
+                << ", schema_type: " << schema_type;
     return const_schema_ptr;
 }
+
 
 } // namespace starrocks

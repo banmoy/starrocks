@@ -25,13 +25,12 @@ public:
     RuntimeSchemaManager();
     ~RuntimeSchemaManager();
 
-    static StatusOr<TabletSchemaCSPtr> get_load_schema(int64_t schema_id, int64_t tablet_id, int64_t txn_id, const TabletMetadataPtr& tablet_meta = nullptr);
+    static StatusOr<TabletSchemaCSPtr> get_load_schema(int64_t schema_id, int64_t tablet_id, int64_t txn_id);
 
-    static StatusOr<TabletSchemaCSPtr> get_scan_schema(const TUniqueId& query_id, int64_t schema_id, int64_t tablet_id, const TNetworkAddress& coordinator, const TabletMetadataPtr& tablet_meta = nullptr);
+    static StatusOr<TabletSchemaCSPtr> get_scan_schema(const TUniqueId& query_id, int64_t schema_id, int64_t tablet_id, const TNetworkAddress& fe_addr, const TabletMetadataPtr& tablet_meta = nullptr);
 
 private:
-    static StatusOr<TabletSchemaCSPtr> get_schema(const TUniqueId& query_id, int64_t schema_id, int64_t db_id, int64 table_id, int64_t tablet_id,
-                                           TRuntimeSchemaType::type schema_type, const TNetworkAddress& coordinator, const TabletMetadataPtr& tablet_meta = nullptr);
+    static StatusOr<TabletSchemaCSPtr> get_schema_from_fe(const TGetRuntimeSchemaRequest& request, const TNetworkAddress& fe_addr);
 };
 
 } // namespace starrocks
