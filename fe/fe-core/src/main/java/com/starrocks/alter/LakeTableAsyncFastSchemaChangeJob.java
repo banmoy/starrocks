@@ -212,6 +212,7 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
             info.add(errMsg);
             info.add(progress);
             info.add(timeoutMs / 1000);
+            info.add("fast schema change");
             Warehouse warehouse = GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouseAllowNull(warehouseId);
             if (warehouse == null) {
                 info.add("null");

@@ -3010,6 +3010,7 @@ public class SchemaChangeHandler extends AlterHandler {
             olapTable.setState(OlapTableState.UPDATING_META);
             SchemaChangeJobV2 schemaChangeJob = new SchemaChangeJobV2(jobId, db.getId(), olapTable.getId(),
                     olapTable.getName(), 1000);
+            schemaChangeJob.setFastSchemaChange(true);
 
             long historyTxnIdThreshold = GlobalStateMgr.getCurrentState()
                     .getGlobalTransactionMgr().getTransactionIDGenerator().getNextTransactionId();
@@ -3031,10 +3032,10 @@ public class SchemaChangeHandler extends AlterHandler {
                         .setBloomFilterColumnNames(olapTable.getBfColumnIds())
                         .setBloomFilterFpp(olapTable.getBfFpp())
                         .build();
-                historySchemaInfoMap.put(indexMeta.getSchemaId(), schemaInfo);
+                historySchemaInfoMap.put(indexMeta.getIndexId(), schemaInfo);
             }
             HistoryOlapTableSchema historySchema =
-                    new HistoryOlapTableSchema(db.getId(), olapTable.getId(), historyTxnIdThreshold, historySchemaInfoMap);
+                    new HistoryOlapTableSchema(historyTxnIdThreshold, historySchemaInfoMap);
             schemaChangeJob.setHistorySchema(historySchema);
 
             // update base index schema

@@ -1202,6 +1202,7 @@ public class LakeTableSchemaChangeJob extends LakeTableSchemaChangeJobBase {
             info.add(errMsg);
             info.add(progress);
             info.add(timeoutMs / 1000);
+            info.add("");
 
             Warehouse warehouse = GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouseAllowNull(warehouseId);
             if (warehouse == null) {

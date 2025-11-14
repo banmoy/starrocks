@@ -184,6 +184,8 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
     @SerializedName(value = "disableReplicatedStorageForGIN")
     private boolean disableReplicatedStorageForGIN = false;
 
+    @SerializedName(value = "fse")
+    private boolean fastSchemaChange = false;
     @SerializedName(value = "historySchema")
     private HistoryOlapTableSchema historySchema = null;
 
@@ -976,13 +978,20 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
         }
     }
 
+    public void setFastSchemaChange(boolean fastSchemaChange) {
+        this.fastSchemaChange = fastSchemaChange;
+    }
+
     public void setHistorySchema(HistoryOlapTableSchema historySchema) {
         this.historySchema = historySchema;
     }
 
     public Optional<SchemaInfo> getHistorySchema(long dbId, long tableId, long schemaId) {
-        // TODO check db id and table id
-        return historySchema.getSchemaInfo(schemaId);
+        // TODO check db id. Load has db id ?
+        if (tableId != this.tableId) {
+            return Optional.empty();
+        }
+        return historySchema.getSchemaBySchemaId(schemaId);
     }
 
     @Override
@@ -1243,6 +1252,17 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
             info.add(errMsg);
             info.add(progress);
             info.add(timeoutMs / 1000);
+            StringBuilder sb = new StringBuilder();
+            if (fastSchemaChange) {
+                sb.append("fast schema change");
+                if (historySchema != null) {
+                    sb.append(", history schema id: ")
+                        .append(historySchema.getSchemaByIndexId(shadowIndexId).map(SchemaInfo::getId).orElse(-1L))
+                        .append(", history txn id threshold: ")
+                            .append(historySchema.getTxnIdThreshold());
+                }
+            }
+            info.add(sb.toString());
             if (RunMode.getCurrentRunMode() == RunMode.SHARED_DATA) {
                 info.add("N/A");
             }

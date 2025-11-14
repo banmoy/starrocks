@@ -21,23 +21,17 @@ import java.util.Map;
 import java.util.Optional;
 
 public class HistoryOlapTableSchema {
-    @SerializedName(value = "dbId")
-    private long dbId;
-    @SerializedName(value = "tableId")
-    private long tableId;
     // the history schema may be used by those transactions before this txn id
     @SerializedName(value = "txnIdThreshold")
     private long txnIdThreshold = -1;
-    // schema id -> schema info
+    // index id -> schema info
     @SerializedName(value = "schemaInfoMap")
     private Map<Long, SchemaInfo> schemaInfoMap;
 
     public HistoryOlapTableSchema() {
     }
 
-    public HistoryOlapTableSchema(long dbId, long tableId, long txnIdThreshold, Map<Long, SchemaInfo> schemaInfoMap) {
-        this.dbId = dbId;
-        this.tableId = tableId;
+    public HistoryOlapTableSchema(long txnIdThreshold, Map<Long, SchemaInfo> schemaInfoMap) {
         this.txnIdThreshold = txnIdThreshold;
         this.schemaInfoMap = new HashMap<>();
     }
@@ -46,7 +40,16 @@ public class HistoryOlapTableSchema {
         return txnIdThreshold;
     }
 
-    public Optional<SchemaInfo> getSchemaInfo(long schemaId) {
-        return Optional.ofNullable(schemaInfoMap.get(schemaId));
+    public Optional<SchemaInfo> getSchemaByIndexId(long indexId) {
+        return Optional.ofNullable(schemaInfoMap.get(indexId));
+    }
+
+    public Optional<SchemaInfo> getSchemaBySchemaId(long schemaId) {
+        for (SchemaInfo schemaInfo : schemaInfoMap.values()) {
+            if (schemaId == schemaInfo.getId()) {
+                return Optional.of(schemaInfo);
+            }
+        }
+        return Optional.empty();
     }
 }
