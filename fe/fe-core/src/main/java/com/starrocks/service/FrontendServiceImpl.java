@@ -590,8 +590,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         if (schema == null) {
             Table table = GlobalStateMgr.getCurrentState().getLocalMetastore().getTable(dbId, tableId);
             SchemaInfo schemaInfo = null;
-            if (table instanceof OlapTable) {
-                OlapTable olapTable = (OlapTable) table;
+            if (table instanceof OlapTable olapTable) {
                 try (AutoCloseableLock ignore =
                         new AutoCloseableLock(new Locker(), dbId, Lists.newArrayList(tableId), LockType.READ)) {
                     MaterializedIndexMeta indexMeta = null;
@@ -628,7 +627,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             }
         }
 
-        if (schema == null) {
+        if (schema != null) {
             result.setStatus(new TStatus(TStatusCode.OK));
             result.setSchema(schema);
         } else {
