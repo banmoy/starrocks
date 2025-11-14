@@ -2994,7 +2994,7 @@ public class SchemaChangeHandler extends AlterHandler {
     //          {c1: int, c2: int, c3: Struct<v1 int, v2 int, v3 int>}
     public void modifyTableAddOrDrop(Database db, OlapTable olapTable,
                                      Map<Long, List<Column>> indexSchemaMap,
-                                     List<Index> indexes, long jobId, long txnId,
+                                     List<Index> indexes, long jobId, long replayedTxnId,
                                      Map<Long, Long> indexToNewSchemaId, boolean isReplay)
             throws DdlException, NotImplementedException {
         Locker locker = new Locker();
@@ -3011,9 +3011,6 @@ public class SchemaChangeHandler extends AlterHandler {
             SchemaChangeJobV2 schemaChangeJob = new SchemaChangeJobV2(jobId, db.getId(), olapTable.getId(),
                     olapTable.getName(), 1000);
             schemaChangeJob.setFastSchemaChange(true);
-
-            long historyTxnIdThreshold = GlobalStateMgr.getCurrentState()
-                    .getGlobalTransactionMgr().getTransactionIDGenerator().getNextTransactionId();
 
             Map<Long, SchemaInfo> historySchemaInfoMap = new HashMap<>();
             for (long indexId : indexSchemaMap.keySet()) {
@@ -3034,8 +3031,7 @@ public class SchemaChangeHandler extends AlterHandler {
                         .build();
                 historySchemaInfoMap.put(indexMeta.getIndexId(), schemaInfo);
             }
-            HistoryOlapTableSchema historySchema =
-                    new HistoryOlapTableSchema(historyTxnIdThreshold, historySchemaInfoMap);
+            HistoryOlapTableSchema historySchema = new HistoryOlapTableSchema(historySchemaInfoMap);
             schemaChangeJob.setHistorySchema(historySchema);
 
             // update base index schema
@@ -3090,6 +3086,9 @@ public class SchemaChangeHandler extends AlterHandler {
             // If modified columns are already done, inactive related mv
             AlterMVJobExecutor.inactiveRelatedMaterializedViews(db, olapTable, modifiedColumns);
 
+            // Loads whose txn ids are smaller than it can still use the history schema
+            long txnId = isReplay ? replayedTxnId : GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
+                    .getTransactionIDGenerator().getNextTransactionId();
             if (!isReplay) {
                 TableAddOrDropColumnsInfo info = new TableAddOrDropColumnsInfo(db.getId(), olapTable.getId(),
                         indexSchemaMap, indexes, jobId, txnId, indexToNewSchemaId);
@@ -3120,6 +3119,7 @@ public class SchemaChangeHandler extends AlterHandler {
         Map<Long, Long> indexToNewSchemaId = info.getIndexToNewSchemaId();
         List<Index> indexes = info.getIndexes();
         long jobId = info.getJobId();
+        long replayedTxnId = info.getTxnId();
 
         Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(dbId);
         Table table = GlobalStateMgr.getCurrentState().getLocalMetastore().getTable(db.getId(), tableId);
@@ -3129,7 +3129,7 @@ public class SchemaChangeHandler extends AlterHandler {
         Locker locker = new Locker();
         try {
             locker.lockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.WRITE);
-            modifyTableAddOrDrop(db, olapTable, indexSchemaMap, indexes, jobId, info.getTxnId(),
+            modifyTableAddOrDrop(db, olapTable, indexSchemaMap, indexes, jobId, replayedTxnId,
                     indexToNewSchemaId, true);
         } catch (DdlException e) {
             // should not happen
@@ -3145,8 +3145,6 @@ public class SchemaChangeHandler extends AlterHandler {
             throws DdlException, NotImplementedException {
         GlobalStateMgr globalStateMgr = GlobalStateMgr.getCurrentState();
         long jobId = globalStateMgr.getNextId();
-        long txnId = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
-                .getTransactionIDGenerator().getNextTransactionId();
         // for schema change add/drop value column optimize, direct modify table meta.
         // when modify this, please also pay attention to the OlapTable#copyOnlyForQuery() operation.
         // try to copy first before modifying, avoiding in-place changes.
@@ -3158,7 +3156,7 @@ public class SchemaChangeHandler extends AlterHandler {
         // when modify this, please also pay attention to the OlapTable#copyOnlyForQuery() operation.
         // try to copy first before modifying, avoiding in-place changes.
         modifyTableAddOrDrop(schemaChangeData.getDatabase(), schemaChangeData.getTable(),
-                schemaChangeData.getNewIndexSchema(), schemaChangeData.getIndexes(), jobId, txnId,
+                schemaChangeData.getNewIndexSchema(), schemaChangeData.getIndexes(), jobId, -1,
                 indexToNewSchemaId, false);
     }
 

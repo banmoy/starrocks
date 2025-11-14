@@ -999,10 +999,9 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
         boolean expiredByTime = super.isExpire();
         boolean expiredByTxn = true;
         if (historySchema != null) {
-            long txnIdThreshold = historySchema.getTxnIdThreshold();
             try {
                 expiredByTxn = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
-                        .isPreviousTransactionsFinished(txnIdThreshold, dbId, Lists.newArrayList(tableId));
+                        .isPreviousTransactionsFinished(watershedTxnId, dbId, Lists.newArrayList(tableId));
             } catch (Exception e) {
                 // As isPreviousTransactionsFinished said, exception happens only when db does not exist,
                 // so could clean the history schema safely
@@ -1256,10 +1255,9 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
             if (fastSchemaChange) {
                 sb.append("fast schema change");
                 if (historySchema != null) {
-                    sb.append(", history schema id: ")
-                        .append(historySchema.getSchemaByIndexId(shadowIndexId).map(SchemaInfo::getId).orElse(-1L))
-                        .append(", history txn id threshold: ")
-                            .append(historySchema.getTxnIdThreshold());
+                    long historySchemaId = historySchema.getSchemaByIndexId(shadowIndexId)
+                            .map(SchemaInfo::getId).orElse(-1L);
+                    sb.append(", history schema id: ").append(historySchemaId);
                 }
             }
             info.add(sb.toString());

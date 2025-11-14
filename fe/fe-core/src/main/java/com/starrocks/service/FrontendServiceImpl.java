@@ -570,6 +570,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         long schemaId = request.schema_id;
         long dbId = request.db_id;
         long tableId = request.table_id;
+        TabletMeta tabletMeta = GlobalStateMgr.getCurrentState().getTabletInvertedIndex().getTabletMeta(request.getTablet_id());
+        if (tabletMeta != null) {
+            dbId = tabletMeta.getDbId();
+            tableId = tabletMeta.getTableId();
+        }
         TTabletSchema schema = null;
         // for scan, first search the schema in scanner
         if (request.schema_type == TRuntimeSchemaType.SCAN) {

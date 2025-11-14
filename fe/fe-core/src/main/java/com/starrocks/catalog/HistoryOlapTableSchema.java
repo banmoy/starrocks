@@ -21,9 +21,6 @@ import java.util.Map;
 import java.util.Optional;
 
 public class HistoryOlapTableSchema {
-    // the history schema may be used by those transactions before this txn id
-    @SerializedName(value = "txnIdThreshold")
-    private long txnIdThreshold = -1;
     // index id -> schema info
     @SerializedName(value = "schemaInfoMap")
     private Map<Long, SchemaInfo> schemaInfoMap;
@@ -31,13 +28,8 @@ public class HistoryOlapTableSchema {
     public HistoryOlapTableSchema() {
     }
 
-    public HistoryOlapTableSchema(long txnIdThreshold, Map<Long, SchemaInfo> schemaInfoMap) {
-        this.txnIdThreshold = txnIdThreshold;
+    public HistoryOlapTableSchema(Map<Long, SchemaInfo> schemaInfoMap) {
         this.schemaInfoMap = new HashMap<>();
-    }
-
-    public long getTxnIdThreshold() {
-        return txnIdThreshold;
     }
 
     public Optional<SchemaInfo> getSchemaByIndexId(long indexId) {
