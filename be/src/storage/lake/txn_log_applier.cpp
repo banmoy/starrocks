@@ -24,6 +24,7 @@
 #include "storage/lake/tablet.h"
 #include "storage/lake/tablet_metadata.h"
 #include "storage/lake/update_manager.h"
+#include "storage/runtime_schema_manager.h"
 #include "testutil/sync_point.h"
 #include "util/dynamic_cache.h"
 #include "util/phmap/phmap_fwd_decl.h"
@@ -466,7 +467,7 @@ public:
 
     Status apply(const TxnLogPB& log) override {
         if (log.has_op_write()) {
-            RETURN_IF_ERROR(apply_write_log(log.op_write()));
+            RETURN_IF_ERROR(apply_write_log(log.op_write(), log.txn_id()));
         }
         if (log.has_op_compaction()) {
             RETURN_IF_ERROR(apply_compaction_log(log.op_compaction()));
@@ -602,20 +603,43 @@ public:
     }
 
 private:
-    Status apply_write_log(const TxnLogPB_OpWrite& op_write) {
+    Status apply_write_log(const TxnLogPB_OpWrite& op_write, int64_t txn_id) {
         TEST_ERROR_POINT("NonPrimaryKeyTxnLogApplier::apply_write_log");
         if (op_write.has_rowset() && (op_write.rowset().num_rows() > 0 || op_write.rowset().has_delete_predicate())) {
             auto rowset = _metadata->add_rowsets();
             rowset->CopyFrom(op_write.rowset());
             rowset->set_id(_metadata->next_rowset_id());
             _metadata->set_next_rowset_id(_metadata->next_rowset_id() + std::max(1, rowset->segments_size()));
-            if (!_metadata->rowset_to_schema().empty()) {
-                auto schema_id = _metadata->schema().id();
-                (*_metadata->mutable_rowset_to_schema())[rowset->id()] = schema_id;
-                // first rowset of latest schema
-                if (_metadata->historical_schemas().count(schema_id) <= 0) {
-                    auto& item = (*_metadata->mutable_historical_schemas())[schema_id];
-                    item.CopyFrom(_metadata->schema());
+
+            auto write_schema_id = op_write.has_schema_id() ? op_write.schema_id() : _metadata->schema().id();
+            bool is_new_schema = write_schema_id != _metadata->schema().id()
+                                                    && _metadata->historical_schemas().count(write_schema_id) <= 0;
+            TabletSchemaCSPtr new_schema = nullptr;
+            if (is_new_schema) {
+                ASSIGN_OR_RETURN(new_schema,
+                                 RuntimeSchemaManager::get_load_schema(write_schema_id, _metadata->id(), txn_id));
+                // build rowset to historical schema mapping
+                if (new_schema->schema_version() > _metadata->schema().schema_version()) {
+                    auto schema_id = _metadata->schema().id();
+                    auto* rowset_to_schema = _metadata->mutable_rowset_to_schema();
+                    for (int i = 0; i < _metadata->rowsets_size(); i++) {
+                        auto rowset_id = _metadata->rowsets(i).id();
+                        if (rowset_to_schema->count(rowset_id) <= 0) {
+                            (*rowset_to_schema)[rowset_id] = schema_id;
+                        }
+                    }
+                    if (_metadata->historical_schemas().count(schema_id) <= 0) {
+                        auto& item = (*_metadata->mutable_historical_schemas())[schema_id];
+                        item.CopyFrom(_metadata->schema());
+                    }
+                } else {
+                    auto& item = (*_metadata->mutable_historical_schemas())[write_schema_id];
+                    new_schema->to_schema_pb(&item);
+                    (*_metadata->mutable_rowset_to_schema())[rowset->id()] = write_schema_id;
+                }
+            } else {
+                if (write_schema_id != _metadata->schema().id()) {
+                    (*_metadata->mutable_rowset_to_schema())[rowset->id()] = write_schema_id;
                 }
             }
         }
@@ -794,7 +818,7 @@ private:
 
         if (txn_meta.incremental_snapshot()) {
             for (const auto& op_write : op_replication.op_writes()) {
-                RETURN_IF_ERROR(apply_write_log(op_write));
+                RETURN_IF_ERROR(apply_write_log(op_write, txn_meta.txn_id()));
             }
             LOG(INFO) << "Apply incremental replication log finish. tablet_id: " << _tablet.id()
                       << ", base_version: " << _metadata->version() << ", new_version: " << _new_version
@@ -804,7 +828,7 @@ private:
             _metadata->mutable_rowsets()->Clear();
 
             for (const auto& op_write : op_replication.op_writes()) {
-                RETURN_IF_ERROR(apply_write_log(op_write));
+                RETURN_IF_ERROR(apply_write_log(op_write, txn_meta.txn_id()));
             }
 
             _metadata->set_cumulative_point(0);
