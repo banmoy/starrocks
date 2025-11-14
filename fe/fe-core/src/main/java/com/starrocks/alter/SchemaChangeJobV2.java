@@ -47,6 +47,7 @@ import com.google.gson.annotations.SerializedName;
 import com.starrocks.catalog.Column;
 import com.starrocks.catalog.ColumnId;
 import com.starrocks.catalog.Database;
+import com.starrocks.catalog.HistoryOlapTableSchema;
 import com.starrocks.catalog.Index;
 import com.starrocks.catalog.KeysType;
 import com.starrocks.catalog.LocalTablet;
@@ -182,6 +183,9 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
     // and we need to disable it.
     @SerializedName(value = "disableReplicatedStorageForGIN")
     private boolean disableReplicatedStorageForGIN = false;
+
+    @SerializedName(value = "historySchema")
+    private HistoryOlapTableSchema historySchema = null;
 
     // save all schema change tasks
     private AgentBatchTask schemaChangeBatchTask = new AgentBatchTask();
@@ -970,6 +974,36 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
         } finally {
             isCancelling.set(false);
         }
+    }
+
+    public void setHistorySchema(HistoryOlapTableSchema historySchema) {
+        this.historySchema = historySchema;
+    }
+
+    public Optional<SchemaInfo> getHistorySchema(long dbId, long tableId, long schemaId) {
+        // TODO check db id and table id
+        return historySchema.getSchemaInfo(schemaId);
+    }
+
+    @Override
+    public boolean isExpire() {
+        boolean expiredByTime = super.isExpire();
+        boolean expiredByTxn = true;
+        if (historySchema != null) {
+            long txnIdThreshold = historySchema.getTxnIdThreshold();
+            try {
+                expiredByTxn = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
+                        .isPreviousTransactionsFinished(txnIdThreshold, dbId, Lists.newArrayList(tableId));
+            } catch (Exception e) {
+                // As isPreviousTransactionsFinished said, exception happens only when db does not exist,
+                // so could clean the history schema safely
+            }
+            if (expiredByTxn) {
+                // release the history schema memory if no one uses it
+                historySchema = null;
+            }
+        }
+        return expiredByTime && expiredByTxn;
     }
 
     /*

@@ -53,6 +53,7 @@ import com.starrocks.catalog.InternalCatalog;
 import com.starrocks.catalog.ListPartitionInfo;
 import com.starrocks.catalog.LocalTablet;
 import com.starrocks.catalog.MaterializedIndex;
+import com.starrocks.catalog.MaterializedIndexMeta;
 import com.starrocks.catalog.MaterializedView;
 import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.Partition;
@@ -61,6 +62,7 @@ import com.starrocks.catalog.PartitionKey;
 import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.catalog.RangePartitionInfo;
 import com.starrocks.catalog.Replica;
+import com.starrocks.catalog.SchemaInfo;
 import com.starrocks.catalog.Table;
 import com.starrocks.catalog.Tablet;
 import com.starrocks.catalog.TabletInvertedIndex;
@@ -338,6 +340,7 @@ import com.starrocks.thrift.TReportRequest;
 import com.starrocks.thrift.TRequireSlotRequest;
 import com.starrocks.thrift.TRequireSlotResponse;
 import com.starrocks.thrift.TRoutineLoadJobInfo;
+import com.starrocks.thrift.TRuntimeSchemaType;
 import com.starrocks.thrift.TSessionInfo;
 import com.starrocks.thrift.TSetConfigRequest;
 import com.starrocks.thrift.TSetConfigResponse;
@@ -548,21 +551,91 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     public TBatchGetRuntimeSchemaResult getRuntimeSchema(TBatchGetRuntimeSchemaRequest request) {
         final TBatchGetRuntimeSchemaResult result = new TBatchGetRuntimeSchemaResult();
         for (TGetRuntimeSchemaRequest singleRequest : request.getRequests()) {
-            TGetRuntimeSchemaResult singleResult = new TGetRuntimeSchemaResult();
-            // TODO if can't find cooridnator, or can't find schema in cooridnator, try to get it in OlapTable, this is a protection
-            DefaultCoordinator coordinator = (DefaultCoordinator) QeProcessorImpl.INSTANCE.getCoordinator(singleRequest.query_id);
-            Optional<TTabletSchema> schema = coordinator.getSchema(singleRequest.schema_id, singleRequest.schema_type);
-            LOG.info("get schema from coordinator, query id: {}, schema_id: {}, db_id: {}, table_id: {}, tablet_id: {}, " +
-                    "schema_type: {}", DebugUtil.printId(singleRequest.query_id), singleRequest.schema_id, singleRequest.db_id,
-                    singleRequest.table_id, singleRequest.tablet_id, singleRequest.schema_type);
-            if (schema.isPresent()) {
-                singleResult.setStatus(new TStatus(TStatusCode.OK));
-                singleResult.setSchema(schema.get());
-            } else {
-                singleResult.setStatus(new TStatus(TStatusCode.NOT_FOUND));
+            TGetRuntimeSchemaResult singleResult = null;
+            try {
+                singleResult = getRuntimeSchema(singleRequest);
+            } catch (Exception e) {
+                TStatus status = new TStatus(TStatusCode.INTERNAL_ERROR);
+                status.addToError_msgs("exception happened when get schema, error: " + e.getMessage());
+                LOG.warn("Failed to get schema, db_id: {}, table_id: {}, schema_id: {}",
+                        singleRequest.db_id, singleRequest.table_id, singleRequest.schema_id, e);
             }
             result.addToResults(singleResult);
         }
+        return result;
+    }
+
+    private TGetRuntimeSchemaResult getRuntimeSchema(TGetRuntimeSchemaRequest request) {
+        TGetRuntimeSchemaResult result = new TGetRuntimeSchemaResult();
+        long schemaId = request.schema_id;
+        long dbId = request.db_id;
+        long tableId = request.table_id;
+        TTabletSchema schema = null;
+        // for scan, first search the schema in scanner
+        if (request.schema_type == TRuntimeSchemaType.SCAN) {
+            DefaultCoordinator coordinator = (DefaultCoordinator) QeProcessorImpl.INSTANCE.getCoordinator(request.query_id);
+            if (coordinator != null) {
+                Optional<TTabletSchema> optional = coordinator.getSchema(schemaId, request.schema_type);
+                // if query still alive, try to find the schema at best effort
+                if (optional.isPresent()) {
+                    schema = optional.get();
+                }
+            }
+        }
+        if (schema == null) {
+            Table table = GlobalStateMgr.getCurrentState().getLocalMetastore().getTable(dbId, tableId);
+            SchemaInfo schemaInfo = null;
+            if (table instanceof OlapTable) {
+                OlapTable olapTable = (OlapTable) table;
+                try (AutoCloseableLock ignore =
+                        new AutoCloseableLock(new Locker(), dbId, Lists.newArrayList(tableId), LockType.READ)) {
+                    MaterializedIndexMeta indexMeta = null;
+                    for (MaterializedIndexMeta meta : olapTable.getIndexIdToMeta().values()) {
+                        if (meta.getSchemaId() == schemaId) {
+                            indexMeta = meta;
+                            break;
+                        }
+                    }
+                    if (indexMeta != null) {
+                        schemaInfo = SchemaInfo.newBuilder()
+                                .setId(indexMeta.getSchemaId())
+                                .setVersion(indexMeta.getSchemaVersion())
+                                .setSchemaHash(indexMeta.getSchemaHash())
+                                .setKeysType(indexMeta.getKeysType())
+                                .setShortKeyColumnCount(indexMeta.getShortKeyColumnCount())
+                                .setStorageType(indexMeta.getStorageType())
+                                .addColumns(indexMeta.getSchema())
+                                .setSortKeyIndexes(indexMeta.getSortKeyIdxes())
+                                .setSortKeyUniqueIds(indexMeta.getSortKeyUniqueIds())
+                                .setIndexes(OlapTable.getIndexesBySchema(olapTable.getIndexes(), indexMeta.getSchema()))
+                                .setBloomFilterColumnNames(olapTable.getBfColumnIds())
+                                .setBloomFilterFpp(olapTable.getBfFpp())
+                                .build();
+                    }
+                }
+                if (schemaInfo == null) {
+                    schemaInfo = GlobalStateMgr.getCurrentState().getAlterJobMgr()
+                            .getSchemaChangeHandler().getHistorySchema(dbId, tableId, schemaId).orElse(null);
+                }
+                if (schemaInfo != null) {
+                    schema = schemaInfo.toTabletSchema();
+                }
+            }
+        }
+
+        if (schema == null) {
+            result.setStatus(new TStatus(TStatusCode.OK));
+            result.setSchema(schema);
+        } else {
+            TStatus status = new TStatus(TStatusCode.NOT_FOUND);
+            status.addToError_msgs("can't find schema " + schemaId);
+            result.setStatus(status);
+        }
+
+        LOG.info("get schema from coordinator, query id: {}, schema_id: {}, db_id: {}, table_id: {}, tablet_id: {}, " +
+                "schema_type: {}, status: {}, msg: {}", DebugUtil.printId(request.query_id), schemaId, dbId, tableId,
+                request.tablet_id, request.schema_type, result.getStatus().status_code, result.getStatus().getError_msgs());
+
         return result;
     }
 

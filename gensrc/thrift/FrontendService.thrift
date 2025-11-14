@@ -2205,6 +2205,8 @@ struct TGetRuntimeSchemaRequest {
     4: optional i64 db_id;
     5: optional i64 table_id;
     6: optional i64 tablet_id;
+    // only for load
+    7: optional i64 txn_id;
 }
 
 struct TGetRuntimeSchemaResult {

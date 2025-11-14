@@ -49,6 +49,7 @@ import com.starrocks.catalog.Column;
 import com.starrocks.catalog.ColumnId;
 import com.starrocks.catalog.Database;
 import com.starrocks.catalog.FlatJsonConfig;
+import com.starrocks.catalog.HistoryOlapTableSchema;
 import com.starrocks.catalog.Index;
 import com.starrocks.catalog.KeysType;
 import com.starrocks.catalog.LocalTablet;
@@ -2968,6 +2969,18 @@ public class SchemaChangeHandler extends AlterHandler {
         }
     }
 
+    public Optional<SchemaInfo> getHistorySchema(long dbId, long tableId, long schemaId) {
+        for (AlterJobV2 alterJob : alterJobsV2.values()) {
+            if (alterJob instanceof SchemaChangeJobV2) {
+                Optional<SchemaInfo> schemaInfo = ((SchemaChangeJobV2) alterJob).getHistorySchema(dbId, tableId, schemaId);
+                if (schemaInfo.isPresent()) {
+                    return schemaInfo;
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
     // the invoker should keep write lock
     // this function will update the table index meta according to the `indexSchemaMap` and the
     // `indexSchemaMap` keep the latest column set for each index.
@@ -2997,6 +3010,33 @@ public class SchemaChangeHandler extends AlterHandler {
             olapTable.setState(OlapTableState.UPDATING_META);
             SchemaChangeJobV2 schemaChangeJob = new SchemaChangeJobV2(jobId, db.getId(), olapTable.getId(),
                     olapTable.getName(), 1000);
+
+            long historyTxnIdThreshold = GlobalStateMgr.getCurrentState()
+                    .getGlobalTransactionMgr().getTransactionIDGenerator().getNextTransactionId();
+
+            Map<Long, SchemaInfo> historySchemaInfoMap = new HashMap<>();
+            for (long indexId : indexSchemaMap.keySet()) {
+                MaterializedIndexMeta indexMeta = olapTable.getIndexMetaByIndexId(indexId).shallowCopy();
+                SchemaInfo schemaInfo = SchemaInfo.newBuilder()
+                        .setId(indexMeta.getSchemaId())
+                        .setVersion(indexMeta.getSchemaVersion())
+                        .setSchemaHash(indexMeta.getSchemaHash())
+                        .setKeysType(indexMeta.getKeysType())
+                        .setShortKeyColumnCount(indexMeta.getShortKeyColumnCount())
+                        .setStorageType(indexMeta.getStorageType())
+                        .addColumns(indexMeta.getSchema())
+                        .setSortKeyIndexes(indexMeta.getSortKeyIdxes())
+                        .setSortKeyUniqueIds(indexMeta.getSortKeyUniqueIds())
+                        .setIndexes(OlapTable.getIndexesBySchema(indexes, indexMeta.getSchema()))
+                        .setBloomFilterColumnNames(olapTable.getBfColumnIds())
+                        .setBloomFilterFpp(olapTable.getBfFpp())
+                        .build();
+                historySchemaInfoMap.put(indexMeta.getSchemaId(), schemaInfo);
+            }
+            HistoryOlapTableSchema historySchema =
+                    new HistoryOlapTableSchema(db.getId(), olapTable.getId(), historyTxnIdThreshold, historySchemaInfoMap);
+            schemaChangeJob.setHistorySchema(historySchema);
+
             // update base index schema
             Set<String> modifiedColumns = Sets.newHashSet();
             boolean hasMv = !olapTable.getRelatedMaterializedViews().isEmpty();
