@@ -16,7 +16,6 @@ package com.starrocks.catalog;
 
 import com.google.gson.annotations.SerializedName;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -29,7 +28,7 @@ public class HistoryOlapTableSchema {
     }
 
     public HistoryOlapTableSchema(Map<Long, SchemaInfo> schemaInfoMap) {
-        this.schemaInfoMap = new HashMap<>();
+        this.schemaInfoMap = schemaInfoMap;
     }
 
     public Optional<SchemaInfo> getSchemaByIndexId(long indexId) {
