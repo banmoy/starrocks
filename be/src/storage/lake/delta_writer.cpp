@@ -407,7 +407,7 @@ inline Status DeltaWriterImpl::init_tablet_schema() {
         _tablet_schema = std::move(res).value();
         return Status::OK();
     } else if (res.status().is_not_found()) {
-        ASSIGN_OR_RETURN(_tablet_schema, RuntimeSchemaManager::get_load_schema(_schema_id, _tablet_id, _txn_id));
+        ASSIGN_OR_RETURN(_tablet_schema, RuntimeSchemaManager::get_load_schema(_schema_id, _tablet_id, _txn_id, nullptr));
         return Status::OK();
     } else {
         return res.status();

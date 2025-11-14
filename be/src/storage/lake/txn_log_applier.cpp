@@ -617,7 +617,7 @@ private:
             TabletSchemaCSPtr new_schema = nullptr;
             if (is_new_schema) {
                 ASSIGN_OR_RETURN(new_schema,
-                                 RuntimeSchemaManager::get_load_schema(write_schema_id, _metadata->id(), txn_id));
+                                 RuntimeSchemaManager::get_load_schema(write_schema_id, _metadata->id(), txn_id, nullptr));
                 // build rowset to historical schema mapping
                 if (new_schema->schema_version() > _metadata->schema().schema_version()) {
                     auto schema_id = _metadata->schema().id();
@@ -684,9 +684,18 @@ private:
 
         std::vector<uint32_t> input_rowsets_id(op_compaction.input_rowsets().begin(),
                                                op_compaction.input_rowsets().end());
-        ASSIGN_OR_RETURN(auto tablet_schema, ExecEnv::GetInstance()->lake_tablet_manager()->get_output_rowset_schema(
-                                                     input_rowsets_id, _metadata.get()));
-        int64_t output_rowset_schema_id = tablet_schema->id();
+        int64_t output_rowset_schema_id;
+        if (op_compaction.has_schema_id()) {
+            output_rowset_schema_id = op_compaction.schema_id();
+            if (output_rowset_schema_id != _metadata->schema().id() && _metadata->historical_schemas().count(output_rowset_schema_id) <= 0) {
+                return Status::InternalError(fmt::format("output rowset schema id {} not found in tablet metadata", output_rowset_schema_id));
+            }
+        } else {
+            ASSIGN_OR_RETURN(auto tablet_schema,
+                             ExecEnv::GetInstance()->lake_tablet_manager()->get_output_rowset_schema(input_rowsets_id,
+                                                                                                     _metadata.get()));
+            output_rowset_schema_id = tablet_schema->id();
+        }
 
         auto last_input_pos = pre_input_pos;
         RowsetMetadataPB last_input_rowset = *last_input_pos;
@@ -724,7 +733,7 @@ private:
                 _metadata->mutable_rowset_to_schema()->erase(op_compaction.input_rowsets(i));
             }
 
-            if (has_output_rowset) {
+            if (has_output_rowset && output_rowset_schema_id != _metadata->schema().id()) {
                 (*_metadata->mutable_rowset_to_schema())[output_rowset_id] = output_rowset_schema_id;
             }
 

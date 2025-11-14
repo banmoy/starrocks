@@ -22,8 +22,8 @@
 namespace starrocks {
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(int64_t schema_id, int64_t tablet_id,
-                                                                  int64_t txn_id) {
-    // TODO check schema cache
+                                                                  int64_t txn_id, const TabletMetadataPtr& tablet_meta) {
+    // TODO check schema cache and tablet metadata
     TGetRuntimeSchemaRequest request;
     request.__set_schema_type(TRuntimeSchemaType::LOAD);
     request.__set_schema_id(schema_id);
