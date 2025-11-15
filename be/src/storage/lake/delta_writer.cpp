@@ -407,7 +407,7 @@ inline Status DeltaWriterImpl::init_tablet_schema() {
         _tablet_schema = std::move(res).value();
         return Status::OK();
     } else if (res.status().is_not_found()) {
-        ASSIGN_OR_RETURN(_tablet_schema, RuntimeSchemaManager::get_load_schema(_load_id, _schema_id, -1, _table_id, _tablet_id));
+        ASSIGN_OR_RETURN(_tablet_schema, RuntimeSchemaManager::get_load_write_schema(_schema_id, _tablet_id, _txn_id));
         return Status::OK();
     } else {
         return res.status();
@@ -612,6 +612,7 @@ StatusOr<TxnLogPtr> DeltaWriterImpl::finish_with_txnlog(DeltaWriterFinishMode mo
         *txn_log->mutable_load_id() = _load_id;
     }
     auto op_write = txn_log->mutable_op_write();
+    op_write->set_schema_id(_schema_id);
 
     for (auto& f : _tablet_writer->files()) {
         if (is_segment(f.path)) {

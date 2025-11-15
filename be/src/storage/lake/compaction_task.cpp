@@ -107,4 +107,9 @@ bool CompactionTask::should_enable_pk_parallel_execution(int64_t input_bytes) {
            input_bytes >= config::pk_parallel_execution_threshold_bytes;
 }
 
+void CompactionTask::_set_version_and_schema_id(TxnLogPB_OpCompaction* op_compaction) {
+    op_compaction->set_compact_version(_tablet.metadata()->version());
+    op_compaction->set_schema_id(_tablet_schema->id());
+}
+
 } // namespace starrocks::lake

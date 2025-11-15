@@ -24,7 +24,7 @@ Status CloudNativeIndexCompactionTask::execute(CancelFunc cancel_func, ThreadPoo
     auto op_compaction = txn_log->mutable_op_compaction();
     txn_log->set_tablet_id(_tablet.id());
     txn_log->set_txn_id(_txn_id);
-    op_compaction->set_compact_version(_tablet.metadata()->version());
+    _set_version_and_schema_id(op_compaction);
     RETURN_IF_ERROR(cancel_func());
     RETURN_IF_ERROR(execute_index_major_compaction(txn_log.get()));
     _context->progress.update(100);

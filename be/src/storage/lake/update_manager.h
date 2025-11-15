@@ -104,7 +104,7 @@ public:
 
     Status _handle_column_upsert_mode(const TxnLogPB_OpWrite& op_write, int64_t txn_id,
                                       const TabletMetadataPtr& metadata, Tablet* tablet, LakePrimaryIndex& index,
-                                      MetaFileBuilder* builder, int64_t base_version, uint32_t rowset_id);
+                                      MetaFileBuilder* builder, int64_t base_version, uint32_t rowset_id, const TabletSchemaCSPtr& rowset_schema);
 
     Status _handle_delete_files(const TxnLogPB_OpWrite& op_write, int64_t txn_id, const TabletMetadataPtr& metadata,
                                 Tablet* tablet, LakePrimaryIndex& index, IndexEntry* index_entry,

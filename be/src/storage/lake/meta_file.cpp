@@ -23,6 +23,7 @@
 #include "storage/lake/metacache.h"
 #include "storage/lake/update_manager.h"
 #include "storage/protobuf_file.h"
+#include "storage/runtime_schema_manager.h"
 #include "util/coding.h"
 #include "util/defer_op.h"
 #include "util/raw_container.h"
@@ -107,7 +108,8 @@ void MetaFileBuilder::append_dcg(uint32_t rssid,
 }
 
 void MetaFileBuilder::apply_opwrite(const TxnLogPB_OpWrite& op_write, const std::map<int, FileInfo>& replace_segments,
-                                    const std::vector<FileMetaPB>& orphan_files) {
+                                    const std::vector<FileMetaPB>& orphan_files,
+                                    const TabletSchemaCSPtr& rowset_schema) {
     auto rowset = _tablet_meta->add_rowsets();
     rowset->CopyFrom(op_write.rowset());
 
@@ -151,14 +153,7 @@ void MetaFileBuilder::apply_opwrite(const TxnLogPB_OpWrite& op_write, const std:
         DCHECK(is_segment(orphan_file.name()));
         _tablet_meta->mutable_orphan_files()->Add()->CopyFrom(orphan_file);
     }
-    if (!_tablet_meta->rowset_to_schema().empty()) {
-        auto schema_id = _tablet_meta->schema().id();
-        (*_tablet_meta->mutable_rowset_to_schema())[rowset->id()] = schema_id;
-        if (_tablet_meta->historical_schemas().count(schema_id) <= 0) {
-            auto& item = (*_tablet_meta->mutable_historical_schemas())[schema_id];
-            item.CopyFrom(_tablet_meta->schema());
-        }
-    }
+    RuntimeSchemaManager::update_load_publish_schema(rowset->id(), rowset_schema, _tablet_meta.get());
 }
 
 void MetaFileBuilder::apply_column_mode_partial_update(const TxnLogPB_OpWrite& op_write) {
@@ -286,7 +281,7 @@ void MetaFileBuilder::remove_compacted_sst(const TxnLogPB_OpCompaction& op_compa
 }
 
 Status MetaFileBuilder::apply_opcompaction(const TxnLogPB_OpCompaction& op_compaction,
-                                           uint32_t max_compact_input_rowset_id, int64_t output_rowset_schema_id) {
+                                           uint32_t max_compact_input_rowset_id, const TabletSchemaCSPtr& output_rowset_schema) {
     // delete input rowsets
     std::stringstream del_range_ss;
     std::vector<std::pair<uint32_t, uint32_t>> delete_delvec_sid_range;
@@ -380,35 +375,10 @@ Status MetaFileBuilder::apply_opcompaction(const TxnLogPB_OpCompaction& op_compa
         output_rowset_id = rowset->id();
     }
 
-    // update rowset schema id
-    if (!_tablet_meta->rowset_to_schema().empty()) {
-        for (int i = 0; i < op_compaction.input_rowsets_size(); i++) {
-            _tablet_meta->mutable_rowset_to_schema()->erase(op_compaction.input_rowsets(i));
-        }
-
-        if (has_output_rowset) {
-            _tablet_meta->mutable_rowset_to_schema()->insert({output_rowset_id, output_rowset_schema_id});
-        }
-
-        std::unordered_set<int64_t> schema_id;
-        for (auto& pair : _tablet_meta->rowset_to_schema()) {
-            schema_id.insert(pair.second);
-        }
-
-        for (auto it = _tablet_meta->mutable_historical_schemas()->begin();
-             it != _tablet_meta->mutable_historical_schemas()->end();) {
-            if (schema_id.find(it->first) == schema_id.end()) {
-                it = _tablet_meta->mutable_historical_schemas()->erase(it);
-            } else {
-                it++;
-            }
-        }
-
-        if (_tablet_meta->historical_schemas().count(_tablet_meta->schema().id()) <= 0) {
-            auto& item = (*_tablet_meta->mutable_historical_schemas())[_tablet_meta->schema().id()];
-            item.CopyFrom(_tablet_meta->schema());
-        }
-    }
+    // TODO would this break https://github.com/StarRocks/starrocks/pull/58186 ?
+    RuntimeSchemaManager::update_compaction_publish_schema(
+        input_rowsets_id, has_output_rowset ? std::optional<uint32_t>(output_rowset_id) : std::nullopt,
+        output_rowset_schema, _metadata.get());
 
     VLOG(2) << fmt::format(
             "MetaFileBuilder apply_opcompaction, id:{} input range:{} delvec del cnt:{} dcg del cnt:{} output:{}",
@@ -686,7 +656,7 @@ bool is_primary_key(const TabletMetadata& metadata) {
 
 void MetaFileBuilder::add_rowset(const RowsetMetadataPB& rowset_pb, const std::map<int, FileInfo>& replace_segments,
                                  const std::vector<FileMetaPB>& orphan_files, const std::vector<std::string>& dels,
-                                 const std::vector<std::string>& del_encryption_metas) {
+                                 const std::vector<std::string>& del_encryption_metas, const TabletSchemaCSPtr& rowset_schema) {
     // If this is the first call, copy rowset_pb directly
     if (_pending_rowset_data.rowset_pb.segments_size() == 0) {
         _pending_rowset_data.rowset_pb.CopyFrom(rowset_pb);
@@ -776,15 +746,7 @@ void MetaFileBuilder::set_final_rowset() {
         _tablet_meta->mutable_orphan_files()->Add()->CopyFrom(orphan_file);
     }
 
-    // Handle schema mapping (same logic as apply_opwrite)
-    if (!_tablet_meta->rowset_to_schema().empty()) {
-        auto schema_id = _tablet_meta->schema().id();
-        (*_tablet_meta->mutable_rowset_to_schema())[rowset->id()] = schema_id;
-        if (_tablet_meta->historical_schemas().count(schema_id) <= 0) {
-            auto& item = (*_tablet_meta->mutable_historical_schemas())[schema_id];
-            item.CopyFrom(_tablet_meta->schema());
-        }
-    }
+    RuntimeSchemaManager::update_load_publish_schema(rowset->id(), _merged_rowset_schema, _tablet_meta.get());
 
     // Clear pending cache
     _pending_rowset_data = PendingRowsetData{};
@@ -792,7 +754,7 @@ void MetaFileBuilder::set_final_rowset() {
 
 void MetaFileBuilder::batch_apply_opwrite(const TxnLogPB_OpWrite& op_write,
                                           const std::map<int, FileInfo>& replace_segments,
-                                          const std::vector<FileMetaPB>& orphan_files) {
+                                          const std::vector<FileMetaPB>& orphan_files, const TabletSchemaCSPtr& output_rowset_schema) {
     // Extract del files and encryption metas similar to apply_opwrite
     std::vector<std::string> dels;
     std::vector<std::string> del_encryption_metas;
@@ -813,6 +775,9 @@ void MetaFileBuilder::batch_apply_opwrite(const TxnLogPB_OpWrite& op_write,
 
     // Accumulate into pending rowset
     add_rowset(op_write.rowset(), replace_segments, orphan_files, dels, del_encryption_metas);
+    if (_merged_rowset_schema == nullptr || _merged_rowset_schema->schema_version() < output_rowset_schema->schema_version()) {
+        _merged_rowset_schema = output_rowset_schema;
+    }
 }
 
 } // namespace starrocks::lake

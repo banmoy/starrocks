@@ -601,7 +601,6 @@ Status RowsetUpdateState::_resolve_conflict(uint32_t segment_id, const RowsetUpd
             params.tablet->id(), _base_versions[segment_id], _upserts[segment_id]->pk_column, &new_rss_rowids, false));
 
     size_t total_conflicts = 0;
-    std::shared_ptr<TabletSchema> tablet_schema = std::make_shared<TabletSchema>(params.metadata->schema());
     std::vector<ColumnId> read_column_ids = get_read_columns_ids(params.op_write, params.tablet_schema);
     // get rss_rowids to identify conflict exist or not
     int64_t t_start = MonotonicMillis();

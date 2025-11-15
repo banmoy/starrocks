@@ -228,6 +228,7 @@ message TxnLogPB {
         repeated string rewrite_segments = 4;
         repeated bytes del_encryption_metas = 5;
         repeated FileMetaPB ssts = 6;
+        optional int64 schema_id = 7;
     }
 
     message OpCompaction {
@@ -246,6 +247,7 @@ message TxnLogPB {
         optional int32 new_segment_offset = 6;
         optional int32 new_segment_count = 7;
         repeated FileMetaPB ssts = 8;
+        optional int64 schema_id = 9;
     }
 
     message OpSchemaChange {

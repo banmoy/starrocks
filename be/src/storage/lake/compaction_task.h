@@ -56,6 +56,8 @@ public:
     bool should_enable_pk_parallel_execution(int64_t input_bytes);
 
 protected:
+    void _set_version_and_schema_id(TxnLogPB_OpCompaction* op_compaction);
+
     int64_t _txn_id;
     VersionedTablet _tablet;
     std::vector<std::shared_ptr<Rowset>> _input_rowsets;

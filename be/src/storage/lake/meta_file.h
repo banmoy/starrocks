@@ -44,15 +44,15 @@ public:
                     const std::vector<std::vector<ColumnUID>>& unique_column_id_list);
     // handle txn log
     void apply_opwrite(const TxnLogPB_OpWrite& op_write, const std::map<int, FileInfo>& replace_segments,
-                       const std::vector<FileMetaPB>& orphan_files);
-    void apply_column_mode_partial_update(const TxnLogPB_OpWrite& op_write);
+                       const std::vector<FileMetaPB>& orphan_files, const TabletSchemaCSPtr& rowset_schema);
+    void apply_column_mode_partial_update(const TxnLogPB_OpWrite& op_write, const TabletSchemaCSPtr& rowset_schema);
     Status apply_opcompaction(const TxnLogPB_OpCompaction& op_compaction, uint32_t max_compact_input_rowset_id,
-                              int64_t output_rowset_schema_id);
+                            const TabletSchemaCSPtr& output_rowset_schema);
     void apply_opcompaction_with_conflict(const TxnLogPB_OpCompaction& op_compaction);
 
     // batch processing functions for merging multiple opwrites into one rowset
     void batch_apply_opwrite(const TxnLogPB_OpWrite& op_write, const std::map<int, FileInfo>& replace_segments,
-                             const std::vector<FileMetaPB>& orphan_files);
+                             const std::vector<FileMetaPB>& orphan_files, const TabletSchemaCSPtr& output_rowset_schema);
     void add_rowset(const RowsetMetadataPB& rowset_pb, const std::map<int, FileInfo>& replace_segments,
                     const std::vector<FileMetaPB>& orphan_files, const std::vector<std::string>& dels,
                     const std::vector<std::string>& del_encryption_metas);
@@ -124,6 +124,8 @@ private:
     RecoverFlag _recover_flag = RecoverFlag::OK;
     // Pending rowset data for batch processing
     PendingRowsetData _pending_rowset_data;
+    // Only used for batch processing, the schema of the merged rowset
+    TabletSchemaCSPtr _merged_rowset_schema = nullptr
 };
 
 Status get_del_vec(TabletManager* tablet_mgr, const TabletMetadata& metadata, const DelvecPagePB& delvec_page,

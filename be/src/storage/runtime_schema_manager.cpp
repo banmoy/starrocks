@@ -14,48 +14,164 @@
 
 #include "storage/runtime_schema_manager.h"
 
+#include <fmt/format.h>
+
 #include "agent/master_info.h"
 #include "runtime/client_cache.h"
+#include "runtime/exec_env.h"
+#include "storage/lake/tablet_manager.h"
 #include "storage/metadata_util.h"
+#include "storage/tablet_schema_map.h"
 #include "util/thrift_rpc_helper.h"
 
 namespace starrocks {
 
-StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(const PUniqueId& load_id, int64_t schema_id,
-                                                                  int64_t db_id, int64 table_id, int64_t tablet_id) {
-    TUniqueId query_id;
-    query_id.__set_hi(load_id.hi());
-    query_id.__set_lo(load_id.lo());
+StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_write_schema(int64_t schema_id, int64_t tablet_id,
+        int64_t txn_id, const TabletMetadataPtr& tablet_meta) {
+    // TODO get schemas from
+    // 1. global schema cache
+    // 2. TabletManager::get_latest_cached_tablet_metadata
+    // 3. FE
+    TGetRuntimeSchemaRequest request;
+    request.__set_schema_type(TRuntimeSchemaType::LOAD);
+    request.__set_schema_id(schema_id);
+    request.__set_tablet_id(tablet_id);
+    request.__set_txn_id(txn_id);
     TNetworkAddress master = get_master_address();
-    return get_schema(query_id, schema_id, db_id, table_id, tablet_id, TRuntimeSchemaType::LOAD, master, nullptr);
+    return get_schema_from_fe(request, master);
+}
+
+
+StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_publish_schema(const TxnLogPB_OpWrite& op_write,
+                                                                          int64_t tablet_id, int64_t txn_id,
+                                                                          const TabletMetadataPtr& tablet_meta) {
+    DCHECK(tablet_meta != nullptr);
+    int64_t rowset_schema_id = op_write.has_schema_id() ? op_write.schema_id() : tablet_meta->schema().id();
+    // TODO get schema from
+    // 1. global schema cache
+    // 2. tablet_meta schema + historical schemas
+    // 3. FE
+    TGetRuntimeSchemaRequest request;
+    request.__set_schema_type(TRuntimeSchemaType::LOAD);
+    request.__set_schema_id(rowset_schema_id);
+    request.__set_tablet_id(tablet_id);
+    request.__set_txn_id(txn_id);
+    TNetworkAddress master = get_master_address();
+    return get_schema_from_fe(request, master);
+}
+
+void RuntimeSchemaManager::update_load_publish_schema(uint32_t rowset_id, const TabletSchemaCSPtr& rowset_schema,
+                                                      TabletMetadata* tablet_meta) {
+    auto rowset_schema_id = rowset_schema->id();
+    bool new_schema = tablet_meta->schema().id() != rowset_schema_id &&
+                      tablet_meta->historical_schemas().count(rowset_schema_id) <= 0;
+    if (new_schema) {
+        bool new_latest_schema = rowset_schema->schema_version() > tablet_meta->schema().schema_version();
+        if (new_latest_schema) {
+            // move rowsets with the current latest schema to historical schemas
+            auto current_latest_schema_id = tablet_meta->schema().id();
+            auto* rowset_to_schema = tablet_meta->mutable_rowset_to_schema();
+            for (int i = 0; i < tablet_meta->rowsets_size(); i++) {
+                auto rid = tablet_meta->rowsets(i).id();
+                if (rowset_to_schema->count(rowset_id) <= 0 && rowset_id != rid) {
+                    (*rowset_to_schema)[rid] = current_latest_schema_id;
+                }
+            }
+            if (tablet_meta->historical_schemas().count(current_latest_schema_id) <= 0) {
+                auto& item = (*tablet_meta->mutable_historical_schemas())[current_latest_schema_id];
+                item.CopyFrom(tablet_meta->schema());
+            }
+            // no need to put rowset_id to historical
+            tablet_meta->mutable_schema()->Clear();
+            rowset_schema->to_schema_pb(tablet_meta->mutable_schema());
+        } else {
+            auto& item = (*tablet_meta->mutable_historical_schemas())[rowset_schema_id];
+            rowset_schema->to_schema_pb(&item);
+            (*tablet_meta->mutable_rowset_to_schema())[rowset_id] = rowset_schema_id;
+        }
+    } else {
+        bool latest_schema = rowset_schema->schema_version() == tablet_meta->schema().schema_version();
+        if (!latest_schema) {
+            (*tablet_meta->mutable_rowset_to_schema())[rowset_id] = rowset_schema_id;
+        }
+    }
+}
+
+StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_compaction_publish_schema(
+        const TxnLogPB_OpCompaction& op_compaction, int64_t tablet_id, const std::vector<uint32_t>& input_rowsets_id,
+        const TabletMetadataPtr& tablet_meta) {
+    DCHECK(tablet_meta != nullptr);
+    if (op_compaction.has_schema_id()) {
+        auto schema_id = op_compaction.schema_id();
+        if (schema_id == tablet_meta->schema().id()) {
+            return GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->schema()).first;
+        } else if (tablet_meta->historical_schemas().count(schema_id) > 0) {
+            return GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->historical_schemas().at(schema_id)).first;
+        } else {
+            return Status::InternalError(
+                    fmt::format("output rowset schema id {} not found in tablet metadata", schema_id));
+        }
+    } else {
+        // for compitible
+        return ExecEnv::GetInstance()->lake_tablet_manager()->get_output_rowset_schema(input_rowsets_id,
+                                                                                       tablet_meta.get());
+    }
+}
+
+void RuntimeSchemaManager::update_compaction_publish_schema(const std::vector<uint32_t>& input_rowsets_id,
+                                                            uint32_t output_rowset_id,
+                                                            const TabletSchemaCSPtr& output_rowset_schema,
+                                                            TabletMetadata* tablet_meta) {
+    if (tablet_meta->rowset_to_schema().empty()) {
+        // TODO check output_rowset_schema id is equal to tablet_meta->schema().id()
+        return;
+    }
+
+    for (int i = 0; i < input_rowsets_id.size(); i++) {
+        tablet_meta->mutable_rowset_to_schema()->erase(input_rowsets_id[i]);
+    }
+
+    if (output_rowset_id.has_value() && output_rowset_schema->id() != tablet_meta->schema().id()) {
+        // TODO check whether output_rowset_schema is in historical schemas
+        tablet_meta->mutable_rowset_to_schema()->insert({output_rowset_id.value(), output_rowset_schema->id()});
+    }
+
+    std::unordered_set<int64_t> schema_id;
+    for (auto& pair : tablet_meta->rowset_to_schema()) {
+        schema_id.insert(pair.second);
+    }
+
+    for (auto it = tablet_meta->mutable_historical_schemas()->begin();
+         it != tablet_meta->mutable_historical_schemas()->end();) {
+        if (schema_id.find(it->first) == schema_id.end()) {
+            it = tablet_meta->mutable_historical_schemas()->erase(it);
+        } else {
+            it++;
+        }
+    }
 }
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_scan_schema(const TUniqueId& query_id, int64_t schema_id,
-                                                                  int64_t db_id, int64 table_id, int64_t tablet_id,
-                                                                  const TNetworkAddress& coordinator_address,
+                                                                  int64_t tablet_id, const TNetworkAddress& fe_addr,
                                                                   const TabletMetadataPtr& tablet_meta) {
-    return get_schema(query_id, schema_id, db_id, table_id, tablet_id, TRuntimeSchemaType::SCAN, coordinator_address,
-                      tablet_meta);
+    // TODO check schema cache and tablet metadata
+    // if tablet_meta, try to call TabletManager::get_latest_cached_tablet_metadata
+    // need to update schema cache
+    TGetRuntimeSchemaRequest request;
+    request.__set_schema_type(TRuntimeSchemaType::SCAN);
+    request.__set_schema_id(schema_id);
+    request.__set_query_id(query_id);
+    request.__set_tablet_id(tablet_id);
+    return get_schema_from_fe(request, fe_addr);
 }
 
-StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema(const TUniqueId& query_id, int64_t schema_id,
-                                                             int64_t db_id, int64 table_id, int64_t tablet_id,
-                                                             TRuntimeSchemaType::type schema_type,
-                                                             const TNetworkAddress& coordiantor,
-                                                             const TabletMetadataPtr& tablet_meta) {
+StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetRuntimeSchemaRequest& request,
+                                                                     const TNetworkAddress& fe_addr) {
     TBatchGetRuntimeSchemaRequest batch_request;
-    TGetRuntimeSchemaRequest request;
-    request.__set_schema_id(schema_id);
-    request.__set_schema_type(schema_type);
-    request.__set_query_id(query_id);
-    request.__set_db_id(db_id);
-    request.__set_table_id(table_id);
-    request.__set_tablet_id(tablet_id);
     batch_request.__set_requests(std::vector<TGetRuntimeSchemaRequest>{request});
-
     TBatchGetRuntimeSchemaResult result;
     RETURN_IF_ERROR(ThriftRpcHelper::rpc<FrontendServiceClient>(
-            coordiantor.hostname, coordiantor.port,
+            fe_addr.hostname, fe_addr.port,
             [&batch_request, &result](FrontendServiceConnection& client) {
                 client->getRuntimeSchema(result, batch_request);
             },
@@ -79,6 +195,23 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema(const TUniqueId& qu
               << ", db_id: " << db_id << ", table_id: " << table_id << ", tablet_id: " << tablet_id
               << ", schema_type: " << schema_type;
     return const_schema_ptr;
+}
+
+static void RuntimeSchemaManager::update_alter_schema(const TabletSchemaPB& schema, TabletMetadata* tablet_meta) {
+    auto current_latest_schema_id = tablet_meta->schema().id();
+    auto* rowset_to_schema = tablet_meta->mutable_rowset_to_schema();
+    for (int i = 0; i < tablet_meta->rowsets_size(); i++) {
+        auto rid = tablet_meta->rowsets(i).id();
+        if (rowset_to_schema->count(rowset_id) <= 0) {
+            (*rowset_to_schema)[rid] = current_latest_schema_id;
+        }
+    }
+    if (tablet_meta->historical_schemas().count(current_latest_schema_id) <= 0) {
+        auto& item = (*tablet_meta->mutable_historical_schemas())[current_latest_schema_id];
+        item.CopyFrom(tablet_meta->schema());
+    }
+    tablet_meta->mutable_schema()->Clear();
+    tablet_meta->mutable_schema()->CopyFrom(schema);
 }
 
 } // namespace starrocks

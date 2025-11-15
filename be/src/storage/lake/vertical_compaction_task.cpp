@@ -98,7 +98,7 @@ Status VerticalCompactionTask::execute(CancelFunc cancel_func, ThreadPool* flush
     txn_log->set_tablet_id(_tablet.id());
     txn_log->set_txn_id(_txn_id);
     RETURN_IF_ERROR(fill_compaction_segment_info(op_compaction, writer.get()));
-    op_compaction->set_compact_version(_tablet.metadata()->version());
+    _set_version_and_schema_id(op_compaction);
     RETURN_IF_ERROR(execute_index_major_compaction(txn_log.get()));
     TEST_ERROR_POINT("VerticalCompactionTask::execute::1");
     if (_context->skip_write_txnlog) {
