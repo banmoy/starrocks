@@ -22,7 +22,6 @@
 #include "storage/lake/tablet_manager.h"
 #include "storage/metadata_util.h"
 #include "storage/tablet_schema_map.h"
-#include "util/bthreads/single_flight.h"
 #include "util/thrift_rpc_helper.h"
 
 namespace starrocks {
