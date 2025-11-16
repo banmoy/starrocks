@@ -17,7 +17,6 @@
 #include "gen_cpp/FrontendService.h"
 #include "storage/lake/tablet_metadata.h"
 #include "storage/tablet_schema.h"
-#include "util/bthreads/single_flight.h"
 
 namespace starrocks {
 
@@ -59,9 +58,6 @@ private:
                                                        const TNetworkAddress& fe_addr);
     static StatusOr<TabletSchemaCSPtr> get_schema_from_fe(const TGetRuntimeSchemaRequest& request,
                                                           const TNetworkAddress& fe_addr);
-
-    // schema id -> schema
-    static bthreads::singleflight::Group<int64_t, StatusOr<TabletSchemaCSPtr>> _schema_group;
 };
 
 } // namespace starrocks

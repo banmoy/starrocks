@@ -22,9 +22,13 @@
 #include "storage/lake/tablet_manager.h"
 #include "storage/metadata_util.h"
 #include "storage/tablet_schema_map.h"
+#include "util/bthreads/single_flight.h"
 #include "util/thrift_rpc_helper.h"
 
 namespace starrocks {
+
+// schema id -> schema
+bthreads::singleflight::Group<int64_t, StatusOr<TabletSchemaCSPtr>> RuntimeSchemaManager::schema_group;
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_write_schema(int64_t schema_id, int64_t tablet_id,
                                                                         int64_t txn_id,
@@ -203,7 +207,7 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema_from_fe(int64_
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::group_schema_from_fe(const TGetRuntimeSchemaRequest& request,
                                                                        const TNetworkAddress& fe_addr) {
-    return _schema_group.Do(request.schema_id, [&]() { return get_schema_from_fe(request, fe_addr); });
+    return schema_group.Do(request.schema_id, [&]() { return get_schema_from_fe(request, fe_addr); });
 }
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetRuntimeSchemaRequest& request,
