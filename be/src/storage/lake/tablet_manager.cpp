@@ -1024,7 +1024,7 @@ StatusOr<TabletSchemaPtr> TabletManager::get_output_rowset_schema(const std::vec
             return Status::InternalError(fmt::format("input rowset {} not found", input_rowset[i]));
         }
 
-        ASSIGN_OR_RETURN(auto rowset_schema, RuntimeSchemaManager::get_rowset_schema(metadata, input_rowset[i]));
+        ASSIGN_OR_RETURN(auto rowset_schema, RuntimeSchemaManager::get_rowset_schema(*metadata, input_rowset[i]));
         if (output_rowset_schema == nullptr ||
             rowset_schema->schema_version() > output_rowset_schema->schema_version()) {
             output_rowset_schema = std::move(rowset_schema);
