@@ -29,35 +29,45 @@ namespace starrocks {
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_write_schema(int64_t schema_id, int64_t tablet_id,
                                                                         int64_t txn_id,
                                                                         const TabletMetadataPtr& tablet_meta) {
-    // TODO get schemas from
-    // 1. global schema cache
-    // 2. TabletManager::get_latest_cached_tablet_metadata
-    // 3. FE
-    TGetRuntimeSchemaRequest request;
-    request.__set_schema_type(TRuntimeSchemaType::LOAD);
-    request.__set_schema_id(schema_id);
-    request.__set_tablet_id(tablet_id);
-    request.__set_txn_id(txn_id);
-    TNetworkAddress master = get_master_address();
-    return get_schema_from_fe(request, master);
+    auto schema = GlobalTabletSchemaMap::Instance()->emplace(schema_id).first;
+    if (schema == nullptr) {
+        const TabletMetadataPtr metadata = tablet_meta != nullptr ? tablet_meta :
+            ExecEnv::GetInstance()->lake_tablet_manager()->get_latest_cached_tablet_metadata(tablet_id);
+        if (metadata != nullptr) {
+            if (schema_id == tablet_meta->schema().id()) {
+                schema = GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->schema()).first;
+            } else if (tablet_meta->historical_schemas().count(schema_id) > 0) {
+                schema = GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->historical_schemas().at(schema_id)).first;
+            }
+        }
+    }
+    if (schema != nullptr) {
+        return schema;
+    }
+    return get_load_schema_from_fe(schema_id, tablet_id, txn_id);
 }
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_publish_schema(const TxnLogPB_OpWrite& op_write,
                                                                           int64_t tablet_id, int64_t txn_id,
                                                                           const TabletMetadataPtr& tablet_meta) {
     DCHECK(tablet_meta != nullptr);
-    int64_t rowset_schema_id = op_write.has_schema_id() ? op_write.schema_id() : tablet_meta->schema().id();
-    // TODO get schema from
-    // 1. global schema cache
-    // 2. tablet_meta schema + historical schemas
-    // 3. FE
-    TGetRuntimeSchemaRequest request;
-    request.__set_schema_type(TRuntimeSchemaType::LOAD);
-    request.__set_schema_id(rowset_schema_id);
-    request.__set_tablet_id(tablet_id);
-    request.__set_txn_id(txn_id);
-    TNetworkAddress master = get_master_address();
-    return get_schema_from_fe(request, master);
+    int64_t schema_id = op_write.has_schema_id() ? op_write.schema_id() : tablet_meta->schema().id();
+    auto schema = GlobalTabletSchemaMap::Instance()->emplace(schema_id).first;
+    if (schema == nullptr) {
+        const TabletMetadataPtr metadata = tablet_meta != nullptr ? tablet_meta :
+            ExecEnv::GetInstance()->lake_tablet_manager()->get_latest_cached_tablet_metadata(tablet_id);
+        if (metadata != nullptr) {
+            if (schema_id == tablet_meta->schema().id()) {
+                schema = GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->schema()).first;
+            } else if (tablet_meta->historical_schemas().count(schema_id) > 0) {
+                schema = GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->historical_schemas().at(schema_id)).first;
+            }
+        }
+    }
+    if (schema != nullptr) {
+        return schema;
+    }
+    return get_load_schema_from_fe(schema_id, tablet_id, txn_id);
 }
 
 void RuntimeSchemaManager::update_load_publish_schema(uint32_t rowset_id, const TabletSchemaCSPtr& rowset_schema,
@@ -152,19 +162,48 @@ void RuntimeSchemaManager::update_compaction_publish_schema(const std::vector<ui
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_scan_schema(const TUniqueId& query_id, int64_t schema_id,
                                                                   int64_t tablet_id, const TNetworkAddress& fe_addr,
                                                                   const TabletMetadataPtr& tablet_meta) {
-    // TODO check schema cache and tablet metadata
-    // if tablet_meta, try to call TabletManager::get_latest_cached_tablet_metadata
-    // need to update schema cache
+    auto schema = GlobalTabletSchemaMap::Instance()->emplace(schema_id).first;
+    if (schema == nullptr) {
+        const TabletMetadataPtr metadata = tablet_meta != nullptr ? tablet_meta :
+            ExecEnv::GetInstance()->lake_tablet_manager()->get_latest_cached_tablet_metadata(tablet_id);
+        if (metadata != nullptr) {
+            if (schema_id == tablet_meta->schema().id()) {
+                schema = GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->schema()).first;
+            } else if (tablet_meta->historical_schemas().count(schema_id) > 0) {
+                schema = GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->historical_schemas().at(schema_id)).first;
+            }
+        }
+    }
+    if (schema != nullptr) {
+        return schema;
+    }
     TGetRuntimeSchemaRequest request;
     request.__set_schema_type(TRuntimeSchemaType::SCAN);
     request.__set_schema_id(schema_id);
     request.__set_query_id(query_id);
     request.__set_tablet_id(tablet_id);
-    return get_schema_from_fe(request, fe_addr);
+    return group_schema_from_fe(request, fe_addr);
+}
+
+StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema_from_fe(int64_t schema_id, int64_t tablet_id, int64_t txn_id) {
+    TGetRuntimeSchemaRequest request;
+    request.__set_schema_type(TRuntimeSchemaType::LOAD);
+    request.__set_schema_id(schema_id);
+    request.__set_tablet_id(tablet_id);
+    request.__set_txn_id(txn_id);
+    return group_schema_from_fe(request, get_master_address());
+}
+
+StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::group_schema_from_fe(const TGetRuntimeSchemaRequest& request,
+                                                                     const TNetworkAddress& fe_addr) {
+    return _schema_group.Do(request.schema_id, [&]() {
+        return get_schema_from_fe(request, fe_addr);
+    });
 }
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetRuntimeSchemaRequest& request,
                                                                      const TNetworkAddress& fe_addr) {
+    // TODO batch requests for different schemas
     TBatchGetRuntimeSchemaRequest batch_request;
     batch_request.__set_requests(std::vector<TGetRuntimeSchemaRequest>{request});
     TBatchGetRuntimeSchemaResult result;
@@ -188,7 +227,8 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetR
     TabletSchemaPB schema_pb;
     RETURN_IF_ERROR(convert_t_schema_to_pb_schema(single_result.schema, compression_type, &schema_pb));
     TabletSchemaSPtr schema_ptr = TabletSchema::create(schema_pb);
-    TabletSchemaCSPtr const_schema_ptr = schema_ptr;
+    // PUT it in cache
+    TabletSchemaCSPtr const_schema_ptr = GlobalTabletSchemaMap::Instance()->emplace(schema_ptr).first
     LOG(INFO) << "get_schema success, query_id: " << print_id(request.query_id) << ", schema_id: " << request.schema_id
               << ", db_id: " << request.db_id << ", table_id: " << request.table_id
               << ", tablet_id: " << request.tablet_id << ", schema_type: " << static_cast<int>(request.schema_type);
