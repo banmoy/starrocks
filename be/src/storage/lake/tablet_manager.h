@@ -142,7 +142,7 @@ public:
 
     StatusOr<TxnLogPtr> get_txn_vlog(const std::string& path, bool fill_cache = true);
 
-    StatusOr<TabletSchemaPtr> get_output_rowset_schema(std::vector<uint32_t>& input_rowset,
+    StatusOr<TabletSchemaPtr> get_output_rowset_schema(const std::vector<uint32_t>& input_rowset,
                                                        const TabletMetadata* metadata);
 
 #ifdef USE_STAROS
