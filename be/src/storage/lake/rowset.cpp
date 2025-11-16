@@ -58,7 +58,7 @@ Rowset::Rowset(TabletManager* tablet_mgr, TabletMetadataPtr tablet_metadata, int
           _parallel_load(config::enable_load_segment_parallel),
           _compaction_segment_limit(0) {
     auto rowset_id = _tablet_metadata->rowsets(rowset_index).id();
-    StatusOr<TabletSchemaPtr> rowset_schema = RuntimeSchemaManager::get_rowset_schema(_tablet_metadata, rowset_id));
+    StatusOr<TabletSchemaPtr> rowset_schema = RuntimeSchemaManager::get_rowset_schema(*_tablet_metadata, rowset_id);
     // TODO refactor constructor to allow return not ok rather than crash
     CHECK(rowset_schema.ok()) << rowset_schema.status();
     _tablet_schema = std::move(rowset_schema.value());

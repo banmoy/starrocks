@@ -46,6 +46,7 @@
 #include "storage/metadata_util.h"
 #include "storage/protobuf_file.h"
 #include "storage/rowset/segment.h"
+#include "storage/runtime_schema_manager.h"
 #include "storage/tablet_schema_map.h"
 #include "testutil/sync_point.h"
 #include "util/defer_op.h"
