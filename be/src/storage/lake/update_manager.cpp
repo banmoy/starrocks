@@ -1309,7 +1309,7 @@ Status UpdateManager::publish_primary_compaction(const TxnLogPB_OpCompaction& op
     // 2. update primary index, and generate delete info.
     TRACE_COUNTER_INCREMENT("output_rowsets_size", output_rowset.num_segments());
     for (size_t i = 0; i < output_rowset.num_segments(); i++) {
-        RETURN_IF_ERROR(compaction_state.load_segments(&output_rowset, this, tablet_schema, i));
+        RETURN_IF_ERROR(compaction_state.load_segments(&output_rowset, this, output_rowset_schema, i));
         TRACE_COUNTER_INCREMENT("state_bytes", compaction_state.memory_usage());
         auto& pk_col = compaction_state.pk_cols[i];
         total_rows += pk_col->size();

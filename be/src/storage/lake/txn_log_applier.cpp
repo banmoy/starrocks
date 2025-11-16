@@ -589,9 +589,8 @@ private:
     Status apply_write_log(const TxnLogPB_OpWrite& op_write, int64_t txn_id) {
         TEST_ERROR_POINT("NonPrimaryKeyTxnLogApplier::apply_write_log");
         if (op_write.has_rowset() && (op_write.rowset().num_rows() > 0 || op_write.rowset().has_delete_predicate())) {
-            int64_t rowset_schema_id = op_write.has_schema_id() ? op_write.schema_id() : _metadata->schema().id();
             ASSIGN_OR_RETURN(auto rowset_schema, RuntimeSchemaManager::get_load_publish_schema(
-                                                         rowset_schema_id, _metadata->id(), txn_id, _metadata));
+                                                         op_write, _metadata->id(), txn_id, _metadata));
             auto rowset = _metadata->add_rowsets();
             rowset->CopyFrom(op_write.rowset());
             rowset->set_id(_metadata->next_rowset_id());

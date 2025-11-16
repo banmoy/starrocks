@@ -34,10 +34,10 @@ public:
     static void update_load_publish_schema(uint32_t rowset_id, const TabletSchemaCSPtr& rowset_schema,
                                            TabletMetadata* tablet_meta);
 
-    static StatusOr<int64_t> get_compaction_publish_schema(const TxnLogPB_OpCompaction& op_compaction,
-                                                           int64_t tablet_id,
-                                                           const std::vector<uint32_t>& input_rowsets_id,
-                                                           const TabletMetadataPtr& tablet_meta);
+    static StatusOr<TabletSchemaCSPtr> get_compaction_publish_schema(const TxnLogPB_OpCompaction& op_compaction,
+                                                                     int64_t tablet_id,
+                                                                     const std::vector<uint32_t>& input_rowsets_id,
+                                                                     const TabletMetadataPtr& tablet_meta);
 
     static void update_compaction_publish_schema(const std::vector<uint32_t>& input_rowsets_id,
                                                  std::optional<uint32_t> output_rowset_id,
@@ -48,10 +48,9 @@ public:
                                                        const TNetworkAddress& fe_addr,
                                                        const TabletMetadataPtr& tablet_meta = nullptr);
 
-    static void update_alter_schema( const TabletSchemaPB& schema, TabletMetadata* tablet_meta);
+    static void update_alter_schema(const TabletSchemaPB& schema, TabletMetadata* tablet_meta);
 
 private:
-
     static StatusOr<TabletSchemaCSPtr> get_schema_from_fe(const TGetRuntimeSchemaRequest& request,
                                                           const TNetworkAddress& fe_addr);
 };

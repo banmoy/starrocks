@@ -27,7 +27,8 @@
 namespace starrocks {
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_write_schema(int64_t schema_id, int64_t tablet_id,
-        int64_t txn_id, const TabletMetadataPtr& tablet_meta) {
+                                                                        int64_t txn_id,
+                                                                        const TabletMetadataPtr& tablet_meta) {
     // TODO get schemas from
     // 1. global schema cache
     // 2. TabletManager::get_latest_cached_tablet_metadata
@@ -40,7 +41,6 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_write_schema(int64_t 
     TNetworkAddress master = get_master_address();
     return get_schema_from_fe(request, master);
 }
-
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_publish_schema(const TxnLogPB_OpWrite& op_write,
                                                                           int64_t tablet_id, int64_t txn_id,
@@ -119,7 +119,7 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_compaction_publish_schema(
 }
 
 void RuntimeSchemaManager::update_compaction_publish_schema(const std::vector<uint32_t>& input_rowsets_id,
-                                                            uint32_t output_rowset_id,
+                                                            std::optional<uint32_t> output_rowset_id,
                                                             const TabletSchemaCSPtr& output_rowset_schema,
                                                             TabletMetadata* tablet_meta) {
     if (tablet_meta->rowset_to_schema().empty()) {
@@ -191,18 +191,18 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetR
     RETURN_IF_ERROR(convert_t_schema_to_pb_schema(single_result.schema, compression_type, &schema_pb));
     TabletSchemaSPtr schema_ptr = TabletSchema::create(schema_pb);
     TabletSchemaCSPtr const_schema_ptr = schema_ptr;
-    LOG(INFO) << "get_schema success, query_id: " << print_id(query_id) << ", schema_id: " << schema_id
-              << ", db_id: " << db_id << ", table_id: " << table_id << ", tablet_id: " << tablet_id
-              << ", schema_type: " << schema_type;
+    LOG(INFO) << "get_schema success, query_id: " << print_id(request.query_id) << ", schema_id: " << request.schema_id
+              << ", db_id: " << request.db_id << ", table_id: " << request.table_id
+              << ", tablet_id: " << request.tablet_id << ", schema_type: " << static_cast<int>(request.schema_type);
     return const_schema_ptr;
 }
 
-static void RuntimeSchemaManager::update_alter_schema(const TabletSchemaPB& schema, TabletMetadata* tablet_meta) {
+void RuntimeSchemaManager::update_alter_schema(const TabletSchemaPB& schema, TabletMetadata* tablet_meta) {
     auto current_latest_schema_id = tablet_meta->schema().id();
     auto* rowset_to_schema = tablet_meta->mutable_rowset_to_schema();
     for (int i = 0; i < tablet_meta->rowsets_size(); i++) {
         auto rid = tablet_meta->rowsets(i).id();
-        if (rowset_to_schema->count(rowset_id) <= 0) {
+        if (rowset_to_schema->count(rid) <= 0) {
             (*rowset_to_schema)[rid] = current_latest_schema_id;
         }
     }
