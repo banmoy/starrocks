@@ -28,10 +28,10 @@
 #include "storage/record_predicate/record_predicate_helper.h"
 #include "storage/rowset/rowid_range_option.h"
 #include "storage/rowset/rowset_options.h"
-#include "storage/runtime_schema_manager.h"
 #include "storage/rowset/segment.h"
 #include "storage/rowset/segment_options.h"
 #include "storage/rowset/short_key_range_option.h"
+#include "storage/runtime_schema_manager.h"
 #include "storage/tablet_schema_map.h"
 #include "storage/union_iterator.h"
 #include "types/logical_type.h"
@@ -59,6 +59,7 @@ Rowset::Rowset(TabletManager* tablet_mgr, TabletMetadataPtr tablet_metadata, int
           _compaction_segment_limit(0) {
     auto rowset_id = _tablet_metadata->rowsets(rowset_index).id();
     StatusOr<TabletSchemaPtr> rowset_schema = RuntimeSchemaManager::get_rowset_schema(_tablet_metadata, rowset_id));
+    // TODO refactor constructor to allow return not ok rather than crash
     CHECK(rowset_schema.ok()) << rowset_schema.status();
     _tablet_schema = std::move(rowset_schema.value());
 

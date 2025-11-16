@@ -212,7 +212,8 @@ void RuntimeSchemaManager::update_alter_schema(const TabletSchemaPB& schema, Tab
     tablet_meta->mutable_schema()->CopyFrom(schema);
 }
 
-StatusOr<TabletSchemaPtr> RuntimeSchemaManager::get_rowset_schema(const TabletMetadata& tablet_metadata, uint32_t rowset_id) {
+StatusOr<TabletSchemaPtr> RuntimeSchemaManager::get_rowset_schema(const TabletMetadata& tablet_metadata,
+                                                                  uint32_t rowset_id) {
     auto rowset_it = tablet_metadata.rowset_to_schema().find(rowset_id);
     if (rowset_it != tablet_metadata.rowset_to_schema().end()) {
         auto schema_it = tablet_metadata.historical_schemas().find(rowset_it->second);
