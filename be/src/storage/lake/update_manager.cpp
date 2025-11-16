@@ -227,7 +227,8 @@ Status UpdateManager::publish_primary_key_tablet(const TxnLogPB_OpWrite& op_writ
                                                  IndexEntry* index_entry, MetaFileBuilder* builder,
                                                  int64_t base_version, bool batch_apply) {
     FAIL_POINT_TRIGGER_EXECUTE(hook_publish_primary_key_tablet, {
-        ASSIGN_OR_RETURN(auto rowset_schema, RuntimeSchemaManager::get_load_publish_schema(op_write, metadata->id(), txn_id, metadata));
+        ASSIGN_OR_RETURN(auto rowset_schema,
+                         RuntimeSchemaManager::get_load_publish_schema(op_write, metadata->id(), txn_id, metadata));
         if (batch_apply) {
             builder->batch_apply_opwrite(op_write, {}, {}, rowset_schema);
         } else {
@@ -242,7 +243,8 @@ Status UpdateManager::publish_primary_key_tablet(const TxnLogPB_OpWrite& op_writ
             op_write.dels_size(), batch_apply);
     // 1. load rowset update data to cache, get upsert and delete list
     const uint32_t rowset_id = metadata->next_rowset_id();
-    ASSIGN_OR_RETURN(auto rowset_schema, RuntimeSchemaManager::get_load_publish_schema(op_write, metadata->id(), txn_id, metadata));
+    ASSIGN_OR_RETURN(auto rowset_schema,
+                     RuntimeSchemaManager::get_load_publish_schema(op_write, metadata->id(), txn_id, metadata));
     auto state_entry = _update_state_cache.get_or_create(cache_key(tablet->id(), txn_id));
     state_entry->update_expire_time(MonotonicMillis() + get_cache_expire_ms());
     // only use state entry once, remove it when publish finish or fail
@@ -294,7 +296,7 @@ Status UpdateManager::publish_primary_key_tablet(const TxnLogPB_OpWrite& op_writ
                 "segments_local:$5",
                 tablet->id(), txn_id, assigned_global_segments, local_id, global_segment_id, local_segments);
         // If a merge condition is configured, only update rows that satisfy the condition.
-        int32_t condition_column = _get_condition_column(op_write, *tablet_schema);
+        int32_t condition_column = _get_condition_column(op_write, *rowset_schema);
         // 2.2 Update primary index and collect delete information caused by key replacement.
         TRACE_COUNTER_SCOPE_LATENCY_US("update_index_latency_us");
         DCHECK(state.upserts(local_id) != nullptr);
@@ -556,7 +558,8 @@ Status UpdateManager::_handle_upsert_index_conflicts(const TabletMetadataPtr& me
 Status UpdateManager::_handle_column_upsert_mode(const TxnLogPB_OpWrite& op_write, int64_t txn_id,
                                                  const TabletMetadataPtr& metadata, Tablet* tablet,
                                                  LakePrimaryIndex& index, MetaFileBuilder* builder,
-                                                 int64_t base_version, uint32_t rowset_id, const TabletSchemaCSPtr& rowset_schema) {
+                                                 int64_t base_version, uint32_t rowset_id,
+                                                 const TabletSchemaCSPtr& rowset_schema) {
     if (op_write.txn_meta().partial_update_mode() != PartialUpdateMode::COLUMN_UPSERT_MODE) {
         return Status::OK();
     }
@@ -680,7 +683,7 @@ Status UpdateManager::publish_column_mode_partial_update(const TxnLogPB_OpWrite&
     DCHECK(index_entry != nullptr);
 
     ASSIGN_OR_RETURN(auto rowset_schema,
-        RuntimeSchemaManager::get_load_publish_schema(op_write, metadata->id(), txn_id, metadata);
+                     RuntimeSchemaManager::get_load_publish_schema(op_write, metadata->id(), txn_id, metadata));
     RssidFileInfoContainer rssid_fileinfo_container;
     rssid_fileinfo_container.add_rssid_to_file(*metadata);
 
@@ -701,8 +704,8 @@ Status UpdateManager::publish_column_mode_partial_update(const TxnLogPB_OpWrite&
     auto& index = dynamic_cast<LakePrimaryIndex&>(index_entry->value());
 
     // 1. handle inserted rows: for COLUMN_UPSERT_MODE, build full segments with only inserted rows and append to meta
-    RETURN_IF_ERROR(
-            _handle_column_upsert_mode(op_write, txn_id, metadata, tablet, index, builder, base_version, rowset_id, rowset_schema));
+    RETURN_IF_ERROR(_handle_column_upsert_mode(op_write, txn_id, metadata, tablet, index, builder, base_version,
+                                               rowset_id, rowset_schema));
 
     // 2. handle delete files and generate delvecs for existing rssids only
     RETURN_IF_ERROR(_handle_delete_files(op_write, txn_id, metadata, tablet, index, index_entry, builder, base_version,
@@ -1203,10 +1206,11 @@ Status UpdateManager::light_publish_primary_compaction(const TxnLogPB_OpCompacti
     // 1. init some state
     auto& index = index_entry->value();
     std::vector<uint32_t> input_rowsets_id(op_compaction.input_rowsets().begin(), op_compaction.input_rowsets().end());
-    ASSIGN_OR_RETURN(auto output_rowset_schema, RuntimeSchemaManager::get_compaction_publish_schema(op_compaction, metadata.id(), input_rowsets_id, metadata));
+    ASSIGN_OR_RETURN(auto output_rowset_schema, RuntimeSchemaManager::get_compaction_publish_schema(
+                                                        op_compaction, metadata.id(), input_rowsets_id, metadata));
 
     Rowset output_rowset(tablet.tablet_mgr(), tablet.id(), &op_compaction.output_rowset(), -1 /*unused*/,
-                output_rowset_schema);
+                         output_rowset_schema);
     vector<std::pair<uint32_t, DelVectorPtr>> delvecs;
     std::map<uint32_t, size_t> segment_id_to_add_dels;
     // get max rowset id in input rowsets
@@ -1259,7 +1263,8 @@ Status UpdateManager::publish_primary_compaction(const TxnLogPB_OpCompaction& op
     FAIL_POINT_TRIGGER_EXECUTE(hook_publish_primary_key_tablet_compaction, {
         std::vector<uint32_t> input_rowsets_id(op_compaction.input_rowsets().begin(),
                                                op_compaction.input_rowsets().end());
-        ASSIGN_OR_RETURN(auto output_rowset_schema, RuntimeSchemaManager::get_compaction_publish_schema(op_compaction, metadata.id(), input_rowsets_id, metadata));
+        ASSIGN_OR_RETURN(auto output_rowset_schema, RuntimeSchemaManager::get_compaction_publish_schema(
+                                                            op_compaction, metadata.id(), input_rowsets_id, metadata));
 
         return builder->apply_opcompaction(
                 op_compaction,
@@ -1278,8 +1283,10 @@ Status UpdateManager::publish_primary_compaction(const TxnLogPB_OpCompaction& op
     // 1. iterate output rowset, update primary index and generate delvec
     std::vector<uint32_t> input_rowsets_id(op_compaction.input_rowsets().begin(), op_compaction.input_rowsets().end());
 
-    ASSIGN_OR_RETURN(auto output_rowset_schema, RuntimeSchemaManager::get_compaction_publish_schema(op_compaction, metadata.id(), input_rowsets_id, metadata));
-    Rowset output_rowset(tablet.tablet_mgr(), tablet.id(), &op_compaction.output_rowset(), -1 /*unused*/, output_rowset_schema);
+    ASSIGN_OR_RETURN(auto output_rowset_schema, RuntimeSchemaManager::get_compaction_publish_schema(
+                                                        op_compaction, metadata.id(), input_rowsets_id, metadata));
+    Rowset output_rowset(tablet.tablet_mgr(), tablet.id(), &op_compaction.output_rowset(), -1 /*unused*/,
+                         output_rowset_schema);
     auto compaction_entry = _compaction_cache.get_or_create(cache_key(tablet.id(), txn_id));
     compaction_entry->update_expire_time(MonotonicMillis() + get_cache_expire_ms());
     // only use state entry once, remove it when publish finish or fail

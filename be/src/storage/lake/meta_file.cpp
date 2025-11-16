@@ -156,7 +156,8 @@ void MetaFileBuilder::apply_opwrite(const TxnLogPB_OpWrite& op_write, const std:
     RuntimeSchemaManager::update_load_publish_schema(rowset->id(), rowset_schema, _tablet_meta.get());
 }
 
-void MetaFileBuilder::apply_column_mode_partial_update(const TxnLogPB_OpWrite& op_write) {
+void MetaFileBuilder::apply_column_mode_partial_update(const TxnLogPB_OpWrite& op_write,
+                                                       const TabletSchemaCSPtr& rowset_schema) {
     // remove all segments that only contains partial columns.
     for (int i = 0; i < op_write.rowset().segments_size(); ++i) {
         FileMetaPB file_meta;
@@ -281,7 +282,8 @@ void MetaFileBuilder::remove_compacted_sst(const TxnLogPB_OpCompaction& op_compa
 }
 
 Status MetaFileBuilder::apply_opcompaction(const TxnLogPB_OpCompaction& op_compaction,
-                                           uint32_t max_compact_input_rowset_id, const TabletSchemaCSPtr& output_rowset_schema) {
+                                           uint32_t max_compact_input_rowset_id,
+                                           const TabletSchemaCSPtr& output_rowset_schema) {
     // delete input rowsets
     std::stringstream del_range_ss;
     std::vector<std::pair<uint32_t, uint32_t>> delete_delvec_sid_range;
@@ -376,9 +378,10 @@ Status MetaFileBuilder::apply_opcompaction(const TxnLogPB_OpCompaction& op_compa
     }
 
     // TODO would this break https://github.com/StarRocks/starrocks/pull/58186 ?
+    std::vector<uint32_t> input_rowsets_id(op_compaction.input_rowsets().begin(), op_compaction.input_rowsets().end());
     RuntimeSchemaManager::update_compaction_publish_schema(
-        input_rowsets_id, has_output_rowset ? std::optional<uint32_t>(output_rowset_id) : std::nullopt,
-        output_rowset_schema, _metadata.get());
+            input_rowsets_id, has_output_rowset ? std::optional<uint32_t>(output_rowset_id) : std::nullopt,
+            output_rowset_schema, _tablet_meta.get());
 
     VLOG(2) << fmt::format(
             "MetaFileBuilder apply_opcompaction, id:{} input range:{} delvec del cnt:{} dcg del cnt:{} output:{}",
@@ -656,7 +659,7 @@ bool is_primary_key(const TabletMetadata& metadata) {
 
 void MetaFileBuilder::add_rowset(const RowsetMetadataPB& rowset_pb, const std::map<int, FileInfo>& replace_segments,
                                  const std::vector<FileMetaPB>& orphan_files, const std::vector<std::string>& dels,
-                                 const std::vector<std::string>& del_encryption_metas, const TabletSchemaCSPtr& rowset_schema) {
+                                 const std::vector<std::string>& del_encryption_metas) {
     // If this is the first call, copy rowset_pb directly
     if (_pending_rowset_data.rowset_pb.segments_size() == 0) {
         _pending_rowset_data.rowset_pb.CopyFrom(rowset_pb);
@@ -754,7 +757,8 @@ void MetaFileBuilder::set_final_rowset() {
 
 void MetaFileBuilder::batch_apply_opwrite(const TxnLogPB_OpWrite& op_write,
                                           const std::map<int, FileInfo>& replace_segments,
-                                          const std::vector<FileMetaPB>& orphan_files, const TabletSchemaCSPtr& output_rowset_schema) {
+                                          const std::vector<FileMetaPB>& orphan_files,
+                                          const TabletSchemaCSPtr& output_rowset_schema) {
     // Extract del files and encryption metas similar to apply_opwrite
     std::vector<std::string> dels;
     std::vector<std::string> del_encryption_metas;
@@ -775,7 +779,8 @@ void MetaFileBuilder::batch_apply_opwrite(const TxnLogPB_OpWrite& op_write,
 
     // Accumulate into pending rowset
     add_rowset(op_write.rowset(), replace_segments, orphan_files, dels, del_encryption_metas);
-    if (_merged_rowset_schema == nullptr || _merged_rowset_schema->schema_version() < output_rowset_schema->schema_version()) {
+    if (_merged_rowset_schema == nullptr ||
+        _merged_rowset_schema->schema_version() < output_rowset_schema->schema_version()) {
         _merged_rowset_schema = output_rowset_schema;
     }
 }

@@ -468,7 +468,7 @@ Status ColumnModePartialUpdateHandler::execute(const RowsetUpdateStateParams& pa
     // COLUMN_UPDATE_MODE: remove segments that contain only updated columns
     // COLUMN_UPSERT_MODE: keep segments; upper layer will append delvec/PK index changes and new rowsets
     if (params.op_write.txn_meta().partial_update_mode() == PartialUpdateMode::COLUMN_UPDATE_MODE) {
-        builder->apply_column_mode_partial_update(params.op_write);
+        builder->apply_column_mode_partial_update(params.op_write, params.tablet_schema);
     }
 
     TRACE_COUNTER_INCREMENT("pcu_rss_cnt", rss_upt_id_to_rowid_pairs.size());
