@@ -99,22 +99,20 @@ void RuntimeSchemaManager::update_load_publish_schema(uint32_t rowset_id, const 
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_compaction_publish_schema(
         const TxnLogPB_OpCompaction& op_compaction, int64_t tablet_id, const std::vector<uint32_t>& input_rowsets_id,
-        const TabletMetadataPtr& tablet_meta) {
-    DCHECK(tablet_meta != nullptr);
+        const TabletMetadata& tablet_meta) {
     if (op_compaction.has_schema_id()) {
         auto schema_id = op_compaction.schema_id();
-        if (schema_id == tablet_meta->schema().id()) {
-            return GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->schema()).first;
-        } else if (tablet_meta->historical_schemas().count(schema_id) > 0) {
-            return GlobalTabletSchemaMap::Instance()->emplace(tablet_meta->historical_schemas().at(schema_id)).first;
+        if (schema_id == tablet_meta.schema().id()) {
+            return GlobalTabletSchemaMap::Instance()->emplace(tablet_meta.schema()).first;
+        } else if (tablet_meta.historical_schemas().count(schema_id) > 0) {
+            return GlobalTabletSchemaMap::Instance()->emplace(tablet_meta.historical_schemas().at(schema_id)).first;
         } else {
             return Status::InternalError(
                     fmt::format("output rowset schema id {} not found in tablet metadata", schema_id));
         }
     } else {
         // for compitible
-        return ExecEnv::GetInstance()->lake_tablet_manager()->get_output_rowset_schema(input_rowsets_id,
-                                                                                       tablet_meta.get());
+        return ExecEnv::GetInstance()->lake_tablet_manager()->get_output_rowset_schema(input_rowsets_id, &tablet_meta);
     }
 }
 

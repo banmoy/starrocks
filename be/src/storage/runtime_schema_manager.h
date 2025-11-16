@@ -37,7 +37,7 @@ public:
     static StatusOr<TabletSchemaCSPtr> get_compaction_publish_schema(const TxnLogPB_OpCompaction& op_compaction,
                                                                      int64_t tablet_id,
                                                                      const std::vector<uint32_t>& input_rowsets_id,
-                                                                     const TabletMetadataPtr& tablet_meta);
+                                                                     const TabletMetadata& tablet_meta);
 
     static void update_compaction_publish_schema(const std::vector<uint32_t>& input_rowsets_id,
                                                  std::optional<uint32_t> output_rowset_id,

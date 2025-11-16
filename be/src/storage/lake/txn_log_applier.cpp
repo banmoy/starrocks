@@ -640,7 +640,7 @@ private:
                                                op_compaction.input_rowsets().end());
         ASSIGN_OR_RETURN(auto output_rowset_schema,
                          RuntimeSchemaManager::get_compaction_publish_schema(op_compaction, _metadata->id(),
-                                                                             input_rowsets_id, _metadata));
+                                                                             input_rowsets_id, *_metadata));
 
         auto last_input_pos = pre_input_pos;
         RowsetMetadataPB last_input_rowset = *last_input_pos;
