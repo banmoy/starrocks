@@ -1010,45 +1010,25 @@ StatusOr<TabletSchemaPtr> TabletManager::get_output_rowset_schema(const std::vec
         // so we can use latest schema as compaction schema safely.
         return GlobalTabletSchemaMap::Instance()->emplace(metadata->schema()).first;
     }
-    TabletSchemaPtr tablet_schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->schema()).first;
     struct Finder {
         uint32_t id;
         bool operator()(const RowsetMetadata& r) const { return r.id() == id; }
     };
 
     auto input_rowsets_num = input_rowset.size();
-    int64_t max_schema_version = -1;
-    int64_t select_schema_id = tablet_schema->id();
+    TabletSchemaPtr output_rowset_schema = nullptr;
     for (int i = 0; i < input_rowsets_num; i++) {
         auto iter = std::find_if(metadata->rowsets().begin(), metadata->rowsets().end(), Finder{input_rowset[i]});
         if (UNLIKELY(iter == metadata->rowsets().end())) {
             return Status::InternalError(fmt::format("input rowset {} not found", input_rowset[i]));
         }
-        auto rowset_it = metadata->rowset_to_schema().find(input_rowset[i]);
-        if (rowset_it != metadata->rowset_to_schema().end()) {
-            auto schema_it = metadata->historical_schemas().find(rowset_it->second);
-            if (schema_it != metadata->historical_schemas().end()) {
-                if (schema_it->second.schema_version() >= max_schema_version) {
-                    max_schema_version = schema_it->second.schema_version();
-                    select_schema_id = schema_it->first;
-                }
-            } else {
-                return Status::InternalError(fmt::format("can not find input rowset schema, id {}", rowset_it->second));
-            }
-        } else {
-            // if downgrade to old version and ingeste some rowset and upgrade again, the rowset maybe not found in
-            // `rowset_to_schema`. And we will consider it as the latest tablet schema.
-            max_schema_version = tablet_schema->schema_version();
-            select_schema_id = tablet_schema->id();
+
+        ASSIGN_OR_RETURN(auto rowset_schema, RuntimeSchemaManager::get_rowset_schema(metadata, input_rowset[i]));
+        if (output_rowset_schema == nullptr || rowset_schema->schema_version() > output_rowset_schema->schema_version()) {
+            output_rowset_schema = std::move(rowset_schema);
         }
     }
-
-    if (select_schema_id != tablet_schema->id()) {
-        auto schema_it = metadata->historical_schemas().find(select_schema_id);
-        tablet_schema = GlobalTabletSchemaMap::Instance()->emplace(schema_it->second).first;
-    }
-
-    return tablet_schema;
+    return output_rowset_schema;
 }
 
 StatusOr<CompactionTaskPtr> TabletManager::compact(CompactionTaskContext* context) {

@@ -50,6 +50,8 @@ public:
 
     static void update_alter_schema(const TabletSchemaPB& schema, TabletMetadata* tablet_meta);
 
+    static StatusOr<TabletSchemaCSPtr> get_rowset_schema(const TabletMetadata& tablet_metadata, uint32_t rowset_id);
+
 private:
     static StatusOr<TabletSchemaCSPtr> get_schema_from_fe(const TGetRuntimeSchemaRequest& request,
                                                           const TNetworkAddress& fe_addr);
