@@ -20,8 +20,10 @@ import com.google.common.collect.Sets;
 import com.google.gson.annotations.SerializedName;
 import com.starrocks.catalog.Column;
 import com.starrocks.catalog.Database;
+import com.starrocks.catalog.HistoryOlapTableSchema;
 import com.starrocks.catalog.MaterializedIndex;
 import com.starrocks.catalog.MaterializedIndexMeta;
+import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.catalog.SchemaInfo;
 import com.starrocks.common.FeConstants;
@@ -36,8 +38,10 @@ import org.apache.commons.collections4.ListUtils;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -59,6 +63,10 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
     // shadow index id -> index schema
     @SerializedName(value = "schemaInfos")
     private List<IndexSchemaInfo> schemaInfos;
+    @SerializedName(value = "finishTxnId")
+    private long finishTxnId = -1;
+    @SerializedName(value = "historySchema")
+    private HistoryOlapTableSchema historySchema = null;
     private Set<String> partitionsWithSchemaFile = new HashSet<>();
 
     // for deserialization
@@ -111,19 +119,36 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
     }
 
     @Override
-    protected void updateCatalog(Database db, LakeTable table) {
-        updateCatalogUnprotected(db, table);
+    protected void updateCatalog(Database db, LakeTable table, boolean isReplay) {
+        updateCatalogUnprotected(db, table, isReplay);
     }
 
-    private void updateCatalogUnprotected(Database db, LakeTable table) {
+    private void updateCatalogUnprotected(Database db, LakeTable table, boolean isReplay) {
         Set<String> droppedOrModifiedColumns = Sets.newHashSet();
         boolean hasMv = !table.getRelatedMaterializedViews().isEmpty();
+        Map<Long, SchemaInfo> historySchemaInfoMap = new HashMap<>();
         for (IndexSchemaInfo indexSchemaInfo : schemaInfos) {
             SchemaInfo schemaInfo = indexSchemaInfo.schemaInfo;
             long indexId = indexSchemaInfo.indexId;
             MaterializedIndexMeta indexMeta = requireNonNull(table.getIndexMetaByIndexId(indexId)).shallowCopy();
             List<Column> oldColumns = indexMeta.getSchema();
-
+            if (!isReplay) {
+                SchemaInfo historySchemaInfo = SchemaInfo.newBuilder()
+                        .setId(indexMeta.getSchemaId())
+                        .setVersion(indexMeta.getSchemaVersion())
+                        .setSchemaHash(indexMeta.getSchemaHash())
+                        .setKeysType(indexMeta.getKeysType())
+                        .setShortKeyColumnCount(indexMeta.getShortKeyColumnCount())
+                        .setStorageType(indexMeta.getStorageType())
+                        .addColumns(oldColumns)
+                        .setSortKeyIndexes(indexMeta.getSortKeyIdxes())
+                        .setSortKeyUniqueIds(indexMeta.getSortKeyUniqueIds())
+                        .setIndexes(OlapTable.getIndexesBySchema(table.getIndexes(), indexMeta.getSchema()))
+                        .setBloomFilterColumnNames(table.getBfColumnIds())
+                        .setBloomFilterFpp(table.getBfFpp())
+                        .build();
+                historySchemaInfoMap.put(indexMeta.getIndexId(), historySchemaInfo);
+            }
             Preconditions.checkState(Objects.equals(indexMeta.getKeysType(), schemaInfo.getKeysType()));
             Preconditions.checkState(Objects.equals(ListUtils.emptyIfNull(indexMeta.getSortKeyUniqueIds()),
                     ListUtils.emptyIfNull(schemaInfo.getSortKeyUniqueIds())));
@@ -145,6 +170,11 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
             table.renameColumnNamePrefix(indexId);
         }
         table.rebuildFullSchema();
+        if (!isReplay) {
+            this.finishTxnId = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().getTransactionIDGenerator()
+                    .getNextTransactionId();
+            this.historySchema = new HistoryOlapTableSchema(historySchemaInfoMap);
+        }
 
         // If modified columns are already done, inactive related mv
         AlterMVJobExecutor.inactiveRelatedMaterializedViewsRecursive(table, droppedOrModifiedColumns);
@@ -155,10 +185,33 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
         // This PR(#55282) only writes the schemaInfo once in the entire schema change job process, 
         // but it has compatibility issues with previous versions, so it was reverted.
         // However, since some versions include this PR, the schemaInfo may be null when upgrading from these versions.
-        List<IndexSchemaInfo> jobSchemaInfos = ((LakeTableAsyncFastSchemaChangeJob) job).schemaInfos;
+        LakeTableAsyncFastSchemaChangeJob schemaChangeJob = (LakeTableAsyncFastSchemaChangeJob) job;
+        List<IndexSchemaInfo> jobSchemaInfos = schemaChangeJob.schemaInfos;
         if (jobSchemaInfos != null && !jobSchemaInfos.isEmpty()) {
             this.schemaInfos = new ArrayList<>(jobSchemaInfos);
         }
+        this.finishTxnId = schemaChangeJob.finishTxnId;
+        this.historySchema = schemaChangeJob.historySchema;
+    }
+
+    @Override
+    public boolean isExpire() {
+        boolean expiredByTime = super.isExpire();
+        boolean expiredByTxn = true;
+        if (historySchema != null) {
+            try {
+                expiredByTxn = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
+                        .isPreviousTransactionsFinished(finishTxnId, dbId, Lists.newArrayList(tableId));
+            } catch (Exception e) {
+                // As isPreviousTransactionsFinished said, exception happens only when db does not exist,
+                // so could clean the history schema safely
+            }
+            if (expiredByTxn) {
+                // release the history schema memory if no one uses it
+                historySchema = null;
+            }
+        }
+        return expiredByTime && expiredByTxn;
     }
 
     @Override
@@ -212,6 +265,14 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
             info.add(errMsg);
             info.add(progress);
             info.add(timeoutMs / 1000);
+            StringBuilder sb = new StringBuilder();
+            sb.append("fast schema change");
+            if (historySchema != null) {
+                long historySchemaId = historySchema.getSchemaByIndexId(schemaInfo.indexId)
+                        .map(SchemaInfo::getId).orElse(-1L);
+                sb.append(", history schema id: ").append(historySchemaId);
+            }
+            info.add(sb.toString());
             Warehouse warehouse = GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouseAllowNull(warehouseId);
             if (warehouse == null) {
                 info.add("null");

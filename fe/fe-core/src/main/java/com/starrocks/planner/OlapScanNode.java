@@ -108,6 +108,7 @@ import com.starrocks.thrift.TScanRange;
 import com.starrocks.thrift.TScanRangeLocation;
 import com.starrocks.thrift.TScanRangeLocations;
 import com.starrocks.thrift.TTableSampleOptions;
+import com.starrocks.thrift.TTabletSchema;
 import com.starrocks.type.Type;
 import com.starrocks.type.TypeSerializer;
 import com.starrocks.warehouse.Warehouse;
@@ -1072,6 +1073,7 @@ public class OlapScanNode extends ScanNode {
                     new TLakeScanNode(desc.getId().asInt(), keyColumnNames, keyColumnTypes, isPreAggregation);
             msg.lake_scan_node.setSort_key_column_names(keyColumnNames);
             msg.lake_scan_node.setRollup_name(olapTable.getIndexNameById(selectedIndexId));
+            msg.lake_scan_node.setSchema_id(schemaId);
             if (enableTopnFilterBackPressure) {
                 msg.lake_scan_node.setEnable_topn_filter_back_pressure(true);
                 msg.lake_scan_node.setBack_pressure_max_rounds(backPressureMaxRounds);

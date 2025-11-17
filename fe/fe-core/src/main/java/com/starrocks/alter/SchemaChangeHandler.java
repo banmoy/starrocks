@@ -49,6 +49,7 @@ import com.starrocks.catalog.Column;
 import com.starrocks.catalog.ColumnId;
 import com.starrocks.catalog.Database;
 import com.starrocks.catalog.FlatJsonConfig;
+import com.starrocks.catalog.HistoryOlapTableSchema;
 import com.starrocks.catalog.Index;
 import com.starrocks.catalog.KeysType;
 import com.starrocks.catalog.LocalTablet;
@@ -86,6 +87,7 @@ import com.starrocks.common.util.WriteQuorum;
 import com.starrocks.common.util.concurrent.MarkedCountDownLatch;
 import com.starrocks.common.util.concurrent.lock.LockType;
 import com.starrocks.common.util.concurrent.lock.Locker;
+import com.starrocks.lake.LakeTable;
 import com.starrocks.lake.LakeTablet;
 import com.starrocks.persist.ModifyColumnCommentLog;
 import com.starrocks.persist.TableAddOrDropColumnsInfo;
@@ -2088,7 +2090,7 @@ public class SchemaChangeHandler extends AlterHandler {
 
         if (!fastSchemaEvolution) {
             return createJob(schemaChangeData);
-        } else if (RunMode.isSharedNothingMode()) {
+        } else if (RunMode.isSharedNothingMode() || ((LakeTable) olapTable).isSharedDataFastSchemaEvolutionV2()) {
             fastSchemaEvolutionInShareNothingMode(schemaChangeData);
             return null;
         } else {
@@ -2967,6 +2969,18 @@ public class SchemaChangeHandler extends AlterHandler {
         }
     }
 
+    public Optional<SchemaInfo> getHistorySchema(long dbId, long tableId, long schemaId) {
+        for (AlterJobV2 alterJob : alterJobsV2.values()) {
+            if (alterJob instanceof SchemaChangeJobV2) {
+                Optional<SchemaInfo> schemaInfo = ((SchemaChangeJobV2) alterJob).getHistorySchema(dbId, tableId, schemaId);
+                if (schemaInfo.isPresent()) {
+                    return schemaInfo;
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
     // the invoker should keep write lock
     // this function will update the table index meta according to the `indexSchemaMap` and the
     // `indexSchemaMap` keep the latest column set for each index.
@@ -2980,7 +2994,7 @@ public class SchemaChangeHandler extends AlterHandler {
     //          {c1: int, c2: int, c3: Struct<v1 int, v2 int, v3 int>}
     public void modifyTableAddOrDrop(Database db, OlapTable olapTable,
                                      Map<Long, List<Column>> indexSchemaMap,
-                                     List<Index> indexes, long jobId, long txnId,
+                                     List<Index> indexes, long jobId, long replayedTxnId,
                                      Map<Long, Long> indexToNewSchemaId, boolean isReplay)
             throws DdlException, NotImplementedException {
         Locker locker = new Locker();
@@ -2996,6 +3010,30 @@ public class SchemaChangeHandler extends AlterHandler {
             olapTable.setState(OlapTableState.UPDATING_META);
             SchemaChangeJobV2 schemaChangeJob = new SchemaChangeJobV2(jobId, db.getId(), olapTable.getId(),
                     olapTable.getName(), 1000);
+            schemaChangeJob.setFastSchemaChange(true);
+
+            Map<Long, SchemaInfo> historySchemaInfoMap = new HashMap<>();
+            for (long indexId : indexSchemaMap.keySet()) {
+                MaterializedIndexMeta indexMeta = olapTable.getIndexMetaByIndexId(indexId).shallowCopy();
+                SchemaInfo schemaInfo = SchemaInfo.newBuilder()
+                        .setId(indexMeta.getSchemaId())
+                        .setVersion(indexMeta.getSchemaVersion())
+                        .setSchemaHash(indexMeta.getSchemaHash())
+                        .setKeysType(indexMeta.getKeysType())
+                        .setShortKeyColumnCount(indexMeta.getShortKeyColumnCount())
+                        .setStorageType(indexMeta.getStorageType())
+                        .addColumns(indexMeta.getSchema())
+                        .setSortKeyIndexes(indexMeta.getSortKeyIdxes())
+                        .setSortKeyUniqueIds(indexMeta.getSortKeyUniqueIds())
+                        .setIndexes(OlapTable.getIndexesBySchema(indexes, indexMeta.getSchema()))
+                        .setBloomFilterColumnNames(olapTable.getBfColumnIds())
+                        .setBloomFilterFpp(olapTable.getBfFpp())
+                        .build();
+                historySchemaInfoMap.put(indexMeta.getIndexId(), schemaInfo);
+            }
+            HistoryOlapTableSchema historySchema = new HistoryOlapTableSchema(historySchemaInfoMap);
+            schemaChangeJob.setHistorySchema(historySchema);
+
             // update base index schema
             Set<String> modifiedColumns = Sets.newHashSet();
             boolean hasMv = !olapTable.getRelatedMaterializedViews().isEmpty();
@@ -3048,6 +3086,9 @@ public class SchemaChangeHandler extends AlterHandler {
             // If modified columns are already done, inactive related mv
             AlterMVJobExecutor.inactiveRelatedMaterializedViewsRecursive(olapTable, modifiedColumns);
 
+            // Loads whose txn ids are smaller than it can still use the history schema
+            long txnId = isReplay ? replayedTxnId : GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
+                    .getTransactionIDGenerator().getNextTransactionId();
             if (!isReplay) {
                 TableAddOrDropColumnsInfo info = new TableAddOrDropColumnsInfo(db.getId(), olapTable.getId(),
                         indexSchemaMap, indexes, jobId, txnId, indexToNewSchemaId);
@@ -3078,6 +3119,7 @@ public class SchemaChangeHandler extends AlterHandler {
         Map<Long, Long> indexToNewSchemaId = info.getIndexToNewSchemaId();
         List<Index> indexes = info.getIndexes();
         long jobId = info.getJobId();
+        long replayedTxnId = info.getTxnId();
 
         Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(dbId);
         Table table = GlobalStateMgr.getCurrentState().getLocalMetastore().getTable(db.getId(), tableId);
@@ -3087,7 +3129,7 @@ public class SchemaChangeHandler extends AlterHandler {
         Locker locker = new Locker();
         try {
             locker.lockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.WRITE);
-            modifyTableAddOrDrop(db, olapTable, indexSchemaMap, indexes, jobId, info.getTxnId(),
+            modifyTableAddOrDrop(db, olapTable, indexSchemaMap, indexes, jobId, replayedTxnId,
                     indexToNewSchemaId, true);
         } catch (DdlException e) {
             // should not happen
@@ -3101,11 +3143,8 @@ public class SchemaChangeHandler extends AlterHandler {
 
     private void fastSchemaEvolutionInShareNothingMode(SchemaChangeData schemaChangeData)
             throws DdlException, NotImplementedException {
-        Preconditions.checkState(RunMode.isSharedNothingMode());
         GlobalStateMgr globalStateMgr = GlobalStateMgr.getCurrentState();
         long jobId = globalStateMgr.getNextId();
-        long txnId = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
-                .getTransactionIDGenerator().getNextTransactionId();
         // for schema change add/drop value column optimize, direct modify table meta.
         // when modify this, please also pay attention to the OlapTable#copyOnlyForQuery() operation.
         // try to copy first before modifying, avoiding in-place changes.
@@ -3117,7 +3156,7 @@ public class SchemaChangeHandler extends AlterHandler {
         // when modify this, please also pay attention to the OlapTable#copyOnlyForQuery() operation.
         // try to copy first before modifying, avoiding in-place changes.
         modifyTableAddOrDrop(schemaChangeData.getDatabase(), schemaChangeData.getTable(),
-                schemaChangeData.getNewIndexSchema(), schemaChangeData.getIndexes(), jobId, txnId,
+                schemaChangeData.getNewIndexSchema(), schemaChangeData.getIndexes(), jobId, -1,
                 indexToNewSchemaId, false);
     }
 

@@ -460,6 +460,17 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
                 ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR, "The compaction strategy can be only " +
                         "update for a primary key table. ");
             }
+        } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2)) {
+            if (!table.isCloudNativeTable()) {
+                ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
+                        String.format("Property %s only supports shared-data olap tables, but table type is %s",
+                                PropertyAnalyzer.PROPERTIES_SHARED_DATA_FAST_SCHEMA_EVOLUTION_V2, table.getType().name()));
+            }
+            try {
+                PropertyAnalyzer.analyzeSharedDataFastSchemaEvolutionV2(properties, false);
+            } catch (SemanticException e) {
+                ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR, e.getMessage());
+            }
         } else {
             ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR, "Unknown properties: " + properties);
         }

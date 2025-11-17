@@ -53,6 +53,7 @@ import com.starrocks.catalog.InternalCatalog;
 import com.starrocks.catalog.ListPartitionInfo;
 import com.starrocks.catalog.LocalTablet;
 import com.starrocks.catalog.MaterializedIndex;
+import com.starrocks.catalog.MaterializedIndexMeta;
 import com.starrocks.catalog.MaterializedView;
 import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.Partition;
@@ -61,6 +62,7 @@ import com.starrocks.catalog.PartitionKey;
 import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.catalog.RangePartitionInfo;
 import com.starrocks.catalog.Replica;
+import com.starrocks.catalog.SchemaInfo;
 import com.starrocks.catalog.Table;
 import com.starrocks.catalog.Tablet;
 import com.starrocks.catalog.TabletInvertedIndex;
@@ -132,6 +134,7 @@ import com.starrocks.load.streamload.StreamLoadMgr;
 import com.starrocks.load.streamload.StreamLoadTask;
 import com.starrocks.metric.MetricRepo;
 import com.starrocks.persist.AutoIncrementInfo;
+import com.starrocks.planner.OlapScanNode;
 import com.starrocks.planner.OlapTableSink;
 import com.starrocks.planner.SlotDescriptor;
 import com.starrocks.planner.SlotId;
@@ -182,6 +185,8 @@ import com.starrocks.thrift.TAllocateAutoIncrementIdResult;
 import com.starrocks.thrift.TAnalyzeStatusReq;
 import com.starrocks.thrift.TAnalyzeStatusRes;
 import com.starrocks.thrift.TAuthenticateParams;
+import com.starrocks.thrift.TBatchGetRuntimeSchemaRequest;
+import com.starrocks.thrift.TBatchGetRuntimeSchemaResult;
 import com.starrocks.thrift.TBatchReportExecStatusParams;
 import com.starrocks.thrift.TBatchReportExecStatusResult;
 import com.starrocks.thrift.TBeginRemoteTxnRequest;
@@ -244,6 +249,8 @@ import com.starrocks.thrift.TGetQueryStatisticsResponse;
 import com.starrocks.thrift.TGetRoleEdgesRequest;
 import com.starrocks.thrift.TGetRoleEdgesResponse;
 import com.starrocks.thrift.TGetRoutineLoadJobsResult;
+import com.starrocks.thrift.TGetRuntimeSchemaRequest;
+import com.starrocks.thrift.TGetRuntimeSchemaResult;
 import com.starrocks.thrift.TGetStreamLoadsResult;
 import com.starrocks.thrift.TGetTableMetaRequest;
 import com.starrocks.thrift.TGetTableMetaResponse;
@@ -332,6 +339,7 @@ import com.starrocks.thrift.TReportRequest;
 import com.starrocks.thrift.TRequireSlotRequest;
 import com.starrocks.thrift.TRequireSlotResponse;
 import com.starrocks.thrift.TRoutineLoadJobInfo;
+import com.starrocks.thrift.TRuntimeSchemaType;
 import com.starrocks.thrift.TSessionInfo;
 import com.starrocks.thrift.TSetConfigRequest;
 import com.starrocks.thrift.TSetConfigResponse;
@@ -349,6 +357,7 @@ import com.starrocks.thrift.TTablePrivDesc;
 import com.starrocks.thrift.TTableReplicationRequest;
 import com.starrocks.thrift.TTableReplicationResponse;
 import com.starrocks.thrift.TTabletLocation;
+import com.starrocks.thrift.TTabletSchema;
 import com.starrocks.thrift.TTaskInfo;
 import com.starrocks.thrift.TTrackingLoadInfo;
 import com.starrocks.thrift.TTransactionStatus;
@@ -535,6 +544,122 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             }
         }
         return result;
+    }
+
+    @Override
+    public TBatchGetRuntimeSchemaResult getRuntimeSchema(TBatchGetRuntimeSchemaRequest request) {
+        final TBatchGetRuntimeSchemaResult result = new TBatchGetRuntimeSchemaResult();
+        for (TGetRuntimeSchemaRequest singleRequest : request.getRequests()) {
+            TGetRuntimeSchemaResult singleResult = null;
+            try {
+                singleResult = getRuntimeSchema(singleRequest);
+            } catch (Exception e) {
+                TStatus status = new TStatus(TStatusCode.INTERNAL_ERROR);
+                status.addToError_msgs("exception happened when get schema, error: " + e.getMessage());
+                LOG.warn("Failed to get schema, tablet_id: {}, schema_id: {}",
+                        singleRequest.tablet_id, singleRequest.schema_id, e);
+            }
+            result.addToResults(singleResult);
+        }
+        return result;
+    }
+
+    private TGetRuntimeSchemaResult getRuntimeSchema(TGetRuntimeSchemaRequest request) {
+        TGetRuntimeSchemaResult result = new TGetRuntimeSchemaResult();
+        long schemaId = request.schema_id;
+        long tabletId = request.tablet_id;
+        TabletMeta tabletMeta = GlobalStateMgr.getCurrentState().getTabletInvertedIndex().getTabletMeta(tabletId);
+        if (tabletMeta == null) {
+            TStatus status = new TStatus(TStatusCode.NOT_FOUND);
+            status.addToError_msgs("can't find tablet meta for " + tabletId);
+            result.setStatus(status);
+            return result;
+        }
+        long dbId = tabletMeta.getDbId();
+        long tableId = tabletMeta.getTableId();
+        TTabletSchema schema = null;
+        // for scan, first search the schema in scanner
+        if (request.schema_type == TRuntimeSchemaType.QUERY) {
+            schema = getQuerySchema(request.query_id, tableId, schemaId).orElse(null);
+        } else if (request.schema_type == TRuntimeSchemaType.LOAD) {
+            Table table = GlobalStateMgr.getCurrentState().getLocalMetastore().getTable(dbId, tableId);
+            if (table instanceof OlapTable olapTable) {
+                SchemaInfo schemaInfo;
+                try (AutoCloseableLock ignore =
+                        new AutoCloseableLock(new Locker(), dbId, Lists.newArrayList(tableId), LockType.READ)) {
+                    schemaInfo = buildSchemaInfo(olapTable, schemaId).orElse(null);
+                }
+                if (schemaInfo == null) {
+                    schemaInfo = GlobalStateMgr.getCurrentState().getAlterJobMgr()
+                            .getSchemaChangeHandler().getHistorySchema(dbId, tableId, schemaId).orElse(null);
+                }
+                if (schemaInfo != null) {
+                    schema = schemaInfo.toTabletSchema();
+                }
+            }
+        }
+
+        if (schema != null) {
+            result.setStatus(new TStatus(TStatusCode.OK));
+            result.setSchema(schema);
+        } else {
+            TStatus status = new TStatus(TStatusCode.NOT_FOUND);
+            status.addToError_msgs("can't find schema " + schemaId);
+            result.setStatus(status);
+        }
+
+        LOG.info("get schema from coordinator, query id: {}, schema_id: {}, db_id: {}, table_id: {}, tablet_id: {}, " +
+                "schema_type: {}, status: {}, msg: {}", DebugUtil.printId(request.query_id), schemaId, dbId, tableId,
+                request.tablet_id, request.schema_type, result.getStatus().status_code, result.getStatus().getError_msgs());
+
+        return result;
+    }
+
+    public Optional<TTabletSchema> getQuerySchema(TUniqueId queryId, long tableId, long schemaId) {
+        DefaultCoordinator coordinator = (DefaultCoordinator) QeProcessorImpl.INSTANCE.getCoordinator(queryId);
+        if (coordinator != null) {
+            Optional<OlapTable> olapTable = coordinator.getScanNodes().stream()
+                    .filter(OlapScanNode.class::isInstance)
+                    .map(OlapScanNode.class::cast)
+                    .map(OlapScanNode::getOlapTable)
+                    .filter(table -> table.getId() == tableId)
+                    .findFirst();
+            if (olapTable.isPresent()) {
+                // NOTE table held by query plan is copied from the original by OlapTable.copyOnlyForQuery,
+                // so there is no concurrent issue
+                Optional<SchemaInfo> schemaInfo = buildSchemaInfo(olapTable.get(), schemaId);
+                return schemaInfo.map(SchemaInfo::toTabletSchema);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<SchemaInfo> buildSchemaInfo(OlapTable table, long schemaId) {
+        MaterializedIndexMeta indexMeta = null;
+        for (MaterializedIndexMeta meta : table.getIndexIdToMeta().values()) {
+            if (meta.getSchemaId() == schemaId) {
+                indexMeta = meta;
+                break;
+            }
+        }
+        SchemaInfo schemaInfo = null;
+        if (indexMeta != null) {
+            schemaInfo = SchemaInfo.newBuilder()
+                    .setId(indexMeta.getSchemaId())
+                    .setVersion(indexMeta.getSchemaVersion())
+                    .setSchemaHash(indexMeta.getSchemaHash())
+                    .setKeysType(indexMeta.getKeysType())
+                    .setShortKeyColumnCount(indexMeta.getShortKeyColumnCount())
+                    .setStorageType(indexMeta.getStorageType())
+                    .addColumns(indexMeta.getSchema())
+                    .setSortKeyIndexes(indexMeta.getSortKeyIdxes())
+                    .setSortKeyUniqueIds(indexMeta.getSortKeyUniqueIds())
+                    .setIndexes(OlapTable.getIndexesBySchema(table.getIndexes(), indexMeta.getSchema()))
+                    .setBloomFilterColumnNames(table.getBfColumnIds())
+                    .setBloomFilterFpp(table.getBfFpp())
+                    .build();
+        }
+        return Optional.ofNullable(schemaInfo);
     }
 
     @Override
