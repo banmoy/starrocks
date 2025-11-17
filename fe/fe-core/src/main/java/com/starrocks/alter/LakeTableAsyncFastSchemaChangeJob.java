@@ -146,6 +146,8 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
                         .setIndexes(OlapTable.getIndexesBySchema(table.getIndexes(), indexMeta.getSchema()))
                         .setBloomFilterColumnNames(table.getBfColumnIds())
                         .setBloomFilterFpp(table.getBfFpp())
+                        .setCompressionType(table.getCompressionType())
+                        .setCompressionLevel(table.getCompressionLevel())
                         .build();
                 historySchemaInfoMap.put(indexMeta.getIndexId(), historySchemaInfo);
             }

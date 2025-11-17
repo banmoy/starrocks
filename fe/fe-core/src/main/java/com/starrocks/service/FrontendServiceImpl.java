@@ -657,6 +657,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                     .setIndexes(OlapTable.getIndexesBySchema(table.getIndexes(), indexMeta.getSchema()))
                     .setBloomFilterColumnNames(table.getBfColumnIds())
                     .setBloomFilterFpp(table.getBfFpp())
+                    .setCompressionType(table.getCompressionType())
+                    .setCompressionLevel(table.getCompressionLevel())
                     .build();
         }
         return Optional.ofNullable(schemaInfo);

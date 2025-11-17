@@ -143,10 +143,8 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetR
         return Status::InternalError("Failed to get runtime schema: " + status.to_string());
     }
 
-    // TODO: get compression type from tablet metadata
-    auto compression_type = TCompressionType::LZ4_FRAME;
     TabletSchemaPB schema_pb;
-    RETURN_IF_ERROR(convert_t_schema_to_pb_schema(single_result.schema, compression_type, &schema_pb));
+    RETURN_IF_ERROR(convert_t_schema_to_pb_schema(single_result.schema, &schema_pb));
     TabletSchemaSPtr schema_ptr = TabletSchema::create(schema_pb);
     // PUT it in cache
     TabletSchemaCSPtr const_schema_ptr = GlobalTabletSchemaMap::Instance()->emplace(schema_ptr).first;

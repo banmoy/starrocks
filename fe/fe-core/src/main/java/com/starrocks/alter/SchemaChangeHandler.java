@@ -3028,6 +3028,8 @@ public class SchemaChangeHandler extends AlterHandler {
                         .setIndexes(OlapTable.getIndexesBySchema(indexes, indexMeta.getSchema()))
                         .setBloomFilterColumnNames(olapTable.getBfColumnIds())
                         .setBloomFilterFpp(olapTable.getBfFpp())
+                        .setCompressionType(olapTable.getCompressionType())
+                        .setCompressionLevel(olapTable.getCompressionLevel())
                         .build();
                 historySchemaInfoMap.put(indexMeta.getIndexId(), schemaInfo);
             }
