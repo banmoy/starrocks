@@ -148,8 +148,9 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetR
     TabletSchemaSPtr schema_ptr = TabletSchema::create(schema_pb);
     // PUT it in cache
     TabletSchemaCSPtr const_schema_ptr = GlobalTabletSchemaMap::Instance()->emplace(schema_ptr).first;
-    LOG(INFO) << "get_schema success, query_id: " << print_id(request.query_id) << ", schema_id: " << request.schema_id
-              << ", tablet_id: " << request.tablet_id << ", schema_type: " << static_cast<int>(request.schema_type);
+    LOG(INFO) << "get_schema success, schema_type: " << request.schema_type
+              << ", schema_id: " << request.schema_id << ", tablet_id: " << request.tablet_id
+              << ", query_id: " << print_id(request.query_id) << ", txn_id: " << request.txn_id;
     return const_schema_ptr;
 }
 
