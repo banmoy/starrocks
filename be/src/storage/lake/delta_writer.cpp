@@ -41,6 +41,7 @@
 #include "storage/memtable.h"
 #include "storage/memtable_sink.h"
 #include "storage/primary_key_encoder.h"
+#include "storage/runtime_schema_manager.h"
 #include "storage/storage_engine.h"
 #include "util/starrocks_metrics.h"
 
@@ -401,14 +402,12 @@ inline Status DeltaWriterImpl::init_tablet_schema() {
         return Status::OK();
     }
     ASSIGN_OR_RETURN(auto tablet, _tablet_manager->get_tablet(_tablet_id));
-    auto res = tablet.get_schema_by_id(_schema_id);
+    auto res = RuntimeSchemaManager::get_load_schema(_schema_id, _tablet_id, _txn_id);
     if (res.ok()) {
         _tablet_schema = std::move(res).value();
         return Status::OK();
     } else if (res.status().is_not_found()) {
-        LOG(WARNING) << "No schema file of id=" << _schema_id << " for tablet=" << _tablet_id;
-        // schema file does not exist, fetch tablet schema from tablet metadata
-        ASSIGN_OR_RETURN(_tablet_schema, tablet.get_schema());
+        ASSIGN_OR_RETURN(_tablet_schema, tablet.get_schema_by_id(_schema_id));
         return Status::OK();
     } else {
         return res.status();
@@ -613,6 +612,7 @@ StatusOr<TxnLogPtr> DeltaWriterImpl::finish_with_txnlog(DeltaWriterFinishMode mo
         *txn_log->mutable_load_id() = _load_id;
     }
     auto op_write = txn_log->mutable_op_write();
+    op_write->set_schema_id(_schema_id);
 
     for (auto& f : _tablet_writer->files()) {
         if (is_segment(f.path)) {
