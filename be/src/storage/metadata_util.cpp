@@ -415,7 +415,7 @@ Status convert_t_schema_to_pb_schema(const TTabletSchema& t_schema, TabletSchema
     auto compression_type = t_schema.__isset.compression_type ? t_schema.compression_type : TCompressionType::LZ4_FRAME;
     auto compression_level = t_schema.__isset.compression_level ? t_schema.compression_level : -1;
     if (compression_type == TCompressionType::ZSTD && compression_level != -1) {
-        schema->set_compression_level(compression_level);
+        out_schema->set_compression_level(compression_level);
     }
     return convert_t_schema_to_pb_schema(t_schema, compression_type, out_schema);
 }

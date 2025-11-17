@@ -180,7 +180,7 @@ Status LakeDataSource::get_tablet(const TInternalScanRange& scan_range) {
     ASSIGN_OR_RETURN(_tablet_schema,
                      RuntimeSchemaManager::get_query_schema(
                              _runtime_state->query_id(), _provider->_t_lake_scan_node.schema_id, tablet_id,
-                             _runtime_state->fragment_ctx()->fe_addr(), _tablet->metadata()));
+                             _runtime_state->fragment_ctx()->fe_addr(), _tablet.metadata()));
     return Status::OK();
 }
 
