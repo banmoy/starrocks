@@ -61,7 +61,7 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(int64_t schema
     if (metadata != nullptr) {
         if (schema_id == metadata->schema().id()) {
             schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->schema()).first;
-        } else if (!metadata->historical_schemas().empty() &&  metadata->historical_schemas().count(schema_id) > 0) {
+        } else if (!metadata->historical_schemas().empty() && metadata->historical_schemas().count(schema_id) > 0) {
             schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->historical_schemas().at(schema_id)).first;
         }
     }
@@ -85,7 +85,7 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_query_schema(const TUnique
     if (metadata != nullptr) {
         if (schema_id == metadata->schema().id()) {
             schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->schema()).first;
-        } else if (!metadata->historical_schemas().empty() &&  metadata->historical_schemas().count(schema_id) > 0) {
+        } else if (!metadata->historical_schemas().empty() && metadata->historical_schemas().count(schema_id) > 0) {
             schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->historical_schemas().at(schema_id)).first;
         }
     }
@@ -149,9 +149,9 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetR
     RETURN_IF_ERROR(convert_t_schema_to_pb_schema(single_result.schema, &schema_pb));
     TabletSchemaSPtr schema_ptr = TabletSchema::create(schema_pb);
     ExecEnv::GetInstance()->lake_tablet_manager()->cache_global_schema(schema_ptr);
-    LOG(INFO) << "get_schema success, schema_type: " << request.schema_type
-              << ", schema_id: " << request.schema_id << ", tablet_id: " << request.tablet_id
-              << ", query_id: " << print_id(request.query_id) << ", txn_id: " << request.txn_id;
+    LOG(INFO) << "get_schema success, schema_type: " << request.schema_type << ", schema_id: " << request.schema_id
+              << ", tablet_id: " << request.tablet_id << ", query_id: " << print_id(request.query_id)
+              << ", txn_id: " << request.txn_id;
     return schema_ptr;
 }
 
