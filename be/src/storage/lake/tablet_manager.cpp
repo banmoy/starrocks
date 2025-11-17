@@ -1399,4 +1399,20 @@ StatusOr<TabletAndRowsets> TabletManager::capture_tablet_and_rowsets(int64_t tab
 
     return std::make_tuple(std::move(tablet_ptr), std::move(rowsets));
 }
+
+void TabletManager::cache_global_schema(TabletSchemaPtr schema) {
+    GlobalTabletSchemaMap::Instance()->emplace(schema);
+    auto cache_key = global_schema_cache_key(schema->id());
+    _metacache->cache_tablet_schema(cache_key, std::move(schema), schema->mem_usage());
+}
+
+TabletSchemaPtr TabletManager::get_global_schema(int64_t schema_id) {
+    auto cache_key = global_schema_cache_key(schema_id);
+    auto schema = _metacache->lookup_tablet_schema(cache_key);
+    if (schema == nullptr) {
+        schema = GlobalTabletSchemaMap::Instance()->get(schema_id);
+    }
+    return schema;
+}
+
 } // namespace starrocks::lake

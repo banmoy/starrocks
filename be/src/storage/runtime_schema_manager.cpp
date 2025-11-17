@@ -36,7 +36,7 @@ Status RuntimeSchemaManager::update_latest_schema_when_publish(const TxnLogPB_Op
         return Status::OK();
     }
 
-    auto schema = GlobalTabletSchemaMap::Instance()->get(schema_id);
+    auto schema = ExecEnv::GetInstance()->lake_tablet_manager()->get_global_schema(schema_id);
     if (schema == nullptr) {
         ASSIGN_OR_RETURN(schema, get_load_schema_from_fe(schema_id, tablet_meta->id(), txn_id));
     }
@@ -53,19 +53,20 @@ Status RuntimeSchemaManager::update_latest_schema_when_publish(const TxnLogPB_Op
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(int64_t schema_id, int64_t tablet_id, int64_t txn_id,
                                                                   const TabletMetadataPtr& tablet_meta) {
-    auto schema = GlobalTabletSchemaMap::Instance()->get(schema_id);
-    if (schema == nullptr) {
-        const TabletMetadataPtr metadata =
-                tablet_meta != nullptr
-                        ? tablet_meta
-                        : ExecEnv::GetInstance()->lake_tablet_manager()->get_latest_cached_tablet_metadata(tablet_id);
-        if (metadata != nullptr) {
-            if (schema_id == metadata->schema().id()) {
-                schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->schema()).first;
-            } else if (metadata->historical_schemas().count(schema_id) > 0) {
-                schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->historical_schemas().at(schema_id)).first;
-            }
+    TabletSchemaCSPtr schema = nullptr;
+    const TabletMetadataPtr metadata =
+            tablet_meta != nullptr
+                    ? tablet_meta
+                    : ExecEnv::GetInstance()->lake_tablet_manager()->get_latest_cached_tablet_metadata(tablet_id);
+    if (metadata != nullptr) {
+        if (schema_id == metadata->schema().id()) {
+            schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->schema()).first;
+        } else if (!metadata->historical_schemas().empty() &&  metadata->historical_schemas().count(schema_id) > 0) {
+            schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->historical_schemas().at(schema_id)).first;
         }
+    }
+    if (schema == nullptr) {
+        schema = ExecEnv::GetInstance()->lake_tablet_manager()->get_global_schema(schema_id);
     }
     if (schema != nullptr) {
         return schema;
@@ -76,19 +77,20 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(int64_t schema
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_query_schema(const TUniqueId& query_id, int64_t schema_id,
                                                                    int64_t tablet_id, const TNetworkAddress& fe_addr,
                                                                    const TabletMetadataPtr& tablet_meta) {
-    auto schema = GlobalTabletSchemaMap::Instance()->get(schema_id);
-    if (schema == nullptr) {
-        const TabletMetadataPtr metadata =
-                tablet_meta != nullptr
-                        ? tablet_meta
-                        : ExecEnv::GetInstance()->lake_tablet_manager()->get_latest_cached_tablet_metadata(tablet_id);
-        if (metadata != nullptr) {
-            if (schema_id == metadata->schema().id()) {
-                schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->schema()).first;
-            } else if (metadata->historical_schemas().count(schema_id) > 0) {
-                schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->historical_schemas().at(schema_id)).first;
-            }
+    TabletSchemaCSPtr schema = nullptr;
+    const TabletMetadataPtr metadata =
+            tablet_meta != nullptr
+                    ? tablet_meta
+                    : ExecEnv::GetInstance()->lake_tablet_manager()->get_latest_cached_tablet_metadata(tablet_id);
+    if (metadata != nullptr) {
+        if (schema_id == metadata->schema().id()) {
+            schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->schema()).first;
+        } else if (!metadata->historical_schemas().empty() &&  metadata->historical_schemas().count(schema_id) > 0) {
+            schema = GlobalTabletSchemaMap::Instance()->emplace(metadata->historical_schemas().at(schema_id)).first;
         }
+    }
+    if (schema == nullptr) {
+        schema = ExecEnv::GetInstance()->lake_tablet_manager()->get_global_schema(schema_id);
     }
     if (schema != nullptr) {
         return schema;
@@ -146,12 +148,11 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetR
     TabletSchemaPB schema_pb;
     RETURN_IF_ERROR(convert_t_schema_to_pb_schema(single_result.schema, &schema_pb));
     TabletSchemaSPtr schema_ptr = TabletSchema::create(schema_pb);
-    // PUT it in cache
-    TabletSchemaCSPtr const_schema_ptr = GlobalTabletSchemaMap::Instance()->emplace(schema_ptr).first;
+    ExecEnv::GetInstance()->lake_tablet_manager()->cache_global_schema(schema_ptr);
     LOG(INFO) << "get_schema success, schema_type: " << request.schema_type
               << ", schema_id: " << request.schema_id << ", tablet_id: " << request.tablet_id
               << ", query_id: " << print_id(request.query_id) << ", txn_id: " << request.txn_id;
-    return const_schema_ptr;
+    return schema_ptr;
 }
 
 } // namespace starrocks
