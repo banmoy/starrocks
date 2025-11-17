@@ -44,10 +44,11 @@ Status RuntimeSchemaManager::update_latest_schema_when_publish(const TxnLogPB_Op
     DCHECK(schema != nullptr);
     // NOTE no need to update TabletMetadata::historical_schemas because FE forbids new FSE for legacy tables
     // whose segments does not contain struct column unique id
-    if (schema->version() > tablet_meta->schema().schema_version()) {
+    if (schema->schema_version() > tablet_meta->schema().schema_version()) {
         tablet_meta->mutable_schema()->Clear();
         schema->to_schema_pb(tablet_meta->mutable_schema());
     }
+    return Status::OK();
 }
 
 StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_load_schema(int64_t schema_id, int64_t tablet_id, int64_t txn_id,
@@ -150,7 +151,6 @@ StatusOr<TabletSchemaCSPtr> RuntimeSchemaManager::get_schema_from_fe(const TGetR
     // PUT it in cache
     TabletSchemaCSPtr const_schema_ptr = GlobalTabletSchemaMap::Instance()->emplace(schema_ptr).first;
     LOG(INFO) << "get_schema success, query_id: " << print_id(request.query_id) << ", schema_id: " << request.schema_id
-              << ", db_id: " << request.db_id << ", table_id: " << request.table_id
               << ", tablet_id: " << request.tablet_id << ", schema_type: " << static_cast<int>(request.schema_type);
     return const_schema_ptr;
 }
