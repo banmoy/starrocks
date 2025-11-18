@@ -254,6 +254,9 @@ public class OlapTableFactory implements AbstractTableFactory {
 
                 processFlatJsonConfig(properties, table, tableName);
 
+                boolean sharedDataFastSchemaEvolutionV2 = properties == null ? true :
+                        PropertyAnalyzer.analyzeSharedDataFastSchemaEvolutionV2(properties, true);
+                ((LakeTable) table).setSharedDataFastSchemaEvolutionV2(sharedDataFastSchemaEvolutionV2);
             } else {
                 table = new OlapTable(tableId, tableName, baseSchema, keysType, partitionInfo, distributionInfo, indexes);
             }

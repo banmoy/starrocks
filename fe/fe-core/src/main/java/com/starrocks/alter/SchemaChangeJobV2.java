@@ -47,6 +47,7 @@ import com.google.gson.annotations.SerializedName;
 import com.starrocks.catalog.Column;
 import com.starrocks.catalog.ColumnId;
 import com.starrocks.catalog.Database;
+import com.starrocks.catalog.HistoryOlapTableSchema;
 import com.starrocks.catalog.Index;
 import com.starrocks.catalog.KeysType;
 import com.starrocks.catalog.LocalTablet;
@@ -79,6 +80,7 @@ import com.starrocks.planner.SlotDescriptor;
 import com.starrocks.planner.TupleDescriptor;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
+import com.starrocks.server.RunMode;
 import com.starrocks.sql.analyzer.AnalyzeState;
 import com.starrocks.sql.analyzer.ExpressionAnalyzer;
 import com.starrocks.sql.analyzer.Field;
@@ -181,6 +183,11 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
     // and we need to disable it.
     @SerializedName(value = "disableReplicatedStorageForGIN")
     private boolean disableReplicatedStorageForGIN = false;
+
+    @SerializedName(value = "fse")
+    private boolean fastSchemaChange = false;
+    @SerializedName(value = "historySchema")
+    private HistoryOlapTableSchema historySchema = null;
 
     // save all schema change tasks
     private AgentBatchTask schemaChangeBatchTask = new AgentBatchTask();
@@ -971,6 +978,42 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
         }
     }
 
+    public void setFastSchemaChange(boolean fastSchemaChange) {
+        this.fastSchemaChange = fastSchemaChange;
+    }
+
+    public void setHistorySchema(HistoryOlapTableSchema historySchema) {
+        this.historySchema = historySchema;
+    }
+
+    public Optional<SchemaInfo> getHistorySchema(long dbId, long tableId, long schemaId) {
+        // TODO check db id. Load has db id ?
+        if (tableId != this.tableId) {
+            return Optional.empty();
+        }
+        return historySchema.getSchemaBySchemaId(schemaId);
+    }
+
+    @Override
+    public boolean isExpire() {
+        boolean expiredByTime = super.isExpire();
+        boolean expiredByTxn = true;
+        if (historySchema != null) {
+            try {
+                expiredByTxn = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
+                        .isPreviousTransactionsFinished(watershedTxnId, dbId, Lists.newArrayList(tableId));
+            } catch (Exception e) {
+                // As isPreviousTransactionsFinished said, exception happens only when db does not exist,
+                // so could clean the history schema safely
+            }
+            if (expiredByTxn) {
+                // release the history schema memory if no one uses it
+                historySchema = null;
+            }
+        }
+        return expiredByTime && expiredByTxn;
+    }
+
     /*
      * cancelImpl() can be called any time any place.
      * We need to clean any possible residual of this job.
@@ -1208,6 +1251,19 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
             info.add(errMsg);
             info.add(progress);
             info.add(timeoutMs / 1000);
+            StringBuilder sb = new StringBuilder();
+            if (fastSchemaChange) {
+                sb.append("fast schema change");
+                if (historySchema != null) {
+                    long historySchemaId = historySchema.getSchemaByIndexId(shadowIndexId)
+                            .map(SchemaInfo::getId).orElse(-1L);
+                    sb.append(", history schema id: ").append(historySchemaId);
+                }
+            }
+            info.add(sb.toString());
+            if (RunMode.getCurrentRunMode() == RunMode.SHARED_DATA) {
+                info.add("N/A");
+            }
             infos.add(info);
         }
     }

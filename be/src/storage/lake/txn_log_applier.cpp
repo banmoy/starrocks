@@ -24,6 +24,7 @@
 #include "storage/lake/tablet.h"
 #include "storage/lake/tablet_metadata.h"
 #include "storage/lake/update_manager.h"
+#include "storage/runtime_schema_manager.h"
 #include "testutil/sync_point.h"
 #include "util/dynamic_cache.h"
 #include "util/phmap/phmap_fwd_decl.h"
@@ -217,6 +218,7 @@ public:
         for (const auto& log : txn_logs) {
             if (log->has_op_write()) {
                 const auto& op_write = log->op_write();
+                RETURN_IF_ERROR(RuntimeSchemaManager::update_latest_schema_when_publish(op_write, log->txn_id(), _metadata.get()));
                 if (is_column_mode_partial_update(op_write)) {
                     RETURN_IF_ERROR(_tablet.update_mgr()->publish_column_mode_partial_update(
                             op_write, log->txn_id(), _metadata, &_tablet, _index_entry, &_builder, _base_version));
@@ -308,6 +310,7 @@ private:
     }
 
     Status apply_write_log(const TxnLogPB_OpWrite& op_write, int64_t txn_id) {
+        RETURN_IF_ERROR(RuntimeSchemaManager::update_latest_schema_when_publish(op_write, txn_id, _metadata.get()));
         // get lock to avoid gc
         _tablet.update_mgr()->lock_shard_pk_index_shard(_tablet.id());
         DeferOp defer([&]() { _tablet.update_mgr()->unlock_shard_pk_index_shard(_tablet.id()); });
@@ -466,7 +469,7 @@ public:
 
     Status apply(const TxnLogPB& log) override {
         if (log.has_op_write()) {
-            RETURN_IF_ERROR(apply_write_log(log.op_write()));
+            RETURN_IF_ERROR(apply_write_log(log.op_write(), log.txn_id()));
         }
         if (log.has_op_compaction()) {
             RETURN_IF_ERROR(apply_compaction_log(log.op_compaction()));
@@ -503,6 +506,7 @@ public:
             if (log->has_op_write()) {
                 const auto& op_write = log->op_write();
                 if (op_write.has_rowset() && op_write.rowset().num_rows() > 0) {
+                    RETURN_IF_ERROR(RuntimeSchemaManager::update_latest_schema_when_publish(op_write, log->txn_id(), _metadata.get()));
                     const auto& rowset = op_write.rowset();
 
                     // Check for delete predicate - not supported in batch mode
@@ -602,9 +606,10 @@ public:
     }
 
 private:
-    Status apply_write_log(const TxnLogPB_OpWrite& op_write) {
+    Status apply_write_log(const TxnLogPB_OpWrite& op_write, int64_t txn_id) {
         TEST_ERROR_POINT("NonPrimaryKeyTxnLogApplier::apply_write_log");
         if (op_write.has_rowset() && (op_write.rowset().num_rows() > 0 || op_write.rowset().has_delete_predicate())) {
+            RETURN_IF_ERROR(RuntimeSchemaManager::update_latest_schema_when_publish(op_write, txn_id, _metadata.get()));
             auto rowset = _metadata->add_rowsets();
             rowset->CopyFrom(op_write.rowset());
             rowset->set_id(_metadata->next_rowset_id());
@@ -794,7 +799,7 @@ private:
 
         if (txn_meta.incremental_snapshot()) {
             for (const auto& op_write : op_replication.op_writes()) {
-                RETURN_IF_ERROR(apply_write_log(op_write));
+                RETURN_IF_ERROR(apply_write_log(op_write, txn_meta.txn_id()));
             }
             LOG(INFO) << "Apply incremental replication log finish. tablet_id: " << _tablet.id()
                       << ", base_version: " << _metadata->version() << ", new_version: " << _new_version
@@ -804,7 +809,7 @@ private:
             _metadata->mutable_rowsets()->Clear();
 
             for (const auto& op_write : op_replication.op_writes()) {
-                RETURN_IF_ERROR(apply_write_log(op_write));
+                RETURN_IF_ERROR(apply_write_log(op_write, txn_meta.txn_id()));
             }
 
             _metadata->set_cumulative_point(0);

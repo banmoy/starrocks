@@ -29,6 +29,7 @@
 #include "storage/projection_iterator.h"
 #include "storage/rowset/short_key_range_option.h"
 #include "storage/runtime_range_pruner.hpp"
+#include "storage/runtime_schema_manager.h"
 #include "util/starrocks_metrics.h"
 
 namespace starrocks::connector {
@@ -176,7 +177,10 @@ Status LakeDataSource::get_tablet(const TInternalScanRange& scan_range) {
     int64_t tablet_id = scan_range.tablet_id;
     int64_t version = strtoul(scan_range.version.c_str(), nullptr, 10);
     ASSIGN_OR_RETURN(_tablet, ExecEnv::GetInstance()->lake_tablet_manager()->get_tablet(tablet_id, version));
-    _tablet_schema = _tablet.get_schema();
+    ASSIGN_OR_RETURN(_tablet_schema,
+                     RuntimeSchemaManager::get_query_schema(
+                             _runtime_state->query_id(), _provider->_t_lake_scan_node.schema_id, tablet_id,
+                             _runtime_state->fragment_ctx()->fe_addr(), _tablet.metadata()));
     return Status::OK();
 }
 

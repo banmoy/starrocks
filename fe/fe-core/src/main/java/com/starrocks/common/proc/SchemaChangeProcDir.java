@@ -50,7 +50,7 @@ public class SchemaChangeProcDir implements ProcDirInterface {
         ImmutableList.Builder<String> builder = new ImmutableList.Builder<String>()
                 .add("JobId").add("TableName").add("CreateTime").add("FinishTime")
                 .add("IndexName").add("IndexId").add("OriginIndexId").add("SchemaVersion")
-                .add("TransactionId").add("State").add("Msg").add("Progress").add("Timeout");
+                .add("TransactionId").add("State").add("Msg").add("Progress").add("Timeout").add("Other");
         if (RunMode.getCurrentRunMode() == RunMode.SHARED_DATA) {
             builder.add("Warehouse");
         }

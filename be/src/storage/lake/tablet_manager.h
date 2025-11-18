@@ -253,6 +253,9 @@ public:
 
     void stop();
 
+    void cache_global_schema(TabletSchemaPtr schema);
+    TabletSchemaPtr get_global_schema(int64_t schema_id);
+
 private:
     static std::string global_schema_cache_key(int64_t index_id);
     static std::string tablet_schema_cache_key(int64_t tablet_id);
