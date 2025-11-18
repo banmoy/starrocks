@@ -24,7 +24,9 @@ import com.starrocks.catalog.MaterializedIndex;
 import com.starrocks.catalog.MaterializedIndexMeta;
 import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.catalog.SchemaInfo;
+import com.starrocks.catalog.TableProperty;
 import com.starrocks.common.FeConstants;
+import com.starrocks.common.util.PropertyAnalyzer;
 import com.starrocks.common.util.TimeUtils;
 import com.starrocks.lake.LakeTable;
 import com.starrocks.persist.gson.GsonPostProcessable;
@@ -33,11 +35,14 @@ import com.starrocks.task.TabletMetadataUpdateAgentTask;
 import com.starrocks.task.TabletMetadataUpdateAgentTaskFactory;
 import com.starrocks.warehouse.Warehouse;
 import org.apache.commons.collections4.ListUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -56,9 +61,22 @@ import static java.util.Objects.requireNonNull;
  * 8. Finish the transaction
  */
 public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase implements GsonPostProcessable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(LakeTableAsyncFastSchemaChangeJob.class);
+
     // shadow index id -> index schema
     @SerializedName(value = "schemaInfos")
     private List<IndexSchemaInfo> schemaInfos;
+
+    /**
+     * This job can be used to disable the "cloud native fast schema evolution v2" feature.
+     * When this flag is true, this job will not perform a regular schema change,
+     * but will instead update all tablet metadata to the latest schema version,
+     * disabling the v2 feature for this table.
+     */
+    @SerializedName(value = "disableCloudNativeFseV2")
+    private boolean disableCloudNativeFastSchemaEvolutionV2 = false;
+
     private Set<String> partitionsWithSchemaFile = new HashSet<>();
 
     // for deserialization
@@ -82,6 +100,7 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
     public void setIndexTabletSchema(long indexId, String indexName, SchemaInfo schemaInfo) {
         schemaInfos.add(new IndexSchemaInfo(indexId, indexName, schemaInfo));
     }
+
 
     @Override
     protected TabletMetadataUpdateAgentTask createTask(PhysicalPartition partition, MaterializedIndex index, long nodeId,
@@ -116,6 +135,16 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
     }
 
     private void updateCatalogUnprotected(Database db, LakeTable table) {
+        if (disableCloudNativeFastSchemaEvolutionV2) {
+            // only update the property, no need to update schema which is actually not changed
+            TableProperty tableProperty = table.getTableProperty();
+            tableProperty.getProperties().put(PropertyAnalyzer.PROPERTIES_CLOUD_NATIVE_FAST_SCHEMA_EVOLUTION_V2, "false");
+            tableProperty.buildCloudNativeFastSchemaEvolutionV2();
+            LOG.info("Schema change job finish to disable {}, job_id: {}, table: {}",
+                    PropertyAnalyzer.PROPERTIES_CLOUD_NATIVE_FAST_SCHEMA_EVOLUTION_V2, getJobId(), table.getName());
+            return;
+        }
+
         Set<String> droppedOrModifiedColumns = Sets.newHashSet();
         boolean hasMv = !table.getRelatedMaterializedViews().isEmpty();
         for (IndexSchemaInfo indexSchemaInfo : schemaInfos) {
@@ -155,10 +184,12 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
         // This PR(#55282) only writes the schemaInfo once in the entire schema change job process, 
         // but it has compatibility issues with previous versions, so it was reverted.
         // However, since some versions include this PR, the schemaInfo may be null when upgrading from these versions.
-        List<IndexSchemaInfo> jobSchemaInfos = ((LakeTableAsyncFastSchemaChangeJob) job).schemaInfos;
+        LakeTableAsyncFastSchemaChangeJob schemaChangeJob = (LakeTableAsyncFastSchemaChangeJob) job;
+        List<IndexSchemaInfo> jobSchemaInfos = schemaChangeJob.schemaInfos;
         if (jobSchemaInfos != null && !jobSchemaInfos.isEmpty()) {
             this.schemaInfos = new ArrayList<>(jobSchemaInfos);
         }
+        this.disableCloudNativeFastSchemaEvolutionV2 = schemaChangeJob.disableCloudNativeFastSchemaEvolutionV2;
     }
 
     @Override
@@ -190,6 +221,19 @@ public class LakeTableAsyncFastSchemaChangeJob extends LakeTableAlterMetaJobBase
         return schemaInfos.stream().map(i -> i.schemaInfo).collect(Collectors.toList());
     }
 
+    Map<Long, SchemaInfo> getIndexSchemaInfoMap() {
+        return schemaInfos.stream().collect(Collectors.toMap(i -> i.indexId, i -> i.schemaInfo));
+    }
+
+    public void disableCloudNativeFastSchemaEvolutionV2() {
+        this.disableCloudNativeFastSchemaEvolutionV2 = true;
+    }
+
+    boolean isDisableCloudNativeFastSchemaEvolutionV2() {
+        return disableCloudNativeFastSchemaEvolutionV2;
+    }
+
+    @SuppressWarnings("rawtypes")
     @Override
     protected void getInfo(List<List<Comparable>> infos) {
         String progress = FeConstants.NULL_STRING;

@@ -263,4 +263,22 @@ public class LakeTable extends OlapTable {
                         .orElse(false));
             });
     }
+
+    public void setFastSchemaEvolutionV2(boolean enabled) {
+        if (tableProperty == null) {
+            tableProperty = new TableProperty(new HashMap<>());
+        }
+        tableProperty.modifyTableProperties(
+                PropertyAnalyzer.PROPERTIES_CLOUD_NATIVE_FAST_SCHEMA_EVOLUTION_V2,
+                Boolean.valueOf(enabled).toString());
+        tableProperty.buildCloudNativeFastSchemaEvolutionV2();
+    }
+
+    public boolean isFastSchemaEvolutionV2() {
+        if (tableProperty == null) {
+            // if the table is upgraded from previous version, the v2 implementation is not enabled by default
+            return false;
+        }
+        return tableProperty.isCloudNativeFastSchemaEvolutionV2(); 
+    }
 }

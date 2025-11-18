@@ -334,6 +334,14 @@ public class TableProperty implements Writable, GsonPostProcessable {
     @SerializedName(value = "enableStatisticCollectOnFirstLoad")
     private boolean enableStatisticCollectOnFirstLoad = true;
 
+    /**
+     * Whether to enable the v2 implementation of fast schema evolution for cloud-native tables.
+     * This version is more lightweight, modifying only FE metadata instead of both FE and tablet metadata.
+     * It is disabled by default for existing tables to ensure backward compatibility after an upgrade.
+     * New tables will have this property explicitly set to true upon creation.
+     */
+    private boolean cloudNativeFastSchemaEvolutionV2 = false;
+
     public TableProperty() {
         this(Maps.newLinkedHashMap());
     }
@@ -423,6 +431,7 @@ public class TableProperty implements Writable, GsonPostProcessable {
                 buildLocation();
                 buildStorageCoolDownTTL();
                 buildEnableStatisticCollectOnFirstLoad();
+                buildCloudNativeFastSchemaEvolutionV2();
                 break;
             case OperationType.OP_MODIFY_TABLE_CONSTRAINT_PROPERTY:
                 buildConstraint();
@@ -1247,6 +1256,18 @@ public class TableProperty implements Writable, GsonPostProcessable {
         return this;
     }
 
+    public TableProperty buildCloudNativeFastSchemaEvolutionV2() {
+        if (properties.containsKey(PropertyAnalyzer.PROPERTIES_CLOUD_NATIVE_FAST_SCHEMA_EVOLUTION_V2)) {
+            cloudNativeFastSchemaEvolutionV2 = Boolean.parseBoolean(
+                    properties.get(PropertyAnalyzer.PROPERTIES_CLOUD_NATIVE_FAST_SCHEMA_EVOLUTION_V2));
+        }
+        return this;
+    }
+
+    public boolean isCloudNativeFastSchemaEvolutionV2() {
+        return cloudNativeFastSchemaEvolutionV2;
+    }
+
     @Override
     public void gsonPostProcess() throws IOException {
         try {
@@ -1274,6 +1295,7 @@ public class TableProperty implements Writable, GsonPostProcessable {
         buildBinlogAvailableVersion();
         buildDataCachePartitionDuration();
         buildUseFastSchemaEvolution();
+        buildCloudNativeFastSchemaEvolutionV2();
         buildStorageType();
         buildMvProperties();
         buildLocation();
