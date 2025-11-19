@@ -170,6 +170,24 @@ public class SchemaInfo {
         return tSchema;
     }
 
+    @Override
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        SchemaInfo that = (SchemaInfo) o;
+        return id == that.id && shortKeyColumnCount == that.shortKeyColumnCount && version == that.version &&
+                schemaHash == that.schemaHash && Double.compare(bloomFilterFpp, that.bloomFilterFpp) == 0 &&
+                compressionLevel == that.compressionLevel && keysType == that.keysType &&
+                storageType == that.storageType &&
+                Objects.equals(columns, that.columns) &&
+                Objects.equals(sortKeyIndexes, that.sortKeyIndexes) &&
+                Objects.equals(sortKeyUniqueIds, that.sortKeyUniqueIds) &&
+                Objects.equals(indexes, that.indexes) &&
+                Objects.equals(bloomFilterColumnNames, that.bloomFilterColumnNames) &&
+                compressionType == that.compressionType;
+    }
+
     public static Builder newBuilder() {
         return new Builder();
     }
@@ -288,5 +306,23 @@ public class SchemaInfo {
             Preconditions.checkState(storageType != null);
             return new SchemaInfo(this);
         }
+    }
+
+    public static SchemaInfo fromMaterializedIndex(OlapTable table, MaterializedIndexMeta indexMeta) {
+        return SchemaInfo.newBuilder()
+                .setId(indexMeta.getSchemaId())
+                .setKeysType(indexMeta.getKeysType())
+                .setShortKeyColumnCount(indexMeta.getShortKeyColumnCount())
+                .setStorageType(table.getStorageType())
+                .setVersion(indexMeta.getSchemaVersion())
+                .addColumns(indexMeta.getSchema())
+                .setSortKeyIndexes(indexMeta.getSortKeyIdxes())
+                .setSortKeyUniqueIds(indexMeta.getSortKeyUniqueIds())
+                .setIndexes(OlapTable.getIndexesBySchema(table.getCopiedIndexes(), indexMeta.getSchema()))
+                .setBloomFilterColumnNames(table.getBfColumnIds())
+                .setBloomFilterFpp(table.getBfFpp())
+                .setCompressionType(table.getCompressionType())
+                .setCompressionLevel(table.getCompressionLevel())
+                .build();
     }
 }
