@@ -294,14 +294,14 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
             try {
                 expiredByHistorySchema = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().
                     isPreviousTransactionsFinished(historySchema.getHistoryTxnIdThreshold(), dbId, Lists.newArrayList(tableId));
-                if (expiredByHistorySchema) {
-                    historySchema.setExpire();
-                    LOG.info("Expire the history schema, jobId: {}, tableName: {}, expireTxnIdThreshold: {}",
-                            jobId, tableName, historySchema.getHistoryTxnIdThreshold());
-                }
             } catch (Exception e) {
                 // As isPreviousTransactionsFinished said, exception happens only when db does not exist,
                 // so could clean the history schema safely
+            }
+            if (expiredByHistorySchema) {
+                historySchema.setExpire();
+                LOG.info("Expire the history schema, jobId: {}, tableName: {}, expireTxnIdThreshold: {}",
+                        jobId, tableName, historySchema.getHistoryTxnIdThreshold());
             }
         }
         return expiredByTime && expiredByHistorySchema;
