@@ -311,10 +311,11 @@ public class SchemaInfo {
     public static SchemaInfo fromMaterializedIndex(OlapTable table, MaterializedIndexMeta indexMeta) {
         return SchemaInfo.newBuilder()
                 .setId(indexMeta.getSchemaId())
+                .setVersion(indexMeta.getSchemaVersion())
+                .setSchemaHash(indexMeta.getSchemaHash())
                 .setKeysType(indexMeta.getKeysType())
                 .setShortKeyColumnCount(indexMeta.getShortKeyColumnCount())
                 .setStorageType(table.getStorageType())
-                .setVersion(indexMeta.getSchemaVersion())
                 .addColumns(indexMeta.getSchema())
                 .setSortKeyIndexes(indexMeta.getSortKeyIdxes())
                 .setSortKeyUniqueIds(indexMeta.getSortKeyUniqueIds())
