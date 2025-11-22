@@ -188,6 +188,12 @@ public class SchemaInfo {
                 compressionType == that.compressionType;
     }
 
+    @Override
+    public int hashCode() {
+        return Objects.hash(id, shortKeyColumnCount, keysType, storageType, version, schemaHash, columns, sortKeyIndexes,
+                sortKeyUniqueIds, indexes, bloomFilterColumnNames, bloomFilterFpp, compressionType, compressionLevel);
+    }
+
     public static Builder newBuilder() {
         return new Builder();
     }

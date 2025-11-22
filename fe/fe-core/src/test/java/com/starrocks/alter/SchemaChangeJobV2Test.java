@@ -599,8 +599,11 @@ public class SchemaChangeJobV2Test extends DDLTestBase {
                                             OlapTableHistorySchema historySchema) {
         SchemaInfo originSchemaInfo = SchemaInfo.fromMaterializedIndex(table, originMeta);
         Assertions.assertNotNull(historySchema);
-        Assertions.assertEquals(originSchemaInfo, historySchema.getSchemaByIndexId(indexId).orElse(null));
-        Assertions.assertEquals(originSchemaInfo, historySchema.getSchemaBySchemaId(originMeta.getSchemaId()).orElse(null));
+        SchemaInfo schemaInfo = historySchema.getSchemaByIndexId(indexId).orElse(null);
+        Assertions.assertNotNull(schemaInfo);
+        Assertions.assertEquals(originSchemaInfo, schemaInfo);
+        Assertions.assertEquals(originSchemaInfo.hashCode(), schemaInfo.hashCode());
+        Assertions.assertSame(schemaInfo, historySchema.getSchemaBySchemaId(originMeta.getSchemaId()).orElse(null));
     }
 
     private AlterJobV2 executeAlterAndWaitFinish(OlapTable table, String sql) throws Exception {
