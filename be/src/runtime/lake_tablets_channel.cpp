@@ -954,6 +954,11 @@ void LakeTabletsChannel::update_profile() {
         RuntimeProfile* profile = _tablets_profile->create_child(fmt::format("{}", writer->tablet_id()));
         _update_tablet_profile(writer, profile);
         tablets_profile.push_back(profile);
+        if (config::pipeline_print_profile) {
+            std::stringstream ss;
+            profile->pretty_print(&ss);
+            LOG(INFO) << "txn_id: " << _txn_id << ", tablet_id: " << writer->tablet_id() << ", profile:\n" << ss.str();
+        }
     }
 
     ObjectPool obj_pool;
@@ -964,6 +969,15 @@ void LakeTabletsChannel::update_profile() {
                     static_cast<int64_t>(tablets_profile.size()));
         final_profile->copy_all_info_strings_from(merged_profile);
         final_profile->copy_all_counters_from(merged_profile);
+        if (config::pipeline_print_profile) {
+            std::stringstream merged_ss;
+            merged_profile->pretty_print(&merged_ss);
+            LOG(INFO) << "txn_id: " << _txn_id << ", merged_profile:\n" << merged_ss.str();
+
+            std::stringstream final_ss;
+            final_profile->pretty_print(&final_ss);
+            LOG(INFO) << "txn_id: " << _txn_id << ", final_profile:\n" << final_ss.str();
+        }
     }
 }
 
