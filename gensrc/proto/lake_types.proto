@@ -222,6 +222,14 @@ message BundleTabletMetadataPB {
 }
 
 message TxnLogPB {
+
+    message TableSchemaMetaPB {
+        optional int64 db_id = 1;
+        optional int64 table_id = 2;
+        optional int64 schema_id = 3;
+        optional int64 schema_version = 4; 
+    }
+
     message OpWrite {
         optional RowsetMetadataPB rowset = 1;
         // some txn semantic information bind to this rowset
@@ -231,6 +239,7 @@ message TxnLogPB {
         repeated string rewrite_segments = 4;
         repeated bytes del_encryption_metas = 5;
         repeated FileMetaPB ssts = 6;
+        optional TableSchemaMetaPB schema_meta = 7;
     }
 
     message OpCompaction {

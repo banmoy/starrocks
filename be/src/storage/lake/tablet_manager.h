@@ -52,10 +52,12 @@ using TabletAndRowsets = std::tuple<std::shared_ptr<Tablet>, std::vector<BaseRow
 class CompactionScheduler;
 class Metacache;
 class VersionedTablet;
+class TableSchemaService;
 
 class TabletManager {
     friend class Tablet;
     friend class MetaFileBuilder;
+    friend class TableSchemaService;
 
 public:
     // Does NOT take the ownership of |location_provider| and |location_provider| must outlive
@@ -213,6 +215,8 @@ public:
 
     void update_metacache_limit(size_t limit);
 
+    TableSchemaService* table_schema_service() { return _table_schema_service.get(); }
+
     // The return value will never be null.
     Metacache* metacache() { return _metacache.get(); }
 
@@ -256,6 +260,9 @@ public:
 
     void stop();
 
+    void cache_global_schema(TabletSchemaPtr schema);
+    TabletSchemaPtr get_global_schema(int64_t schema_id);
+
 private:
     static std::string global_schema_cache_key(int64_t index_id);
     static std::string tablet_schema_cache_key(int64_t tablet_id);
@@ -283,6 +290,7 @@ private:
     std::unique_ptr<Metacache> _metacache;
     std::unique_ptr<CompactionScheduler> _compaction_scheduler;
     UpdateManager* _update_mgr = nullptr;
+    std::unique_ptr<TableSchemaService> _table_schema_service;
 
     std::shared_mutex _meta_lock;
     std::unordered_map<int64_t, int64_t> _tablet_in_writing_size;

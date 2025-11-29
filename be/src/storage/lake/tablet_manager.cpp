@@ -40,6 +40,7 @@
 #include "storage/lake/options.h"
 #include "storage/lake/tablet.h"
 #include "storage/lake/tablet_metadata.h"
+#include "storage/lake/table_schema_service.h"
 #include "storage/lake/txn_log.h"
 #include "storage/lake/update_manager.h"
 #include "storage/lake/vacuum.h"
@@ -76,7 +77,8 @@ TabletManager::TabletManager(std::shared_ptr<LocationProvider> location_provider
         : _location_provider(std::move(location_provider)),
           _metacache(std::make_unique<Metacache>(cache_capacity)),
           _compaction_scheduler(std::make_unique<CompactionScheduler>(this)),
-          _update_mgr(update_mgr) {
+          _update_mgr(update_mgr),
+          _table_schema_service(std::make_unique<TableSchemaService>(this)) {
     _update_mgr->set_tablet_mgr(this);
 }
 
@@ -1420,4 +1422,17 @@ StatusOr<TabletAndRowsets> TabletManager::capture_tablet_and_rowsets(int64_t tab
 
     return std::make_tuple(std::move(tablet_ptr), std::move(rowsets));
 }
+
+void TabletManager::cache_global_schema(TabletSchemaPtr schema) {
+    auto [schema, inserted] = GlobalTabletSchemaMap::Instance()->emplace(schema);
+    auto cache_key = global_schema_cache_key(schema->id());
+    auto cache_size = inserted ? schema->mem_usage() : 0;
+    _metacache->cache_tablet_schema(cache_key, schema, cache_size);
+}
+
+TabletSchemaPtr TabletManager::get_global_schema(int64_t schema_id) {
+    auto cache_key = global_schema_cache_key(schema_id);
+    return _metacache->lookup_tablet_schema(cache_key);
+}
+
 } // namespace starrocks::lake
