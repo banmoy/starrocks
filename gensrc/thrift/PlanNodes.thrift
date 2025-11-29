@@ -685,6 +685,10 @@ struct TLakeScanNode {
   40: optional i64 back_pressure_throttle_time
   41: optional i64 back_pressure_throttle_time_upper_bound
   42: optional i64 back_pressure_num_rows
+
+  43: optional i64 db_id
+  44: optional i64 table_id
+  45: optional i64 schema_id
 }
 
 struct TEqJoinCondition {
