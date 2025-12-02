@@ -21,6 +21,7 @@
 #include "runtime/client_cache.h"
 #include "storage/lake/tablet_manager.h"
 #include "storage/tablet_schema_map.h"
+#include "testutil/sync_point.h"
 #include "util/thrift_rpc_helper.h"
 
 namespace starrocks::lake {
@@ -99,7 +100,7 @@ TabletSchemaPtr TableSchemaService::_get_local_schema(int64_t schema_id, const T
 
 StatusOr<TabletSchemaPtr> TableSchemaService::_get_remote_schema(const TGetTableSchemaRequest& request,
                                                                  const TNetworkAddress& fe) {
-    int32_t num_retries = 2;
+    int32_t num_retries = 1;
     // should separate by FE for high availability
     GroupStrategy group_strategy = GroupStrategy::SCHEMA_AND_FE;
     TableSchemaService::GroupResultPtr group_result;
@@ -107,7 +108,7 @@ StatusOr<TabletSchemaPtr> TableSchemaService::_get_remote_schema(const TGetTable
         std::string group_key = _group_key(group_strategy, request, fe);
         group_result = _rpc_groups.Do(group_key, [&]() { return _send_rpc(request, fe); });
         auto& response = group_result->response;
-        auto& leader = group_result->leader;
+        auto& leader = group_result->leader_info;
         if (response.ok()) {
             break;
         }
@@ -163,20 +164,25 @@ TableSchemaService::GroupResultPtr TableSchemaService::_send_rpc(const TGetTable
     request_batch.__set_requests(std::vector<TGetTableSchemaRequest>{request});
 
     TBatchGetTableSchemaResponse response_batch;
-    Status status = ThriftRpcHelper::rpc<FrontendServiceClient>(
-            fe.hostname, fe.port,
-            [&request_batch, &response_batch](FrontendServiceConnection& client) {
-                client->getTableSchema(response_batch, request_batch);
-            },
-            config::thrift_rpc_timeout_ms);
+    Status status;
+    TEST_SYNC_POINT_CALLBACK("TableSchemaService::_send_rpc::before_rpc", &status);
+    if (status.ok()) {
+        status = ThriftRpcHelper::rpc<FrontendServiceClient>(
+                fe.hostname, fe.port,
+                [&request_batch, &response_batch](FrontendServiceConnection& client) {
+                    client->getTableSchema(response_batch, request_batch);
+                    TEST_SYNC_POINT_CALLBACK("TableSchemaService::_send_rpc::after_rpc_callback", &response_batch);
+                },
+                config::thrift_rpc_timeout_ms);
+    }
 
     TableSchemaService::GroupResultPtr result = std::make_shared<TableSchemaService::GroupResult>();
-    result->leader.fe = fe;
-    result->leader.source = request.request_source;
+    result->leader_info.fe = fe;
+    result->leader_info.source = request.request_source;
     if (request.request_source == TTableSchemaRequestSource::SCAN) {
-        result->leader.query_id = request.query_id;
+        result->leader_info.query_id = request.query_id;
     } else if (request.request_source == TTableSchemaRequestSource::LOAD) {
-        result->leader.txn_id = request.txn_id;
+        result->leader_info.txn_id = request.txn_id;
     }
 
     if (!status.ok()) {
