@@ -395,7 +395,7 @@ StatusOr<TabletSchemaPtr> TableSchemaService::_fallback_load_to_schema_file(int6
     }
     auto tablet_schema = std::move(tablet_schema_res).value();
     if (tablet_schema->id() != schema_id) {
-        return Status::InternalError(
+        return Status::NotFound(
                 fmt::format("schema not match, tablet id: {}, tablet schema id/version: {}/{}, expected schema id: {}",
                             tablet_id, tablet_schema->id(), tablet_schema->schema_version(), schema_id));
     }
