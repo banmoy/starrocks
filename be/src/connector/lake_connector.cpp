@@ -179,7 +179,7 @@ Status LakeDataSource::get_tablet(const TInternalScanRange& scan_range) {
     auto tablet_manager = ExecEnv::GetInstance()->lake_tablet_manager();
     ASSIGN_OR_RETURN(_tablet, tablet_manager->get_tablet(tablet_id, version));
     auto& lake_scan_node = _provider->_t_lake_scan_node;
-    if (lake_scan_node.__isset.schema_meta) {
+    if (lake_scan_node.__isset.schema_key) {
         const auto& t_schema_key = lake_scan_node.schema_key;
         TableSchemaKeyPB schema_key_pb;
         schema_key_pb.set_schema_id(t_schema_key.schema_id);

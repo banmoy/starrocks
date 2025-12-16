@@ -86,13 +86,13 @@ StatusOr<TabletSchemaPtr> TableSchemaService::get_schema_for_load(const TableSch
         return schema;
     }
 
-    TTableSchemaMeta thrift_schema_meta;
-    thrift_schema_meta.__set_schema_id(schema_id);
-    thrift_schema_meta.__set_db_id(schema_key.db_id());
-    thrift_schema_meta.__set_table_id(schema_key.table_id());
+    TTableSchemaKey thrift_schema_key;
+    thrift_schema_key.__set_schema_id(schema_id);
+    thrift_schema_key.__set_db_id(schema_key.db_id());
+    thrift_schema_key.__set_table_id(schema_key.table_id());
 
     TGetTableSchemaRequest request;
-    request.__set_schema_meta(thrift_schema_meta);
+    request.__set_schema_key(thrift_schema_key);
     request.__set_source(TTableSchemaRequestSource::LOAD);
     request.__set_txn_id(txn_id);
     request.__set_tablet_id(tablet_id);
@@ -124,13 +124,13 @@ StatusOr<TabletSchemaPtr> TableSchemaService::get_schema_for_scan(const TableSch
         return schema;
     }
 
-    TTableSchemaMeta thrift_schema_meta;
-    thrift_schema_meta.__set_schema_id(schema_id);
-    thrift_schema_meta.__set_db_id(schema_key.db_id());
-    thrift_schema_meta.__set_table_id(schema_key.table_id());
+    TTableSchemaKey thrift_schema_key;
+    thrift_schema_key.__set_schema_id(schema_id);
+    thrift_schema_key.__set_db_id(schema_key.db_id());
+    thrift_schema_key.__set_table_id(schema_key.table_id());
 
     TGetTableSchemaRequest request;
-    request.__set_schema_meta(thrift_schema_meta);
+    request.__set_schema_key(thrift_schema_key);
     request.__set_source(TTableSchemaRequestSource::SCAN);
     request.__set_tablet_id(tablet_id);
     request.__set_query_id(query_id);
@@ -350,7 +350,7 @@ TableSchemaService::SingleFlightResultPtr TableSchemaService::_fetch_schema_via_
 
 std::string TableSchemaService::_group_key(GroupStrategy strategy, const TGetTableSchemaRequest& request,
                                            const TNetworkAddress& fe) {
-    int64_t schema_id = request.schema_meta.schema_id;
+    int64_t schema_id = request.schema_key.schema_id;
     switch (strategy) {
     case GroupStrategy::SCHEMA_AND_QUERY:
         return fmt::format("q{}:{}:{}", schema_id, request.query_id.hi, request.query_id.lo);
@@ -364,9 +364,9 @@ std::string TableSchemaService::_group_key(GroupStrategy strategy, const TGetTab
 
 std::string TableSchemaService::_print_request_info(const TGetTableSchemaRequest& request) {
     std::stringstream ss;
-    auto& schema_meta = request.schema_meta;
-    ss << "db_id: " << schema_meta.db_id << ", table_id: " << schema_meta.table_id
-       << ", schema_id: " << schema_meta.schema_id << ", tablet_id: " << request.tablet_id;
+    auto& schema_key = request.schema_key;
+    ss << "db_id: " << schema_key.db_id << ", table_id: " << schema_key.table_id
+       << ", schema_id: " << schema_key.schema_id << ", tablet_id: " << request.tablet_id;
     if (request.source == TTableSchemaRequestSource::LOAD) {
         ss << ", txn_id: " << request.txn_id;
     } else if (request.source == TTableSchemaRequestSource::SCAN) {
