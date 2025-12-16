@@ -47,12 +47,12 @@ bvar::Adder<int64_t> g_tablet_metadata_hit("table_schema_service", "tablet_metad
 bvar::Adder<int64_t> g_local_miss("table_schema_service", "local_miss");
 // Total latency (in microseconds) for remote schema fetches, including all retry attempts.
 // This measures the end-to-end time from initiating remote fetch to completion.
-bvar::LatencyRecorder g_remote_fetch_latency_us("table_schema_service", "remote_fetch");
+bvar::LatencyRecorder g_remote_fetch_latency_us("table_schema_service", "remote_fetch_us");
 // Number of retry attempts for remote schema fetches (excludes the initial attempt).
 bvar::Adder<int64_t> g_remote_fetch_retries("table_schema_service", "remote_fetch_retries");
 // Latency (in microseconds) for individual RPC calls to FE for schema fetching.
 // This measures single RPC latency, while g_remote_fetch_latency_us measures total time including retries.
-bvar::LatencyRecorder g_schema_rpc_latency_us("table_schema_service", "schema_rpc");
+bvar::LatencyRecorder g_schema_rpc_latency_us("table_schema_service", "schema_rpc_us");
 
 // Failpoint to disable remote schema fetching for load operations in tests.
 // Previously, tests would fallback to local tablet metadata files when schema is not in schema cache
