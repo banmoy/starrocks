@@ -32,6 +32,7 @@
 #include "storage/chunk_helper.h"
 #include "testutil/assert.h"
 #include "util/defer_op.h"
+#include "util/slice.h"
 
 namespace starrocks {
 
@@ -262,11 +263,11 @@ TEST_F(TabletSinkTest, print_varchar_error_msg_includes_row_info) {
 
     // Fill VARCHAR column with test data
     auto* varchar_slot = desc_tbl->get_tuple_descriptor(0)->slots()[0];
-    auto* varchar_col = down_cast<BinaryColumn*>(const_cast<Column*>(
-            ColumnHelper::get_data_column(chunk->get_column_raw_ptr_by_slot_id(varchar_slot->id()))));
-    varchar_col->append_string("short");                                              // row 0: valid (5 chars <= 10)
-    varchar_col->append_string("this_is_a_very_long_string_that_exceeds_max_length"); // row 1: invalid (> 10)
-    varchar_col->append_string("medium_str");                                         // row 2: valid (10 chars == 10)
+    auto* varchar_col = chunk->get_column_by_slot_id(varchar_slot->id()).get();
+    varchar_col->append_datum(Datum(Slice("short"))); // row 0: valid (5 chars <= 10)
+    varchar_col->append_datum(
+            Datum(Slice("this_is_a_very_long_string_that_exceeds_max_length"))); // row 1: invalid (> 10)
+    varchar_col->append_datum(Datum(Slice("medium_str")));                       // row 2: valid (10 chars == 10)
 
     _setup_chunk_slot_map(chunk, desc_tbl->get_tuple_descriptor(0)->slots());
     std::string expected_row_debug = chunk->debug_row(error_row_index);
