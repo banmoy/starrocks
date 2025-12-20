@@ -219,18 +219,10 @@ protected:
     }
 
     // Verify error log contains row information
-    void _verify_error_log_contains_row_info(std::unique_ptr<RuntimeState>& runtime_state,
+    void _verify_error_log_contains_row_info(const std::string& error_log_path, ExecEnv* exec_env,
                                              const std::string& expected_row_debug, const std::string& error_keyword1,
                                              const std::string& error_keyword2) {
-        // Save the error log file path before closing runtime_state
-        std::string error_log_path = runtime_state->get_error_log_file_path();
-        ExecEnv* exec_env = runtime_state->exec_env();
-
-        // Close runtime_state to ensure error log file is flushed
-        // The destructor will close and flush the error log file
-        runtime_state.reset();
-
-        // Now read the error log file using the saved path
+        // Read the error log file using the saved path
         std::string error_log_content = _read_error_log_file(error_log_path, exec_env);
 
         ASSERT_FALSE(error_log_content.empty())
@@ -290,7 +282,15 @@ TEST_F(TabletSinkTest, print_varchar_error_msg_includes_row_info) {
     std::string expected_row_debug = chunk->debug_row(error_row_index);
 
     sink->send_chunk(runtime_state.get(), chunk.get());
-    _verify_error_log_contains_row_info(runtime_state, expected_row_debug, "String", "too long");
+
+    // Save error log file path and ExecEnv before closing runtime_state
+    std::string error_log_path = runtime_state->get_error_log_file_path();
+    ExecEnv* exec_env = runtime_state->exec_env();
+    // Close runtime_state to ensure error log file is flushed
+    // The destructor will close and flush the error log file
+    runtime_state.reset();
+
+    _verify_error_log_contains_row_info(error_log_path, exec_env, expected_row_debug, "String", "too long");
 }
 
 // TC-10: Test that _print_decimal_error_msg includes row information
@@ -320,7 +320,15 @@ TEST_F(TabletSinkTest, print_decimal_error_msg_includes_row_info) {
     std::string expected_row_debug = chunk->debug_row(error_row_index);
 
     sink->send_chunk(runtime_state.get(), chunk.get());
-    _verify_error_log_contains_row_info(runtime_state, expected_row_debug, "Decimal", "out of range");
+
+    // Save error log file path and ExecEnv before closing runtime_state
+    std::string error_log_path = runtime_state->get_error_log_file_path();
+    ExecEnv* exec_env = runtime_state->exec_env();
+    // Close runtime_state to ensure error log file is flushed
+    // The destructor will close and flush the error log file
+    runtime_state.reset();
+
+    _verify_error_log_contains_row_info(error_log_path, exec_env, expected_row_debug, "Decimal", "out of range");
 }
 
 // TC-15: Test that _print_decimalv3_error_msg includes row information
@@ -350,7 +358,15 @@ TEST_F(TabletSinkTest, print_decimalv3_error_msg_includes_row_info) {
     std::string expected_row_debug = chunk->debug_row(error_row_index);
 
     sink->send_chunk(runtime_state.get(), chunk.get());
-    _verify_error_log_contains_row_info(runtime_state, expected_row_debug, "Decimal", "out of range");
+
+    // Save error log file path and ExecEnv before closing runtime_state
+    std::string error_log_path = runtime_state->get_error_log_file_path();
+    ExecEnv* exec_env = runtime_state->exec_env();
+    // Close runtime_state to ensure error log file is flushed
+    // The destructor will close and flush the error log file
+    runtime_state.reset();
+
+    _verify_error_log_contains_row_info(error_log_path, exec_env, expected_row_debug, "Decimal", "out of range");
 }
 
 } // namespace starrocks
