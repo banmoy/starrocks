@@ -323,10 +323,10 @@ TEST_F(TabletSinkTest, print_decimalv3_error_msg_includes_row_info) {
     // Fill DECIMAL64 column with test data
     auto* decimal64_slot = desc_tbl->get_tuple_descriptor(0)->slots()[2];
     auto* decimal64_col = chunk->get_column_raw_ptr_by_slot_id(decimal64_slot->id());
-    decimal64_col->append_datum(Datum(12345LL)); // row 0: valid value
+    decimal64_col->append_datum(Datum(static_cast<int64_t>(12345))); // row 0: valid value
     // For DECIMAL64 with precision=10, scale=2, max value is 99999999.99 (stored as 9999999999)
     // Use 10000000000 (represents 100000000.00, exceeds max)
-    decimal64_col->append_datum(Datum(10000000000LL)); // row 1: out of range
+    decimal64_col->append_datum(Datum(static_cast<int64_t>(10000000000LL))); // row 1: out of range
 
     chunk->materialized_nullable();
     _setup_chunk_slot_map(chunk, desc_tbl->get_tuple_descriptor(0)->slots());
