@@ -195,9 +195,8 @@ protected:
             }
             auto* column = chunk->get_column_raw_ptr_by_slot_id(slot->id());
             if (slot->type().type == TYPE_INT) {
-                auto* int_col = down_cast<FixedLengthColumn<int32_t>*>(ColumnHelper::get_data_column(column));
                 for (size_t j = 0; j < num_rows; ++j) {
-                    int_col->append(100 + static_cast<int32_t>(j) * 100);
+                    column->append_datum(Datum(static_cast<int32_t>(100 + j * 100)));
                 }
             } else {
                 // Fill other columns with default values
@@ -268,7 +267,7 @@ TEST_F(TabletSinkTest, print_varchar_error_msg_includes_row_info) {
     varchar_col->append_datum(
             Datum(Slice("this_is_a_very_long_string_that_exceeds_max_length"))); // row 1: invalid (> 10)
     varchar_col->append_datum(Datum(Slice("medium_str")));                       // row 2: valid (10 chars == 10)
-    varchar_col->materialized_nullable(); // Ensure column is materialized after appending all data
+    chunk->materialized_nullable(); // Ensure all columns are materialized after appending all data
 
     _setup_chunk_slot_map(chunk, desc_tbl->get_tuple_descriptor(0)->slots());
     std::string expected_row_debug = chunk->debug_row(error_row_index);
@@ -293,13 +292,13 @@ TEST_F(TabletSinkTest, print_decimal_error_msg_includes_row_info) {
 
     // Fill DECIMALV2 column with test data
     auto* decimalv2_slot = desc_tbl->get_tuple_descriptor(0)->slots()[1];
-    auto* decimal_col = down_cast<DecimalColumn*>(const_cast<Column*>(
-            ColumnHelper::get_data_column(chunk->get_column_by_slot_id(decimalv2_slot->id()).get())));
-    decimal_col->append(DecimalV2Value(12345, 2)); // row 0: valid value
+    auto* decimal_col = chunk->get_column_raw_ptr_by_slot_id(decimalv2_slot->id());
+    decimal_col->append_datum(Datum(DecimalV2Value(12345, 2))); // row 0: valid value
     // Max integer part for precision=10, scale=2 is 99999999 (8 digits)
     // Create a value with integer part = 100000000 (9 digits, exceeds max)
-    decimal_col->append(DecimalV2Value(100000000, 0)); // row 1: out of range
+    decimal_col->append_datum(Datum(DecimalV2Value(100000000, 0))); // row 1: out of range
 
+    chunk->materialized_nullable();
     _setup_chunk_slot_map(chunk, desc_tbl->get_tuple_descriptor(0)->slots());
     std::string expected_row_debug = chunk->debug_row(error_row_index);
 
@@ -323,13 +322,13 @@ TEST_F(TabletSinkTest, print_decimalv3_error_msg_includes_row_info) {
 
     // Fill DECIMAL64 column with test data
     auto* decimal64_slot = desc_tbl->get_tuple_descriptor(0)->slots()[2];
-    auto* decimal64_col = down_cast<Decimal64Column*>(const_cast<Column*>(
-            ColumnHelper::get_data_column(chunk->get_column_by_slot_id(decimal64_slot->id()).get())));
-    decimal64_col->append(12345); // row 0: valid value
+    auto* decimal64_col = chunk->get_column_raw_ptr_by_slot_id(decimal64_slot->id());
+    decimal64_col->append_datum(Datum(12345LL)); // row 0: valid value
     // For DECIMAL64 with precision=10, scale=2, max value is 99999999.99 (stored as 9999999999)
     // Use 10000000000 (represents 100000000.00, exceeds max)
-    decimal64_col->append(10000000000LL); // row 1: out of range
+    decimal64_col->append_datum(Datum(10000000000LL)); // row 1: out of range
 
+    chunk->materialized_nullable();
     _setup_chunk_slot_map(chunk, desc_tbl->get_tuple_descriptor(0)->slots());
     std::string expected_row_debug = chunk->debug_row(error_row_index);
 
