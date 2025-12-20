@@ -156,13 +156,16 @@ protected:
         return data_sink;
     }
 
-    std::string _read_error_log_file(RuntimeState* runtime_state) {
-        // Get the actual error log file path from RuntimeState
-        std::string actual_path = runtime_state->get_error_log_file_path();
-        if (actual_path.empty()) {
+    std::string _read_error_log_file(const std::string& relative_path, ExecEnv* exec_env) {
+        if (relative_path.empty()) {
+            // Error log file hasn't been created yet - no errors have been logged
             return "";
         }
-        std::ifstream file(actual_path);
+        // Convert relative path to absolute path using load_path_mgr
+        // The file is opened with absolute path in create_error_log_file(),
+        // but get_error_log_file_path() returns the relative path
+        std::string absolute_path = exec_env->load_path_mgr()->get_load_error_absolute_path(relative_path);
+        std::ifstream file(absolute_path);
         if (!file.is_open()) {
             return "";
         }
@@ -216,11 +219,25 @@ protected:
     }
 
     // Verify error log contains row information
-    void _verify_error_log_contains_row_info(RuntimeState* runtime_state, const std::string& expected_row_debug,
-                                             const std::string& error_keyword1, const std::string& error_keyword2) {
-        std::string error_log_content = _read_error_log_file(runtime_state);
+    void _verify_error_log_contains_row_info(std::unique_ptr<RuntimeState>& runtime_state,
+                                             const std::string& expected_row_debug, const std::string& error_keyword1,
+                                             const std::string& error_keyword2) {
+        // Save the error log file path before closing runtime_state
+        std::string error_log_path = runtime_state->get_error_log_file_path();
+        ExecEnv* exec_env = runtime_state->exec_env();
 
-        ASSERT_FALSE(error_log_content.empty()) << "Error log file should not be empty";
+        // Close runtime_state to ensure error log file is flushed
+        // The destructor will close and flush the error log file
+        runtime_state.reset();
+
+        // Now read the error log file using the saved path
+        std::string error_log_content = _read_error_log_file(error_log_path, exec_env);
+
+        ASSERT_FALSE(error_log_content.empty())
+                << "Error log file should not be empty. "
+                << "Relative path: " << error_log_path << ". "
+                << "If path is empty, no errors were logged (validation may not have been triggered).";
+
         ASSERT_NE(error_log_content.find("Row:"), std::string::npos) << "Error log should contain 'Row:' marker";
 
         ASSERT_NE(error_log_content.find(expected_row_debug), std::string::npos)
@@ -273,7 +290,7 @@ TEST_F(TabletSinkTest, print_varchar_error_msg_includes_row_info) {
     std::string expected_row_debug = chunk->debug_row(error_row_index);
 
     sink->send_chunk(runtime_state.get(), chunk.get());
-    _verify_error_log_contains_row_info(runtime_state.get(), expected_row_debug, "String", "too long");
+    _verify_error_log_contains_row_info(runtime_state, expected_row_debug, "String", "too long");
 }
 
 // TC-10: Test that _print_decimal_error_msg includes row information
@@ -303,7 +320,7 @@ TEST_F(TabletSinkTest, print_decimal_error_msg_includes_row_info) {
     std::string expected_row_debug = chunk->debug_row(error_row_index);
 
     sink->send_chunk(runtime_state.get(), chunk.get());
-    _verify_error_log_contains_row_info(runtime_state.get(), expected_row_debug, "Decimal", "out of range");
+    _verify_error_log_contains_row_info(runtime_state, expected_row_debug, "Decimal", "out of range");
 }
 
 // TC-15: Test that _print_decimalv3_error_msg includes row information
@@ -333,7 +350,7 @@ TEST_F(TabletSinkTest, print_decimalv3_error_msg_includes_row_info) {
     std::string expected_row_debug = chunk->debug_row(error_row_index);
 
     sink->send_chunk(runtime_state.get(), chunk.get());
-    _verify_error_log_contains_row_info(runtime_state.get(), expected_row_debug, "Decimal", "out of range");
+    _verify_error_log_contains_row_info(runtime_state, expected_row_debug, "Decimal", "out of range");
 }
 
 } // namespace starrocks
