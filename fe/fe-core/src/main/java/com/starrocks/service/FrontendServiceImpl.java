@@ -2627,7 +2627,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
                 // STREAM LOAD
                 StreamLoadMgr streamLoadManager = GlobalStateMgr.getCurrentState().getStreamLoadMgr();
-                StreamLoadTask streamLoadTask = streamLoadManager.getTaskById(request.getJob_id());
+                AbstractStreamLoadTask streamLoadTask = streamLoadManager.getTaskById(request.getJob_id());
                 if (streamLoadTask != null) {
                     trackingLoadInfoList = convertStreamLoadInfoList(request);
                 }
@@ -2667,13 +2667,27 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     }
 
     private List<TTrackingLoadInfo> convertStreamLoadInfoList(TGetLoadsParams request) throws TException {
-        TGetStreamLoadsResult loadsResult = getStreamLoads(request);
-        List<TStreamLoadInfo> loads = loadsResult.loads;
-        if (loads == null) {
-            return Lists.newArrayList();
+        List<TLoadInfo> loads = Lists.newArrayList();
+        try {
+            StreamLoadMgr loadManager = GlobalStateMgr.getCurrentState().getStreamLoadMgr();
+            if (request.isSetJob_id()) {
+                AbstractStreamLoadTask task = loadManager.getTaskById(request.getJob_id());
+                if (task != null) {
+                    loads.addAll(task.toThrift());
+                }
+            } else {
+                List<AbstractStreamLoadTask> streamLoadTaskList = loadManager.getTaskByName(request.getLabel());
+                if (streamLoadTaskList != null) {
+                    for (AbstractStreamLoadTask task : streamLoadTaskList) {
+                        loads.addAll(task.toThrift());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to getStreamLoads", e);
         }
-        return loads.stream().map(load -> convertToTrackingLoadInfo(load.getId(),
-                        load.getDb_name(), load.getLabel(), EtlJobType.STREAM_LOAD.name(), load.getTracking_url()))
+        return loads.stream().map(load -> convertToTrackingLoadInfo(load.getJob_id(),
+                        load.getDb(), load.getLabel(), load.getType(), load.getUrl()))
                 .collect(Collectors.toList());
     }
 

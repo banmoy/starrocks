@@ -230,9 +230,11 @@ public class MergeCommitJob implements MergeCommitTaskCallback {
             TUniqueId loadId = UUIDUtil.genTUniqueId();
             String label = LABEL_PREFIX + DebugUtil.printId(loadId);
             MergeCommitTask mergeCommitTask = new MergeCommitTask(
+                    GlobalStateMgr.getCurrentState().getNextId(),
                     tableId, label, loadId, streamLoadInfo, batchWriteIntervalMs, loadParameters,
                     backendIds, queryCoordinatorFactory, this);
             mergeCommitTasks.put(label, mergeCommitTask);
+            GlobalStateMgr.getCurrentState().getStreamLoadMgr().addLoadTask(mergeCommitTask);
             try {
                 executor.execute(mergeCommitTask);
             } catch (Exception e) {

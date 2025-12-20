@@ -14,9 +14,11 @@
 
 package com.starrocks.load.batchwrite;
 
+import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import com.google.gson.Gson;
 import com.starrocks.authorization.PrivilegeBuiltinConstants;
 import com.starrocks.catalog.Database;
 import com.starrocks.catalog.OlapTable;
@@ -25,29 +27,39 @@ import com.starrocks.catalog.UserIdentity;
 import com.starrocks.common.Config;
 import com.starrocks.common.LoadException;
 import com.starrocks.common.Pair;
+import com.starrocks.common.StarRocksException;
 import com.starrocks.common.Status;
 import com.starrocks.common.Version;
 import com.starrocks.common.util.DebugUtil;
+import com.starrocks.common.util.LoadPriority;
 import com.starrocks.common.util.ProfileManager;
 import com.starrocks.common.util.RuntimeProfile;
 import com.starrocks.common.util.TimeUtils;
+import com.starrocks.common.util.concurrent.lock.AutoCloseableLock;
+import com.starrocks.common.util.concurrent.lock.LockType;
+import com.starrocks.common.util.concurrent.lock.Locker;
 import com.starrocks.load.EtlStatus;
 import com.starrocks.load.loadv2.LoadErrorUtils;
 import com.starrocks.load.loadv2.LoadJob;
 import com.starrocks.load.loadv2.LoadJobFinalOperation;
+import com.starrocks.load.streamload.AbstractStreamLoadTask;
 import com.starrocks.load.streamload.StreamLoadInfo;
 import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.qe.QeProcessorImpl;
 import com.starrocks.qe.scheduler.Coordinator;
 import com.starrocks.server.GlobalStateMgr;
+import com.starrocks.server.RunMode;
 import com.starrocks.sql.LoadPlanner;
 import com.starrocks.task.LoadEtlTask;
 import com.starrocks.thrift.TEtlState;
+import com.starrocks.thrift.TLoadInfo;
 import com.starrocks.thrift.TUniqueId;
 import com.starrocks.transaction.TabletCommitInfo;
 import com.starrocks.transaction.TabletFailInfo;
 import com.starrocks.transaction.TransactionState;
+import com.starrocks.transaction.VisibleStateWaiter;
+import com.starrocks.warehouse.Warehouse;
 import org.apache.arrow.util.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,31 +67,48 @@ import org.slf4j.LoggerFactory;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * A task responsible for executing a load.
  */
-public class MergeCommitTask implements Runnable {
+public class MergeCommitTask extends AbstractStreamLoadTask implements Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(MergeCommitTask.class);
 
+    enum State {
+        PENDING,
+        LOADING,
+        COMMITTED,
+        FINISHED,
+        CANCELLED
+    }
+
     // Initialized in constructor ==================================
+
+    // globally unique id in FE
+    private final long id;
     private final TableId tableId;
     private final String label;
     private final TUniqueId loadId;
-    private final StreamLoadInfo streamLoadInfo;
+    private StreamLoadInfo streamLoadInfo;
     private final StreamLoadKvParams loadParameters;
     private final Set<Long> coordinatorBackendIds;
     private final int batchWriteIntervalMs;
-    private final Coordinator.Factory coordinatorFactory;
-    private final MergeCommitTaskCallback mergeCommitTaskCallback;
+    private Coordinator.Factory coordinatorFactory;
+    private MergeCommitTaskCallback mergeCommitTaskCallback;
     private final TimeTrace timeTrace;
     private final AtomicReference<Throwable> failure;
 
+    private volatile State state;
+
+    // initialized in run() ==================================
+    private volatile long dbId = -1;
+
     // Initialized in beginTxn() ==================================
-    private long txnId = -1;
+    private volatile long txnId = -1;
 
     // Initialized in executeLoad() ==================================
     ConnectContext context;
@@ -91,6 +120,7 @@ public class MergeCommitTask implements Runnable {
     private boolean collectProfileSuccess = false;
 
     public MergeCommitTask(
+            long id,
             TableId tableId,
             String label,
             TUniqueId loadId,
@@ -100,6 +130,7 @@ public class MergeCommitTask implements Runnable {
             Set<Long> coordinatorBackendIds,
             Coordinator.Factory coordinatorFactory,
             MergeCommitTaskCallback mergeCommitTaskCallback) {
+        this.id = id;
         this.tableId = tableId;
         this.label = label;
         this.loadId = loadId;
@@ -111,17 +142,20 @@ public class MergeCommitTask implements Runnable {
         this.mergeCommitTaskCallback = mergeCommitTaskCallback;
         this.timeTrace = new TimeTrace();
         this.failure = new AtomicReference<>();
+        this.state = State.PENDING;
     }
 
     @Override
     public void run() {
         try {
+            dbId = getDb().getId();
             beginTxn();
             executeLoad();
             commitAndPublishTxn();
         } catch (Exception e) {
             failure.set(e);
             abortTxn(e);
+            state = State.CANCELLED;
             LOG.error("Failed to execute load, label: {}, load id: {}, txn id: {}",
                     label, DebugUtil.printId(loadId), txnId, e);
         } finally {
@@ -129,17 +163,206 @@ public class MergeCommitTask implements Runnable {
             timeTrace.finishTimeMs = System.currentTimeMillis();
             MergeCommitMetricRegistry.getInstance().updateLoadLatency(timeTrace.totalCostMs());
             reportProfile();
+            clearUnusedMemory();
             LOG.debug("Finish load, label: {}, load id: {}, txn_id: {}, {}",
                     label, DebugUtil.printId(loadId), txnId, timeTrace.summary());
         }
     }
 
+    @Override
+    public long getId() {
+        return id;
+    }
+
+    @Override
     public String getLabel() {
         return label;
     }
 
+    @Override
+    public String getDBName() {
+        return tableId.getDbName();
+    }
+
+    @Override
+    public long getDBId() {
+        return dbId;
+    }
+
+    @Override
+    public String getTableName() {
+        return tableId.getTableName();
+    }
+
+    @Override
     public long getTxnId() {
         return txnId;
+    }
+
+    @Override
+    public String getStateName() {
+        return state.name();
+    }
+
+    @Override
+    public boolean isFinalState() {
+        return state == State.FINISHED || state == State.CANCELLED;
+    }
+
+    @Override
+    public long createTimeMs() {
+        return timeTrace.createTimeMs;
+    }
+
+    @Override
+    public long endTimeMs() {
+        return timeTrace.finishTimeMs;
+    }
+
+    @Override
+    public String getStringByType() {
+        return "MERGE_COMMIT";
+    }
+
+    @Override
+    public boolean checkNeedRemove(long currentMs, boolean isForce) {
+        if (!isFinalState()) {
+            return false;
+        }
+        if (timeTrace.finishTimeMs == -1) {
+            return false;
+        }
+        return isForce || ((currentMs - timeTrace.finishTimeMs) > Config.stream_load_task_keep_max_second * 1000L);
+    }
+
+    @Override
+    public void afterAborted(TransactionState txnState, boolean txnOperated, String txnStatusChangeReason)
+            throws StarRocksException {
+        // TODO abort join, and set msg
+    }
+
+    @Override
+    public List<TLoadInfo> toThrift() {
+        TLoadInfo info = new TLoadInfo();
+        info.setJob_id(id);
+        info.setLabel(label);
+        info.setLoad_id(DebugUtil.printId(loadId));
+        info.setTxn_id(txnId);
+        info.setDb(tableId.getDbName());
+        info.setTable(tableId.getTableName());
+        // TODO get user
+        info.setUser(null);
+        info.setState(state.name());
+        Throwable throwable = failure.get();
+        // TODO get error msg from transactions
+        info.setError_msg(throwable == null ? "" : throwable.getMessage());
+        // TODO add unfinished/total backends
+        info.setRuntime_details(null);
+        info.setProperties(new Gson().toJson(loadParameters.toMap()));
+        // TODO compute time according to merge commit interval
+        if (state == State.FINISHED) {
+            info.setProgress("100%");
+        } else {
+            info.setProgress("0%");
+        }
+        if (ProfileManager.getInstance().hasProfile(DebugUtil.printId(loadId))) {
+            info.setProfile_id(DebugUtil.printId(loadId));
+        }
+        info.setPriority(LoadPriority.NORMAL);
+
+        // TODO loadJobFinalOperation is not thread-safe
+        LoadJobFinalOperation finalOperation = loadJobFinalOperation;
+        if (finalOperation != null) {
+            String trackingUrl = finalOperation.getLoadingStatus().getTrackingUrl();
+            if (trackingUrl != null && !trackingUrl.isEmpty()) {
+                info.setUrl(trackingUrl);
+                info.setTracking_sql("select tracking_log from information_schema.load_tracking_logs where job_id=" + id);
+            }
+
+            List<String> rejectedPaths = finalOperation.getLoadingStatus().getRejectedRecordPaths();
+            if (rejectedPaths != null && !rejectedPaths.isEmpty()) {
+                info.setRejected_record_path(Joiner.on(", ").join(rejectedPaths));
+            }
+
+            EtlStatus etlStatus = finalOperation.getLoadingStatus();
+            long loadedRows = Long.parseLong(
+                    etlStatus.getCounters().getOrDefault(LoadEtlTask.DPP_NORMAL_ALL, "0"));
+            long loadBytes = Long.parseLong(
+                    etlStatus.getCounters().getOrDefault(LoadJob.LOADED_BYTES, "0"));
+            long filteredRows = Long.parseLong(
+                    etlStatus.getCounters().getOrDefault(LoadEtlTask.DPP_ABNORMAL_ALL, "0"));
+            long numRowsUnselected = Long.parseLong(
+                    etlStatus.getCounters().getOrDefault(LoadJob.UNSELECTED_ROWS, "0"));
+            info.setNum_sink_rows(loadedRows);
+            info.setNum_scan_bytes(loadBytes);
+            info.setNum_filtered_rows(filteredRows);
+            info.setNum_unselected_rows(numRowsUnselected);
+        }
+
+        info.setCreate_time(TimeUtils.longToTimeString(timeTrace.createTimeMs));
+        info.setLoad_start_time(TimeUtils.longToTimeString(timeTrace.executeLoadTimeMs));
+        info.setLoad_commit_time(TimeUtils.longToTimeString(timeTrace.commitTxnTimeMs));
+        info.setLoad_finish_time(TimeUtils.longToTimeString(timeTrace.finishTimeMs));
+
+        info.setType(getStringByType());
+
+        if (RunMode.getCurrentRunMode() == RunMode.SHARED_DATA) {
+            try {
+                // TODO loadInfo can be set to null
+                StreamLoadInfo loadInfo = streamLoadInfo;
+                Warehouse warehouse = GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouse(loadInfo.getWarehouseId());
+                info.setWarehouse(warehouse.getName());
+            } catch (Exception e) {
+                LOG.warn("Failed to get warehouse for stream load task {}, error: {}", id, e.getMessage());
+                info.setWarehouse("");
+            }
+        } else {
+            info.setWarehouse("");
+        }
+
+        return Lists.newArrayList(info);
+    }
+
+    // ===============  GsonPreProcessable/GsonPostProcessable ==============
+
+    @Override
+    public void gsonPreProcess() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void gsonPostProcess() {
+        throw new UnsupportedOperationException();
+    }
+
+    // =============== LoadJobWithWarehouse ==============
+
+    @Override
+    public long getCurrentWarehouseId() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isFinal() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public long getFinishTimestampMs() {
+        return endTimeMs();
+    }
+
+    private void clearUnusedMemory() {
+        // TODO release memory
+        // streamLoadInfo = null;
+        // loadPlanner = null;
+        // context = null;
+        // coordinatorFactory = null;
+        // coordinator = null;
+        // tabletCommitInfo = null;
+        // tabletFailInfo = null;
+        // mergeCommitTaskCallback = null;
+        GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().getCallbackFactory().removeCallback(id);
     }
 
     public Set<Long> getBackendIds() {
@@ -180,15 +403,19 @@ public class MergeCommitTask implements Runnable {
 
     private void commitAndPublishTxn() throws Exception {
         timeTrace.commitTxnTimeMs = System.currentTimeMillis();
-        Database database = getDb();
-        long publishTimeoutMs =
-                streamLoadInfo.getTimeout() * 1000L - (timeTrace.commitTxnTimeMs - timeTrace.beginTxnTimeMs);
-        boolean publishSuccess = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().commitAndPublishTransaction(
-                database, txnId, tabletCommitInfo, tabletFailInfo, publishTimeoutMs, null);
+        VisibleStateWaiter waiter = GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().commitTransaction(
+                dbId, txnId, tabletCommitInfo, tabletFailInfo, null);
+        state = State.COMMITTED;
+        timeTrace.publishTxnTimeMs = System.currentTimeMillis();
+        long publishTimeoutMs = Math.max(0,
+                streamLoadInfo.getTimeout() * 1000L - (timeTrace.publishTxnTimeMs - timeTrace.beginTxnTimeMs));
+        boolean publishSuccess = waiter.await(publishTimeoutMs, TimeUnit.MILLISECONDS);
         if (!publishSuccess) {
             LOG.warn("Publish timeout, txn_id: {}, label: {}, total timeout: {} ms, publish timeout: {} ms",
                         txnId, label, streamLoadInfo.getTimeout() * 1000, publishTimeoutMs);
         }
+        // TODO what if publish timeout, can not set cancelled
+        state = State.FINISHED;
     }
 
     private void abortTxn(Throwable reason) {
@@ -206,6 +433,7 @@ public class MergeCommitTask implements Runnable {
 
     private void executeLoad() throws Exception {
         try {
+            state = State.LOADING;
             timeTrace.executeLoadTimeMs = System.currentTimeMillis();
             context = new ConnectContext();
             context.setGlobalStateMgr(GlobalStateMgr.getCurrentState());
@@ -216,13 +444,15 @@ public class MergeCommitTask implements Runnable {
             context.setThreadLocalInfo();
 
             Pair<Database, OlapTable> pair = getDbAndTable();
+            Database database = pair.first;
+            OlapTable table = pair.second;
             // although merge commit uses pipeline engine, use table property to control the profile same as stream load
-            if (pair.second.enableLoadProfile()) {
+            if (table.enableLoadProfile()) {
                 long sampleIntervalMs = Config.load_profile_collect_interval_second * 1000;
                 if (sampleIntervalMs > 0 &&
-                        System.currentTimeMillis() - pair.second.getLastCollectProfileTime() > sampleIntervalMs) {
+                        System.currentTimeMillis() - table.getLastCollectProfileTime() > sampleIntervalMs) {
                     context.getSessionVariable().setEnableProfile(true);
-                    pair.second.updateLastCollectProfileTime();
+                    table.updateLastCollectProfileTime();
                 }
                 context.getSessionVariable().setBigQueryProfileThreshold(
                         Config.stream_load_profile_collect_threshold_second + "s");
@@ -230,16 +460,20 @@ public class MergeCommitTask implements Runnable {
                 context.getSessionVariable().setRuntimeProfileReportInterval(-1);
             }
 
-            loadPlanner = new LoadPlanner(-1, loadId, txnId, pair.first.getId(),
-                    tableId.getDbName(), pair.second, streamLoadInfo.isStrictMode(), streamLoadInfo.getTimezone(),
-                    streamLoadInfo.isPartialUpdate(), context, null,
-                    streamLoadInfo.getLoadMemLimit(), streamLoadInfo.getExecMemLimit(),
-                    streamLoadInfo.getNegative(), coordinatorBackendIds.size(), streamLoadInfo.getColumnExprDescs(),
-                    streamLoadInfo, label, streamLoadInfo.getTimeout());
-            loadPlanner.setBatchWrite(batchWriteIntervalMs,
-                    ImmutableMap.<String, String>builder()
-                            .putAll(loadParameters.toMap()).build(), coordinatorBackendIds);
-            loadPlanner.plan();
+            try (AutoCloseableLock ignore = new AutoCloseableLock(new Locker(), database.getId(),
+                    Lists.newArrayList(table.getId()), LockType.READ)) {
+                loadPlanner = new LoadPlanner(-1, loadId, txnId, database.getId(),
+                        tableId.getDbName(), table, streamLoadInfo.isStrictMode(), streamLoadInfo.getTimezone(),
+                        streamLoadInfo.isPartialUpdate(), context, null,
+                        streamLoadInfo.getLoadMemLimit(), streamLoadInfo.getExecMemLimit(),
+                        streamLoadInfo.getNegative(), coordinatorBackendIds.size(), streamLoadInfo.getColumnExprDescs(),
+                        streamLoadInfo, label, streamLoadInfo.getTimeout());
+                loadPlanner.setBatchWrite(batchWriteIntervalMs,
+                        ImmutableMap.<String, String>builder()
+                                .putAll(loadParameters.toMap()).build(), coordinatorBackendIds);
+                loadPlanner.plan();
+            }
+
             timeTrace.deployPlanTimeMs = System.currentTimeMillis();
             coordinator = coordinatorFactory.createStreamLoadScheduler(loadPlanner);
             QeProcessorImpl.INSTANCE.registerQuery(loadId, coordinator);
@@ -393,6 +627,7 @@ public class MergeCommitTask implements Runnable {
         long deployPlanTimeMs = -1;
         AtomicLong joinPlanTimeMs = new AtomicLong(-1);
         long commitTxnTimeMs = -1;
+        long publishTxnTimeMs = -1;
         long finishTimeMs = -1;
 
         public TimeTrace() {
@@ -411,7 +646,8 @@ public class MergeCommitTask implements Runnable {
             appendTraceItem(sb, ", plan: ", executeLoadTimeMs, deployPlanTimeMs);
             appendTraceItem(sb, ", deploy: ", deployPlanTimeMs, joinPlanTimeMs.get());
             appendTraceItem(sb, ", load: ", joinPlanTimeMs.get(), commitTxnTimeMs);
-            appendTraceItem(sb, ", commit/publish txn: ", commitTxnTimeMs, finishTimeMs);
+            appendTraceItem(sb, ", commit: ", commitTxnTimeMs, publishTxnTimeMs);
+            appendTraceItem(sb, ", publish: ", publishTxnTimeMs, finishTimeMs);
             return sb.toString();
         }
 

@@ -598,13 +598,13 @@ public class StreamLoadMgr implements MemoryTrackable {
         return idToStreamLoadTask.get(label);
     }
 
-    public StreamLoadTask getTaskById(long id) {
+    public AbstractStreamLoadTask getTaskById(long id) {
         readLock();
         try {
             List<AbstractStreamLoadTask> taskList =
                     idToStreamLoadTask.values().stream().filter(streamLoadTask -> id == streamLoadTask.getId())
-                            .collect(Collectors.toList());
-            return taskList.isEmpty() ? null : (StreamLoadTask) taskList.get(0);
+                            .toList();
+            return taskList.isEmpty() ? null : taskList.get(0);
         } finally {
             readUnlock();
         }

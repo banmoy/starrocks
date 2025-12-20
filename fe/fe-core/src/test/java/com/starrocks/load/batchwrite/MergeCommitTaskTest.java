@@ -113,6 +113,7 @@ public class MergeCommitTaskTest extends BatchWriteTestBase {
     @Test
     public void testLoadSuccess() {
         MergeCommitTask executor = new MergeCommitTask(
+                1,
                 new TableId(DB_NAME_1, TABLE_NAME_1_1),
                 label,
                 loadId,
@@ -149,6 +150,7 @@ public class MergeCommitTaskTest extends BatchWriteTestBase {
     @Test
     public void testPlanExecuteFail() {
         MergeCommitTask executor = new MergeCommitTask(
+                1,
                 new TableId(DB_NAME_1, TABLE_NAME_1_1),
                 label,
                 loadId,
@@ -179,6 +181,7 @@ public class MergeCommitTaskTest extends BatchWriteTestBase {
     @Test
     public void testPlanExecuteTimeout() {
         MergeCommitTask executor = new MergeCommitTask(
+                1,
                 new TableId(DB_NAME_1, TABLE_NAME_1_1),
                 label,
                 loadId,
@@ -205,6 +208,7 @@ public class MergeCommitTaskTest extends BatchWriteTestBase {
     public void testTableDoesNotExist() {
         String fakeTableName = TABLE_NAME_1_1 + "_fake";
         MergeCommitTask executor = new MergeCommitTask(
+                1,
                 new TableId(DB_NAME_1, fakeTableName),
                 label,
                 loadId,
@@ -224,6 +228,7 @@ public class MergeCommitTaskTest extends BatchWriteTestBase {
     @Test
     public void testMaxFilterRatio() {
         MergeCommitTask executor = new MergeCommitTask(
+                1,
                 new TableId(DB_NAME_1, TABLE_NAME_1_1),
                 label,
                 loadId,
@@ -278,6 +283,7 @@ public class MergeCommitTaskTest extends BatchWriteTestBase {
     @Test
     public void testIsActive() {
         MergeCommitTask executor = new MergeCommitTask(
+                1,
                 new TableId(DB_NAME_1, TABLE_NAME_1_1),
                 label,
                 loadId,
@@ -306,6 +312,7 @@ public class MergeCommitTaskTest extends BatchWriteTestBase {
     @Test
     public void testContainCoordinatorBackend() {
         MergeCommitTask executor = new MergeCommitTask(
+                1,
                 new TableId(DB_NAME_1, TABLE_NAME_1_1),
                 label,
                 loadId,
@@ -328,6 +335,7 @@ public class MergeCommitTaskTest extends BatchWriteTestBase {
         Config.load_profile_collect_interval_second = 1;
         try {
             MergeCommitTask executor = new MergeCommitTask(
+                    1,
                     new TableId(DB_NAME_1, TABLE_NAME_1_1),
                     label,
                     loadId,

@@ -21,6 +21,7 @@ import com.starrocks.transaction.AbstractTxnStateChangeCallback;
 import com.starrocks.warehouse.LoadJobWithWarehouse;
 import io.netty.handler.codec.http.HttpHeaders;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -29,22 +30,59 @@ import java.util.List;
 public abstract class AbstractStreamLoadTask extends AbstractTxnStateChangeCallback
         implements Writable, GsonPostProcessable, GsonPreProcessable, LoadJobWithWarehouse {
 
-    public abstract void beginTxnFromFrontend(TransactionResult resp);
-    public abstract void beginTxnFromFrontend(int channelId, int channelNum, TransactionResult resp);
-    public abstract void beginTxnFromBackend(TUniqueId requestId, String clientIp, long backendId, TransactionResult resp);
-    public abstract TNetworkAddress tryLoad(int channelId, String tableName, TransactionResult resp) throws StarRocksException;
-    public abstract TNetworkAddress executeTask(int channelId, String tableName, HttpHeaders headers, TransactionResult resp);
-    public abstract void prepareChannel(int channelId, String tableName, HttpHeaders headers, TransactionResult resp);
-    public abstract void waitCoordFinishAndPrepareTxn(long preparedTimeoutMs, TransactionResult resp);
-    public abstract void commitTxn(HttpHeaders headers, TransactionResult resp) throws StarRocksException;
-    public abstract void manualCancelTask(TransactionResult resp) throws StarRocksException;
+    public void beginTxnFromFrontend(TransactionResult resp) {
+        throw new UnsupportedOperationException();
+    }
+
+    public void beginTxnFromFrontend(int channelId, int channelNum, TransactionResult resp) {
+        throw new UnsupportedOperationException();
+    }
+
+    public void beginTxnFromBackend(TUniqueId requestId, String clientIp, long backendId, TransactionResult resp) {
+        throw new UnsupportedOperationException();
+    }
+
+    public TNetworkAddress tryLoad(int channelId, String tableName, TransactionResult resp) throws StarRocksException {
+        throw new UnsupportedOperationException();
+    }
+
+    public TNetworkAddress executeTask(int channelId, String tableName, HttpHeaders headers, TransactionResult resp) {
+        throw new UnsupportedOperationException();
+    }
+
+    public void prepareChannel(int channelId, String tableName, HttpHeaders headers, TransactionResult resp) {
+        throw new UnsupportedOperationException();
+    }
+
+    public void waitCoordFinishAndPrepareTxn(long preparedTimeoutMs, TransactionResult resp) {
+        throw new UnsupportedOperationException();
+    }
+
+    public void commitTxn(HttpHeaders headers, TransactionResult resp) throws StarRocksException {
+        throw new UnsupportedOperationException();
+    }
+
+    public void manualCancelTask(TransactionResult resp) throws StarRocksException {
+        throw new UnsupportedOperationException();
+    }
+
+    public boolean checkNeedPrepareTxn() {
+        throw new UnsupportedOperationException();
+    }
+
+    public boolean isDurableLoadState() {
+        throw new UnsupportedOperationException();
+    }
+
+    public void cancelAfterRestart()  {
+        throw new UnsupportedOperationException();
+    }
+
+    public void init() {
+        throw new UnsupportedOperationException();
+    }
+
     public abstract boolean checkNeedRemove(long currentMs, boolean isForce);
-    public abstract boolean checkNeedPrepareTxn();
-    public abstract boolean isDurableLoadState();
-    public abstract void cancelAfterRestart();
-    public abstract List<TStreamLoadInfo> toStreamLoadThrift();
-    public abstract List<TLoadInfo> toThrift();
-    public abstract void init();
 
     // Common getters used by StreamLoadMgr
     public abstract long getId();
@@ -58,7 +96,26 @@ public abstract class AbstractStreamLoadTask extends AbstractTxnStateChangeCallb
     public abstract long createTimeMs();
     public abstract long endTimeMs();
     public abstract long getFinishTimestampMs();
-    public abstract List<List<String>> getShowInfo();
-    public abstract List<List<String>> getShowBriefInfo();
     public abstract String getStringByType();
+
+    // =============== observability ===============
+
+    // for information_schema.loads
+    public abstract  List<TLoadInfo> toThrift();
+
+    // for ShowExecutor.visitShowStreamLoadStatement and StreamLoadsLabelProcDir which are deprecated,
+    // return empty by default
+    public List<List<String>> getShowInfo() {
+        return Collections.emptyList();
+    }
+
+    // for StreamLoadsProcDir which is deprecated, return empty by default
+    public List<List<String>> getShowBriefInfo() {
+        return Collections.emptyList();
+    }
+
+    // for information_schema.stream_loads which is deprecated, return empty by default
+    public List<TStreamLoadInfo> toStreamLoadThrift() {
+        return Collections.emptyList();
+    }
 }
