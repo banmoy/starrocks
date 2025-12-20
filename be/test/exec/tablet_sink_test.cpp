@@ -263,7 +263,7 @@ TEST_F(TabletSinkTest, print_varchar_error_msg_includes_row_info) {
 
     // Fill VARCHAR column with test data
     auto* varchar_slot = desc_tbl->get_tuple_descriptor(0)->slots()[0];
-    auto* varchar_col = chunk->get_column_by_slot_id(varchar_slot->id()).get();
+    auto* varchar_col = const_cast<Column*>(chunk->get_column_by_slot_id(varchar_slot->id()).get());
     varchar_col->append_datum(Datum(Slice("short"))); // row 0: valid (5 chars <= 10)
     varchar_col->append_datum(
             Datum(Slice("this_is_a_very_long_string_that_exceeds_max_length"))); // row 1: invalid (> 10)
