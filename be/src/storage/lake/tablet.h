@@ -29,6 +29,7 @@
 
 namespace starrocks {
 class TabletSchema;
+class TableSchemaKeyPB;
 class ThreadPool;
 } // namespace starrocks
 
@@ -136,7 +137,9 @@ public:
 
     [[nodiscard]] std::string sst_location(std::string_view sst_name) const;
 
-    Status delete_data(int64_t txn_id, const DeletePredicatePB& delete_predicate);
+    // `schema_key` is optional for legacy compatibility. When provided, it will be persisted into txn log.
+    Status delete_data(int64_t txn_id, const DeletePredicatePB& delete_predicate,
+                       const TableSchemaKeyPB* schema_key = nullptr);
 
     StatusOr<bool> has_delete_predicates(int64_t version);
 

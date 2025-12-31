@@ -37,6 +37,7 @@ import com.starrocks.proto.DeleteDataResponse;
 import com.starrocks.proto.DeletePredicatePB;
 import com.starrocks.proto.InPredicatePB;
 import com.starrocks.proto.IsNullPredicatePB;
+import com.starrocks.proto.TableSchemaKeyPB;
 import com.starrocks.qe.QueryStateException;
 import com.starrocks.rpc.BrpcProxy;
 import com.starrocks.rpc.LakeService;
@@ -70,14 +71,17 @@ import java.util.concurrent.Future;
 public class LakeDeleteJob extends DeleteJob {
     private static final Logger LOG = LogManager.getLogger(LakeDeleteJob.class);
 
-    private Map<Long, List<Long>> beToTablets;
-
+    private final TableSchemaKeyPB schemaKey;
     private final ComputeResource computeResource;
 
-    public LakeDeleteJob(long id, long transactionId, String label, MultiDeleteInfo deleteInfo, ComputeResource computeResource) {
+    private Map<Long, List<Long>> beToTablets;
+
+    public LakeDeleteJob(long id, long transactionId, String label, TableSchemaKeyPB schemaKey,
+                         MultiDeleteInfo deleteInfo, ComputeResource computeResource) {
         super(id, transactionId, label, deleteInfo);
-        beToTablets = Maps.newHashMap();
+        this.schemaKey = schemaKey;
         this.computeResource = computeResource;
+        beToTablets = Maps.newHashMap();
     }
 
     @Override
@@ -121,6 +125,7 @@ public class LakeDeleteJob extends DeleteJob {
                 request.tabletIds = entry.getValue();
                 request.txnId = getTransactionId();
                 request.deletePredicate = deletePredicate;
+                request.setSchemaKey(schemaKey);
 
                 LakeService lakeService = BrpcProxy.getLakeService(backend.getHost(), backend.getBrpcPort());
                 Future<DeleteDataResponse> responseFuture = lakeService.deleteData(request);
