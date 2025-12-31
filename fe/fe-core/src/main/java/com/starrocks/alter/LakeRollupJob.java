@@ -54,7 +54,6 @@ import com.starrocks.task.AgentTaskExecutor;
 import com.starrocks.task.AgentTaskQueue;
 import com.starrocks.task.AlterReplicaTask;
 import com.starrocks.task.CreateReplicaTask;
-import com.starrocks.thrift.TColumn;
 import com.starrocks.thrift.TStorageMedium;
 import com.starrocks.thrift.TStorageType;
 import com.starrocks.thrift.TTabletSchema;
@@ -69,7 +68,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 import javax.validation.constraints.NotNull;
 
 public class LakeRollupJob extends LakeTableSchemaChangeJobBase {
@@ -301,7 +299,7 @@ public class LakeRollupJob extends LakeTableSchemaChangeJobBase {
 
         LOG.info("previous transactions are all finished, begin to send rollup tasks. job: {}", jobId);
 
-        Map<Long, List<TColumn>> indexToThriftColumns = new HashMap<>();
+        Map<Long, TTabletSchema> indexToBaseTabletReadSchema = new HashMap<>();
         final WarehouseManager warehouseManager = GlobalStateMgr.getCurrentState().getWarehouseMgr();
         try (ReadLockedDatabase db = getReadLockedDatabase(dbId)) {
             OlapTable tbl = getTableOrThrow(db, tableId);
@@ -335,19 +333,16 @@ public class LakeRollupJob extends LakeTableSchemaChangeJobBase {
                     }
 
                     TabletInvertedIndex invertedIndex = GlobalStateMgr.getCurrentState().getTabletInvertedIndex();
-                    long baseIndexId = invertedIndex.getTabletMeta(baseTabletId).getIndexId();
-                    List<TColumn> baseTColumn = indexToThriftColumns.get(baseIndexId);
-                    if (baseTColumn == null) {
-                        baseTColumn = tbl.getIndexMetaByIndexId(baseIndexId).getSchema()
-                                .stream()
-                                .map(Column::toThrift)
-                                .collect(Collectors.toList());
-                        indexToThriftColumns.put(baseIndexId, baseTColumn);
+                    long baseTabletIndexId = invertedIndex.getTabletMeta(baseTabletId).getIndexId();
+                    TTabletSchema baseTabletReadSchema = indexToBaseTabletReadSchema.get(baseTabletIndexId);
+                    if (baseTabletReadSchema == null) {
+                        baseTabletReadSchema = SchemaInfo.fromMaterializedIndex(
+                                tbl, baseTabletIndexId, tbl.getIndexMetaByIndexId(baseTabletIndexId)).toTabletSchema();
+                        indexToBaseTabletReadSchema.put(baseTabletIndexId, baseTabletReadSchema);
                     }
                     AlterReplicaTask rollupTask = AlterReplicaTask.rollupLakeTablet(
                             computeNode.getId(), dbId, tableId, partitionId, rollupIndexId, rollupTabletId,
-                            baseTabletId, visibleVersion, jobId,
-                            rollupJobV2Params, baseTColumn, watershedTxnId);
+                            baseTabletId, visibleVersion, jobId, rollupJobV2Params, baseTabletReadSchema, watershedTxnId);
                     rollupBatchTask.addTask(rollupTask);
                 }
                 partition.setMinRetainVersion(visibleVersion);
