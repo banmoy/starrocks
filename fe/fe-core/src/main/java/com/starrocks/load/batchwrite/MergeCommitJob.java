@@ -182,11 +182,16 @@ public class MergeCommitJob implements MergeCommitTaskCallback {
     /**
      * Requests a load for the write operation from the specified backend.
      *
-     * @param backendId The id of the backend.
-     * @param backendHost The host of the backend.
-     * @return The result of the request for the load.
+     * <p>This method first checks if there is an active task that can accept the backend. If found,
+     * it returns the existing task's label. Otherwise, it creates a new {@link MergeCommitTask}
+     * and registers it with {@link StreamLoadMgr} for tracking and management.</p>
+     *
+     * @param user the user who initiated the load request
+     * @param backendId the id of the backend requesting the load
+     * @param backendHost the host of the backend requesting the load
+     * @return the result containing the status and the load label if successful
      */
-    public RequestLoadResult requestLoad(long backendId, String backendHost) {
+    public RequestLoadResult requestLoad(String user, long backendId, String backendHost) {
         TStatus status = new TStatus();
         lock.readLock().lock();
         try {
@@ -240,14 +245,20 @@ public class MergeCommitJob implements MergeCommitTaskCallback {
             MergeCommitTask mergeCommitTask = new MergeCommitTask(
                     GlobalStateMgr.getCurrentState().getNextId(),
                     dbId.get(), tableId, label, loadId, streamLoadInfo, batchWriteIntervalMs, loadParameters,
-                    warehouseName, backendIds, queryCoordinatorFactory, this);
+                    user, warehouseName, backendIds, queryCoordinatorFactory, this);
             mergeCommitTasks.put(label, mergeCommitTask);
             try {
+                // Register the task with StreamLoadMgr for observing (e.g., information_schema.loads).
+                // Pass false for addTxnCallback because MergeCommitTask registers itself in run().
+                // StreamLoadMgr will expire the task automatically, so no need to remove it explicitly.
+                GlobalStateMgr.getCurrentState().getStreamLoadMgr().addLoadTask(mergeCommitTask, false);
                 executor.execute(mergeCommitTask);
             } catch (Exception e) {
                 mergeCommitTasks.remove(label);
+                String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                mergeCommitTask.cancel(String.format("Failed to submit task: %s", errorMsg));
                 status.setStatus_code(TStatusCode.INTERNAL_ERROR);
-                status.setError_msgs(Collections.singletonList(e.getMessage()));
+                status.setError_msgs(Collections.singletonList(errorMsg));
                 return new RequestLoadResult(status, null);
             }
             MergeCommitMetricRegistry.getInstance().updateRunningTask(1L);

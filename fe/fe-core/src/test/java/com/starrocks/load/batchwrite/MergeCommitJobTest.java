@@ -142,7 +142,7 @@ public class MergeCommitJobTest extends BatchWriteTestBase {
                 result = Optional.of(nodes);
             }
         };
-        RequestLoadResult result1 = load.requestLoad(nodes.get(0).getId(), nodes.get(0).getHost());
+        RequestLoadResult result1 = load.requestLoad("root", nodes.get(0).getId(), nodes.get(0).getHost());
         assertTrue(result1.isOk());
         String label = result1.getValue();
         assertNotNull(label);
@@ -152,7 +152,7 @@ public class MergeCommitJobTest extends BatchWriteTestBase {
         assertEquals(nodes.stream().map(ComputeNode::getId).collect(Collectors.toSet()),
                 mergeCommitTask.getBackendIds());
 
-        RequestLoadResult result2 = load.requestLoad(nodes.get(1).getId(), nodes.get(1).getHost());
+        RequestLoadResult result2 = load.requestLoad("root", nodes.get(1).getId(), nodes.get(1).getHost());
         assertTrue(result2.isOk());
         assertEquals(label, result2.getValue());
 
@@ -175,7 +175,7 @@ public class MergeCommitJobTest extends BatchWriteTestBase {
         };
 
         // Request from coordinator backend
-        RequestLoadResult result1 = load.requestLoad(nodes.get(0).getId(), nodes.get(0).getHost());
+        RequestLoadResult result1 = load.requestLoad("root", nodes.get(0).getId(), nodes.get(0).getHost());
         assertTrue(result1.isOk());
         String label1 = result1.getValue();
         assertNotNull(label1);
@@ -185,7 +185,7 @@ public class MergeCommitJobTest extends BatchWriteTestBase {
         assertEquals(nodes.stream().map(ComputeNode::getId).collect(Collectors.toSet()),
                 mergeCommitTask1.getBackendIds());
 
-        RequestLoadResult result2 = load.requestLoad(allNodes.get(parallel).getId(), allNodes.get(parallel).getHost());
+        RequestLoadResult result2 = load.requestLoad("root", allNodes.get(parallel).getId(), allNodes.get(parallel).getHost());
         assertTrue(result2.isOk());
         String label2 = result2.getValue();
         assertNotNull(label2);
@@ -220,7 +220,7 @@ public class MergeCommitJobTest extends BatchWriteTestBase {
             }
         };
 
-        RequestLoadResult result = load.requestLoad(Integer.MAX_VALUE, "127.0.0.1");
+        RequestLoadResult result = load.requestLoad("root", Integer.MAX_VALUE, "127.0.0.1");
         assertFalse(result.isOk());
         assertEquals(TStatusCode.SERVICE_UNAVAILABLE, result.getStatus().getStatus_code());
     }
@@ -236,7 +236,7 @@ public class MergeCommitJobTest extends BatchWriteTestBase {
         };
 
         executor.setThrowException(true);
-        RequestLoadResult result = load.requestLoad(nodes.get(0).getId(), nodes.get(0).getHost());
+        RequestLoadResult result = load.requestLoad("root", nodes.get(0).getId(), nodes.get(0).getHost());
         assertFalse(result.isOk());
         assertEquals(TStatusCode.INTERNAL_ERROR, result.getStatus().getStatus_code());
         assertEquals(0, load.numRunningLoads());
@@ -272,7 +272,7 @@ public class MergeCommitJobTest extends BatchWriteTestBase {
                 assigner,
                 executor,
                 txnStateDispatcher);
-        RequestLoadResult result = mergeCommitJob.requestLoad(nodes.get(0).getId(), nodes.get(0).getHost());
+        RequestLoadResult result = mergeCommitJob.requestLoad("root", nodes.get(0).getId(), nodes.get(0).getHost());
         assertFalse(result.isOk());
         assertEquals(TStatusCode.INTERNAL_ERROR, result.getStatus().getStatus_code());
         assertTrue(result.getStatus().getError_msgs().get(0).contains("Database 'non_existent_db' does not exist"));
