@@ -216,18 +216,18 @@ public class LakeDeleteJobTest {
         // Verify DeleteDataRequest contains schemaKey
         Assertions.assertNotNull(capturedRequest.get(), "DeleteDataRequest should be captured");
         DeleteDataRequest request = capturedRequest.get();
-        
+
         // Verify schemaKey is present
         Assertions.assertTrue(request.hasSchemaKey(), "DeleteDataRequest should contain schemaKey");
         TableSchemaKeyPB schemaKey = request.getSchemaKey();
         Assertions.assertNotNull(schemaKey, "schemaKey should not be null");
-        
+
         // Verify schemaKey values are correct
-        Assertions.assertEquals(expectedDbId, schemaKey.getDbId(), 
+        Assertions.assertEquals(expectedDbId, schemaKey.getDbId(),
                 "schemaKey.dbId should match database ID");
-        Assertions.assertEquals(expectedTableId, schemaKey.getTableId(), 
+        Assertions.assertEquals(expectedTableId, schemaKey.getTableId(),
                 "schemaKey.tableId should match table ID");
-        Assertions.assertEquals(expectedSchemaId, schemaKey.getSchemaId(), 
+        Assertions.assertEquals(expectedSchemaId, schemaKey.getSchemaId(),
                 "schemaKey.schemaId should match schema ID from base index meta");
     }
 }
