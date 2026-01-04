@@ -247,10 +247,31 @@ TEST_F(LakeTabletDeleteDataTest, test_delete_data_with_schema_key) {
 
     // Create extended schema with c3 int default 5
     // The schema_key points to a schema that extends the tablet schema with c3
+    int64_t schema_id = next_id();
     TableSchemaKeyPB schema_key;
     schema_key.set_db_id(next_id());
     schema_key.set_table_id(next_id());
-    schema_key.set_schema_id(next_id());
+    schema_key.set_schema_id(schema_id);
+
+    // Create extended schema: tablet schema + c3 int default 5
+    TabletSchemaPB extended_schema_pb;
+    extended_schema_pb.CopyFrom(_tablet_metadata->schema());
+    extended_schema_pb.set_id(schema_id);
+    
+    // Add c3 column with default value 5
+    auto c3 = extended_schema_pb.add_column();
+    c3->set_unique_id(next_id());
+    c3->set_name("c3");
+    c3->set_type("INT");
+    c3->set_is_key(false);
+    c3->set_is_nullable(false);
+    // Set default value to 5 (serialize int32_t to bytes)
+    int32_t default_val = 5;
+    c3->set_default_value(std::string(reinterpret_cast<const char*>(&default_val), sizeof(int32_t)));
+
+    // Cache the extended schema before publish
+    auto extended_schema = TabletSchema::create(extended_schema_pb);
+    _tablet_mgr->cache_schema(extended_schema);
 
     // Create delete predicate: c2 = 3 or c3 = 5
     // Since c3 has default value 5, all rows should match c3 = 5
