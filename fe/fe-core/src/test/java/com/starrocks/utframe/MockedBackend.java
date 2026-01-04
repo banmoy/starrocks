@@ -621,8 +621,6 @@ public class MockedBackend {
 
         private final ConcurrentLinkedQueue<PublishLogVersionBatchRequest> publishLogVersionBatchRequests =
                 new ConcurrentLinkedQueue<>();
-        private final ConcurrentLinkedQueue<DeleteDataRequest> deleteDataRequests =
-                new ConcurrentLinkedQueue<>();
 
         @Override
         public Future<PublishVersionResponse> publishVersion(PublishVersionRequest request) {
@@ -656,9 +654,7 @@ public class MockedBackend {
 
         @Override
         public Future<DeleteDataResponse> deleteData(DeleteDataRequest request) {
-            deleteDataRequests.add(request);
-            DeleteDataResponse response = new DeleteDataResponse();
-            return CompletableFuture.completedFuture(response);
+            return CompletableFuture.completedFuture(null);
         }
 
         @Override
@@ -684,10 +680,6 @@ public class MockedBackend {
 
         public PublishLogVersionBatchRequest pollPublishLogVersionBatchRequests() {
             return publishLogVersionBatchRequests.poll();
-        }
-
-        public DeleteDataRequest pollDeleteDataRequests() {
-            return deleteDataRequests.poll();
         }
 
         @Override
