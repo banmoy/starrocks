@@ -101,8 +101,9 @@ CMakeLists.txt
 .claude
 CLAUDE.md
 .clangd
-.cursor/
-
+.cursor/*
+!.cursor/commands/
+!.cursor/commands/**
 
 !build-mac/CMakeLists.txt
 # build-mac generated files
