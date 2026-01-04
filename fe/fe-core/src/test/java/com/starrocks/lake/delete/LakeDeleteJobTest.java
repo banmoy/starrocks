@@ -29,7 +29,6 @@ import com.starrocks.proto.InPredicatePB;
 import com.starrocks.proto.IsNullPredicatePB;
 import com.starrocks.proto.TableSchemaKeyPB;
 import com.starrocks.qe.ConnectContext;
-import com.starrocks.qe.QueryStateException;
 import com.starrocks.rpc.BrpcProxy;
 import com.starrocks.rpc.LakeService;
 import com.starrocks.rpc.LakeServiceWithMetrics;
@@ -39,7 +38,6 @@ import com.starrocks.server.RunMode;
 import com.starrocks.sql.ast.DeleteStmt;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.system.SystemInfoService;
-import com.starrocks.utframe.MockedBackend;
 import com.starrocks.utframe.StarRocksAssert;
 import com.starrocks.utframe.UtFrameUtils;
 import mockit.Mock;
@@ -53,9 +51,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
-
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 public class LakeDeleteJobTest {
 
@@ -159,7 +154,7 @@ public class LakeDeleteJobTest {
     }
 
     @Test
-    public void testDeleteDataRequestContainsSchemaKey() {
+    public void testDeleteDataRequestContainsSchemaKey(@Mocked LakeService lakeService) {
         ConnectContext ctx = UtFrameUtils.createDefaultCtx();
         ctx.setThreadLocalInfo();
         StarRocksAssert starRocksAssert = new StarRocksAssert(ctx);
@@ -191,30 +186,36 @@ public class LakeDeleteJobTest {
             return;
         }
 
-        // Execute delete - it will throw QueryStateException on success, which is expected
-        try {
-            GlobalStateMgr.getCurrentState().getDeleteMgr().process(deleteStmt);
-        } catch (QueryStateException e) {
-            // Expected exception on successful delete
-        } catch (Exception e) {
-            // Other exceptions might occur, but we only care about capturing the request
-        }
+        // Simulate one tablet failed, our purpose is to verify the request only.
+        // return a failed response to fail the job so that the following commit() will be skipped.
+        DeleteDataResponse response = new DeleteDataResponse();
+        response.failedTablets = List.of(1002L);
 
-        // Get the backend/compute node that received the delete request
-        SystemInfoService systemInfoService = GlobalStateMgr.getCurrentState().getNodeMgr().getClusterInfo();
-        List<Long> backendIds = systemInfoService.getBackendIds();
-        Assertions.assertFalse(backendIds.isEmpty(), "Should have at least one backend");
+        AtomicReference<DeleteDataRequest> capturedRequest = new AtomicReference<>();
+        LakeServiceWithMetrics wrappedLakeService = new LakeServiceWithMetrics(lakeService);
+        // Avoid directly mocking the LakeService, which is implemented by BrpcProxy reflection proxy.
+        new MockUp<LakeServiceWithMetrics>() {
+            @Mock
+            Future<DeleteDataResponse> deleteData(DeleteDataRequest request) {
+                capturedRequest.set(request);
+                return CompletableFuture.completedFuture(response);
+            }
+        };
 
-        // Get the MockLakeService from the first backend
-        ComputeNode backend = systemInfoService.getBackendOrComputeNode(backendIds.get(0));
-        Assertions.assertNotNull(backend);
-        LakeService lakeService = BrpcProxy.getLakeService(backend.getHost(), backend.getBrpcPort());
-        assertInstanceOf(MockedBackend.MockLakeService.class, lakeService);
-        MockedBackend.MockLakeService mockLakeService = (MockedBackend.MockLakeService) lakeService;
+        new MockUp<BrpcProxy>() {
+            @Mock
+            public LakeService getLakeService(String host, int port) throws RpcException {
+                return wrappedLakeService;
+            }
+        };
 
-        // Poll the delete data request from the queue
-        DeleteDataRequest request = mockLakeService.pollDeleteDataRequests();
-        assertNotNull(request, "DeleteDataRequest should be captured");
+        DdlException exception = Assertions.assertThrows(DdlException.class,
+                () -> GlobalStateMgr.getCurrentState().getDeleteMgr().process(deleteStmt));
+        Assertions.assertEquals("Failed to execute delete. failed tablet num: 1", exception.getMessage());
+
+        // Verify DeleteDataRequest contains schemaKey
+        Assertions.assertNotNull(capturedRequest.get(), "DeleteDataRequest should be captured");
+        DeleteDataRequest request = capturedRequest.get();
 
         // Verify schemaKey is present
         Assertions.assertTrue(request.hasSchemaKey(), "DeleteDataRequest should contain schemaKey");
