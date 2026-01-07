@@ -1100,6 +1100,9 @@ TEST_F(TransactionStreamLoadActionTest, stream_load_put_rpc_timeout_setting) {
         begin_req._headers.emplace(HttpHeaders::AUTHORIZATION, "Basic cm9vdDo=");
         begin_req._headers.emplace(HttpHeaders::CONTENT_LENGTH, "0");
         begin_req._headers.emplace(HTTP_LABEL_KEY, tc.label);
+        if (tc.timeout_header != nullptr) {
+            begin_req._headers.emplace(HTTP_TIMEOUT, tc.timeout_header);
+        }
         begin_req._params.emplace(HTTP_TXN_OP_KEY, TXN_BEGIN);
         txn_action.handle(&begin_req);
 
@@ -1126,9 +1129,6 @@ TEST_F(TransactionStreamLoadActionTest, stream_load_put_rpc_timeout_setting) {
         request._headers.emplace(HttpHeaders::AUTHORIZATION, "Basic cm9vdDo=");
         request._headers.emplace(HttpHeaders::CONTENT_LENGTH, "16");
         request._headers.emplace(HTTP_LABEL_KEY, tc.label);
-        if (tc.timeout_header != nullptr) {
-            request._headers.emplace(HTTP_TIMEOUT, tc.timeout_header);
-        }
         action.on_header(&request);
         action.handle(&request);
 
