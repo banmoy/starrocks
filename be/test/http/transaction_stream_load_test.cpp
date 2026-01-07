@@ -1083,31 +1083,30 @@ TEST_F(TransactionStreamLoadActionTest, release_resource_for_not_handle) {
 }
 
 TEST_F(TransactionStreamLoadActionTest, stream_load_put_rpc_timeout_setting) {
-    TransactionManagerAction txn_action(&_env);
-
-    // Begin transaction
-    HttpRequest begin_req(_evhttp_req);
-    begin_req._headers.emplace(HttpHeaders::AUTHORIZATION, "Basic cm9vdDo=");
-    begin_req._headers.emplace(HttpHeaders::CONTENT_LENGTH, "0");
-    begin_req._headers.emplace(HTTP_LABEL_KEY, "123");
-    begin_req._params.emplace(HTTP_TXN_OP_KEY, TXN_BEGIN);
-    txn_action.handle(&begin_req);
-
-    rapidjson::Document doc;
-    doc.Parse(k_response_str.c_str());
-    ASSERT_STREQ("OK", doc["Status"].GetString());
-
-    // Test cases: {timeout_header, expected_timeout_ms}
+    // Test cases: {label, timeout_header, expected_timeout_ms}
     struct TestCase {
+        const char* label;
         const char* timeout_header;
         int32_t expected_timeout_ms;
     };
     TestCase test_cases[] = {
-            {nullptr, config::txn_commit_rpc_timeout_ms}, // default timeout
-            {"30", 15000},                                // custom timeout: 30s -> 15000ms
+            {"rpc_timeout_default", nullptr, config::txn_commit_rpc_timeout_ms}, // default timeout
+            {"rpc_timeout_custom", "30", 15000},                                 // custom timeout: 30s -> 15000ms
     };
 
     for (const auto& tc : test_cases) {
+        TransactionManagerAction txn_action(&_env);
+        HttpRequest begin_req(_evhttp_req);
+        begin_req._headers.emplace(HttpHeaders::AUTHORIZATION, "Basic cm9vdDo=");
+        begin_req._headers.emplace(HttpHeaders::CONTENT_LENGTH, "0");
+        begin_req._headers.emplace(HTTP_LABEL_KEY, tc.label);
+        begin_req._params.emplace(HTTP_TXN_OP_KEY, TXN_BEGIN);
+        txn_action.handle(&begin_req);
+
+        rapidjson::Document doc;
+        doc.Parse(k_response_str.c_str());
+        ASSERT_STREQ("OK", doc["Status"].GetString());
+
         SyncPoint::GetInstance()->EnableProcessing();
         DeferOp defer([]() {
             SyncPoint::GetInstance()->ClearCallBack("TransactionStreamLoadAction::_exec_plan_fragment::rpc_timeout");
@@ -1126,7 +1125,7 @@ TEST_F(TransactionStreamLoadActionTest, stream_load_put_rpc_timeout_setting) {
         request.set_handler(&action);
         request._headers.emplace(HttpHeaders::AUTHORIZATION, "Basic cm9vdDo=");
         request._headers.emplace(HttpHeaders::CONTENT_LENGTH, "16");
-        request._headers.emplace(HTTP_LABEL_KEY, "123");
+        request._headers.emplace(HTTP_LABEL_KEY, tc.label);
         if (tc.timeout_header != nullptr) {
             request._headers.emplace(HTTP_TIMEOUT, tc.timeout_header);
         }
