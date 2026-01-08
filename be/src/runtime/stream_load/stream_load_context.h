@@ -186,11 +186,27 @@ public:
 
     static void release(StreamLoadContext* context);
 
+    // Calculate RPC timeout for stream load put (planning) and commit operations.
+    // The config `txn_commit_rpc_timeout_ms` is used for both operations despite its name
+    // suggesting only "commit". This is the default RPC timeout (60 seconds).
+    //
+    // When a user-specified load timeout (timeout_second) is set, the RPC timeout is calculated
+    // to be within a reasonable range relative to the total load timeout:
+    // - Upper bound: min(timeout_ms / 2, default_rpc_timeout)
+    //   Ensures RPC timeout doesn't exceed half of the total load time, leaving time for
+    //   other operations (data transfer, retries, etc.)
+    // - Lower bound: timeout_ms / 4
+    //   Ensures the RPC has at least 1/4 of the total load time to complete, even for
+    //   short timeouts, to avoid premature RPC failures
+    //
+    // Final result: rpc_timeout_ms is in range [timeout_ms/4, min(timeout_ms/2, default)]
     int32_t calc_put_and_commit_rpc_timeout_ms() {
         int32_t rpc_timeout_ms = config::txn_commit_rpc_timeout_ms;
         if (timeout_second != -1) {
             int32_t timeout_ms = timeout_second * 1000;
+            // Cap RPC timeout to at most half of total load timeout
             rpc_timeout_ms = std::min(timeout_ms / 2, rpc_timeout_ms);
+            // Ensure RPC timeout is at least 1/4 of total load timeout
             rpc_timeout_ms = std::max(timeout_ms / 4, rpc_timeout_ms);
         }
         return rpc_timeout_ms;
