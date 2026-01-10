@@ -252,7 +252,7 @@ public class MergeCommitTask extends AbstractStreamLoadTask implements Runnable 
      * @param streamLoadInfo stream load request parameters
      * @param mergeCommitIntervalMs merge-commit interval in milliseconds
      * @param loadKvParams key-value load parameters (e.g. max filter ratio)
-     * @param user user to request the load
+     * @param user the user to request the load
      * @param warehouseName warehouse name used for execution
      * @param backendIds backend IDs chosen for execution
      * @param coordinatorFactory factory to create {@link Coordinator} instances
@@ -740,7 +740,7 @@ public class MergeCommitTask extends AbstractStreamLoadTask implements Runnable 
         }
     }
 
-    private Pair<TaskState, String> getTaskState() {
+    Pair<TaskState, String> getTaskState() {
         this.lock.lock();
         try {
             return new Pair<>(taskState, taskStateMessage);

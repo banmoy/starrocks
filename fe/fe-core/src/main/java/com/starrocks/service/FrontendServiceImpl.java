@@ -1198,7 +1198,6 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         }
 
         long timeoutSecond = request.isSetTimeout() ? request.getTimeout() : Config.stream_load_default_timeout_second;
-        LOG.info("label: {}, begin timeout: {} seconds", request.getLabel(), timeoutSecond);
         MetricRepo.COUNTER_LOAD_ADD.increase(1L);
 
         long backendId = request.isSetBackend_id() ? request.getBackend_id() : -1;
@@ -1553,7 +1552,6 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         // Make timeout less than thrift_rpc_timeout_ms.
         // Otherwise, it will result in error like "call frontend service failed"
         timeoutMs = timeoutMs * 3 / 4;
-        LOG.info("txn_id: {}, load timeout: {} ms", request.getTxnId(), timeoutMs);
 
         Locker locker = new Locker();
         if (!locker.tryLockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(table.getId()), LockType.READ,

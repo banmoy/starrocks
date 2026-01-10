@@ -47,6 +47,7 @@ import com.starrocks.warehouse.WarehouseLoadInfoBuilder;
 import com.starrocks.warehouse.WarehouseLoadStatusInfo;
 import com.starrocks.warehouse.cngroup.ComputeResource;
 import io.netty.handler.codec.http.HttpHeaders;
+import org.apache.arrow.util.VisibleForTesting;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -670,6 +671,11 @@ public class StreamLoadMgr implements MemoryTrackable {
 
     public long getStreamLoadTaskCount() {
         return idToStreamLoadTask.size();
+    }
+
+    @VisibleForTesting
+    public List<AbstractStreamLoadTask> getAllTasks() {
+        return new ArrayList<>(idToStreamLoadTask.values());
     }
 
     public int numOfStreamLoadTask() {

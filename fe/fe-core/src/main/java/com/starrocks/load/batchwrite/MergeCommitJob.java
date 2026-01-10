@@ -20,6 +20,7 @@ import com.starrocks.common.util.DebugUtil;
 import com.starrocks.common.util.UUIDUtil;
 import com.starrocks.load.streamload.StreamLoadInfo;
 import com.starrocks.load.streamload.StreamLoadKvParams;
+import com.starrocks.load.streamload.StreamLoadMgr;
 import com.starrocks.qe.DefaultCoordinator;
 import com.starrocks.qe.scheduler.Coordinator;
 import com.starrocks.server.GlobalStateMgr;
@@ -205,6 +206,7 @@ public class MergeCommitJob implements MergeCommitTaskCallback {
             lock.readLock().unlock();
         }
 
+        MergeCommitTask newTask = null;
         lock.writeLock().lock();
         try {
             for (MergeCommitTask mergeCommitTask : mergeCommitTasks.values()) {
@@ -242,21 +244,17 @@ public class MergeCommitJob implements MergeCommitTaskCallback {
             }
             TUniqueId loadId = UUIDUtil.genTUniqueId();
             String label = LABEL_PREFIX + DebugUtil.printId(loadId);
-            MergeCommitTask mergeCommitTask = new MergeCommitTask(
+            newTask = new MergeCommitTask(
                     GlobalStateMgr.getCurrentState().getNextId(),
                     dbId.get(), tableId, label, loadId, streamLoadInfo, batchWriteIntervalMs, loadParameters,
                     user, warehouseName, backendIds, queryCoordinatorFactory, this);
-            mergeCommitTasks.put(label, mergeCommitTask);
+            mergeCommitTasks.put(label, newTask);
             try {
-                // Register the task with StreamLoadMgr for observing (e.g., information_schema.loads).
-                // Pass false for addTxnCallback because MergeCommitTask registers itself in run().
-                // StreamLoadMgr will expire the task automatically, so no need to remove it explicitly.
-                GlobalStateMgr.getCurrentState().getStreamLoadMgr().addLoadTask(mergeCommitTask, false);
-                executor.execute(mergeCommitTask);
+                executor.execute(newTask);
             } catch (Exception e) {
                 mergeCommitTasks.remove(label);
                 String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-                mergeCommitTask.cancel(String.format("Failed to submit task: %s", errorMsg));
+                newTask.cancel(String.format("Failed to submit task: %s", errorMsg));
                 status.setStatus_code(TStatusCode.INTERNAL_ERROR);
                 status.setError_msgs(Collections.singletonList(errorMsg));
                 return new RequestLoadResult(status, null);
@@ -267,6 +265,18 @@ public class MergeCommitJob implements MergeCommitTaskCallback {
             return new RequestLoadResult(status, label);
         } finally {
             lock.writeLock().unlock();
+            if (newTask != null) {
+                // Register the task with StreamLoadMgr for observing (e.g., information_schema.loads).
+                // 1. Pass false for addTxnCallback because MergeCommitTask registers itself in run().
+                // 2. StreamLoadMgr will expire the task automatically, so no need to remove it explicitly.
+                // 3. StreamLoadMgr.addLoadTask may do some cleanup, so register it after unlock
+                try {
+                    GlobalStateMgr.getCurrentState().getStreamLoadMgr().addLoadTask(newTask, false);
+                } catch (Exception e) {
+                    LOG.debug("Failed to register task in StreamLoadMgr, db={}, table={}, label={}",
+                            tableId.getDbName(), tableId.getTableName(), newTask.getLabel(), e);
+                }
+            }
         }
     }
 
