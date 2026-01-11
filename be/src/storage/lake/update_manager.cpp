@@ -636,6 +636,10 @@ Status UpdateManager::_handle_column_upsert_mode(const TxnLogPB_OpWrite& op_writ
         if (config::enable_transparent_data_encryption) {
             new_rows_op.mutable_rowset()->add_segment_encryption_metas(writer.encryption_meta());
         }
+        auto* segment_meta = new_rows_op.mutable_rowset()->add_segment_metas();
+        writer.get_sort_key_min().to_proto(segment_meta->mutable_sort_key_min());
+        writer.get_sort_key_max().to_proto(segment_meta->mutable_sort_key_max());
+        segment_meta->set_num_rows(writer.num_rows());
 
         uint32_t new_segment_id = new_rows_op.rowset().segments_size() - 1;
         PrimaryIndex::DeletesMap segment_deletes;
@@ -757,7 +761,7 @@ Status UpdateManager::publish_column_mode_partial_update(const TxnLogPB_OpWrite&
 // This method supports both serial and parallel execution modes.
 //
 // Parallel Execution:
-// When enabled (config::enable_pk_index_parallel_get && is_cloud_native_index), this method
+// When enabled (config::enable_pk_index_parallel_execution && is_cloud_native_index), this method
 // uses a thread pool to process segments concurrently, significantly improving performance
 // for large tablets during publish operations.
 //
@@ -785,10 +789,10 @@ Status UpdateManager::_do_update(uint32_t rowset_id, int32_t upsert_idx, const S
     // Prepare parallel execution infrastructure if enabled
     std::unique_ptr<ThreadPoolToken> token;
 
-    // Enable parallel execution for cloud-native index when configured
     // Note: Only cloud-native index supports parallel_get/parallel_upsert, local index does not support it
-    if (config::enable_pk_index_parallel_get && is_cloud_native_index) {
-        token = ExecEnv::GetInstance()->pk_index_get_thread_pool()->new_token(ThreadPool::ExecutionMode::CONCURRENT);
+    if (config::enable_pk_index_parallel_execution && is_cloud_native_index) {
+        token = ExecEnv::GetInstance()->pk_index_execution_thread_pool()->new_token(
+                ThreadPool::ExecutionMode::CONCURRENT);
     }
 
     if (read_only && is_cloud_native_index) {
@@ -1258,12 +1262,31 @@ size_t UpdateManager::get_rowset_num_deletes(int64_t tablet_id, int64_t version,
     return num_dels;
 }
 
-bool UpdateManager::_use_light_publish_primary_compaction(int64_t tablet_id, int64_t txn_id) {
+bool UpdateManager::_use_light_publish_primary_compaction(TabletManager* mgr,
+                                                          const TxnLogPB_OpCompaction& op_compaction, int64_t tablet_id,
+                                                          int64_t txn_id) {
     // Is config enable ?
     if (!config::enable_light_pk_compaction_publish) {
         return false;
     }
-    // Is rows mapper file exist?
+
+    // DESIGN DECISION: Determine if mapper file exists and which storage type
+    // WHY: Light publish optimization uses pre-computed rows mapper to avoid re-reading
+    // and re-processing compaction input/output rowsets during publish phase.
+    // This can reduce publish time from minutes to seconds for large compactions.
+
+    // Priority 1: Check for remote storage lcrm file (new path)
+    if (op_compaction.has_lcrm_file()) {
+        // WHY: When parallel pk execution is enabled, lcrm_file metadata is stored in txn log.
+        // Its presence guarantees the mapper file exists on remote storage (S3/HDFS).
+        // No need to check file existence - metadata is the source of truth.
+        // BENEFIT: Avoids network I/O to check file existence in S3/HDFS.
+        return true;
+    }
+
+    // Priority 2: Check for local disk crm file (legacy path)
+    // WHY: For backward compatibility with compactions created before remote storage support.
+    // These files were created on local disk and need explicit existence check.
     auto filename_st = lake_rows_mapper_filename(tablet_id, txn_id);
     if (!filename_st.ok()) {
         return false;
@@ -1290,9 +1313,9 @@ Status UpdateManager::light_publish_primary_compaction(const TxnLogPB_OpCompacti
             *std::max_element(op_compaction.input_rowsets().begin(), op_compaction.input_rowsets().end());
 
     // 2. update primary index, and generate delete info.
-    auto resolver = std::make_unique<LakePrimaryKeyCompactionConflictResolver>(&metadata, &output_rowset, _tablet_mgr,
-                                                                               builder, &index, txn_id, base_version,
-                                                                               &segment_id_to_add_dels, &delvecs);
+    auto resolver = std::make_unique<LakePrimaryKeyCompactionConflictResolver>(
+            &metadata, &output_rowset, _tablet_mgr, builder, &index, txn_id, base_version, op_compaction.lcrm_file(),
+            &segment_id_to_add_dels, &delvecs);
     if (op_compaction.ssts_size() > 0 && use_cloud_native_pk_index(metadata)) {
         RETURN_IF_ERROR(resolver->execute_without_update_index());
     } else {
@@ -1347,7 +1370,7 @@ Status UpdateManager::publish_primary_compaction(const TxnLogPB_OpCompaction& op
         // conflict happens
         return Status::OK();
     }
-    if (_use_light_publish_primary_compaction(tablet.id(), txn_id)) {
+    if (_use_light_publish_primary_compaction(tablet.tablet_mgr(), op_compaction, tablet.id(), txn_id)) {
         return light_publish_primary_compaction(op_compaction, txn_id, metadata, tablet, index_entry, builder,
                                                 base_version);
     }

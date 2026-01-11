@@ -12,6 +12,7 @@ set(EXEC_FILES
         ./column/chunk_test.cpp
         ./column/column_helper_test.cpp
         ./column/const_column_test.cpp
+        ./column/copied_datum_test.cpp
         ./column/date_value_test.cpp
         ./column/decimalv3_column_test.cpp
         ./column/field_test.cpp
@@ -39,6 +40,7 @@ set(EXEC_FILES
         ./connector_sink/partition_chunk_writer_test.cpp
         ./connector_sink/async_flush_output_stream_test.cpp
         ./connector_sink/iceberg_table_sink_test.cpp
+        ./connector_sink/iceberg_delete_sink_test.cpp
         ./connector_sink/sink_memory_manager_test.cpp
         ./fs/azure/azblob_uri_test.cpp
         ./fs/azure/fs_azblob_test.cpp
@@ -57,6 +59,7 @@ set(EXEC_FILES
         ./fs/bundle_file_test.cpp
         ./exec/column_value_range_test.cpp
         ./exec/range_router_test.cpp
+        ./exec/plain_text_builder_test.cpp
         ./exec/es/es_query_builder_test.cpp
         ./exec/es/es_scan_reader_test.cpp
         ./exec/es/es_scroll_parser_test.cpp
@@ -87,7 +90,8 @@ set(EXEC_FILES
         ./exec/schema_fe_tablet_schedules_scanner_test.cpp
         ./exec/schema_materialized_views_scanner_test.cpp
         ./exec/schema_task_runs_scanner_test.cpp
-	    ./exec/schema_scanner/schema_be_tablet_write_log_scanner_test.cpp
+        ./exec/schema_scanner/schema_be_tablet_write_log_scanner_test.cpp
+        ./exec/schema_scanner/schema_scanner_test.cpp
         ./exec/sink/connector_sink_operator_test.cpp
         ./exec/sink/sink_io_buffer_test.cpp
         ./exec/stream/mem_state_table_test.cpp
@@ -335,12 +339,14 @@ set(EXEC_FILES
         ./types/int256_test.cpp
         ./types/int256_arithmetic_test.cpp
         ./types/type_checker_test.cpp
+        ./types/type_checker_xml_loader_test.cpp 
         ./types/variant_value_test.cpp
         ./simd/batch_run_counter_test.cpp
         ./simd/simd_test.cpp
         ./simd/simd_selector_test.cpp
         ./simd/simd_mulselector_test.cpp
         ./simd/simd_expand_test.cpp
+        ./util/heap_test.cpp
         ./util/phmap_test.cpp
         ./util/aes_util_test.cpp
         ./util/await_test.cpp

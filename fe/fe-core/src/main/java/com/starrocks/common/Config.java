@@ -372,6 +372,9 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true)
     public static boolean plugin_enable = true;
 
+    @ConfField
+    public static String ext_dir = System.getenv("STARROCKS_HOME") + "/lib";
+
     /**
      * Labels of finished or cancelled load jobs will be removed
      * 1. after *label_keep_max_second*
@@ -2210,6 +2213,12 @@ public class Config extends ConfigBase {
      */
     @ConfField(mutable = true)
     public static long statistic_manager_sleep_time_sec = 60; // 60s
+
+    /**
+     * The interval of TabletWriteLogHistorySyncer to sync tablet write log history.
+     */
+    @ConfField(mutable = true)
+    public static long tablet_write_log_history_sync_interval_sec = 60;
 
     /**
      * Analyze status keep time in catalog
@@ -4096,4 +4105,7 @@ public class Config extends ConfigBase {
     public static int compound_predicate_flatten_threshold = 512;
 
     @ConfField public static int ui_queries_sql_statement_max_length = 128;
+
+    @ConfField(mutable = true)
+    public static boolean enable_hudi_lib_internal_metadata_table = true;
 }

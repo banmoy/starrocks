@@ -107,8 +107,10 @@ import com.starrocks.mysql.MysqlEofPacket;
 import com.starrocks.mysql.MysqlSerializer;
 import com.starrocks.persist.CreateInsertOverwriteJobLog;
 import com.starrocks.persist.gson.GsonUtils;
+import com.starrocks.planner.DataSink;
 import com.starrocks.planner.FileScanNode;
 import com.starrocks.planner.HiveTableSink;
+import com.starrocks.planner.IcebergDeleteSink;
 import com.starrocks.planner.IcebergScanNode;
 import com.starrocks.planner.IcebergTableSink;
 import com.starrocks.planner.OlapScanNode;
@@ -126,6 +128,8 @@ import com.starrocks.qe.feedback.PlanTuningAdvisor;
 import com.starrocks.qe.feedback.analyzer.PlanTuningAnalyzer;
 import com.starrocks.qe.feedback.skeleton.SkeletonBuilder;
 import com.starrocks.qe.feedback.skeleton.SkeletonNode;
+import com.starrocks.qe.recursivecte.RecursiveCTEAstCheck;
+import com.starrocks.qe.recursivecte.RecursiveCTEExecutor;
 import com.starrocks.qe.scheduler.Coordinator;
 import com.starrocks.qe.scheduler.FeExecuteCoordinator;
 import com.starrocks.qe.scheduler.dag.ExecutionFragment;
@@ -724,6 +728,7 @@ public class StmtExecutor {
             WarehouseIdleChecker.increaseRunningSQL(originWarehouseId);
         }
 
+        RecursiveCTEExecutor cteExecutor = null;
         try {
             context.getState().setIsQuery(context.isQueryStmt(parsedStmt));
             if (parsedStmt.isExistQueryScopeHint()) {
@@ -740,6 +745,26 @@ public class StmtExecutor {
                 context.setExplainLevel(parsedStmt.getExplainLevel());
             } else {
                 context.setExplainLevel(null);
+            }
+
+            if (RecursiveCTEAstCheck.hasRecursiveCte(parsedStmt, context)) {
+                redirectStatus = RedirectStatus.FORWARD_WITH_SYNC;
+                if (isForwardToLeader()) {
+                    context.setIsForward(true);
+                    forwardToLeader();
+                    return;
+                }
+                cteExecutor = new RecursiveCTEExecutor(context);
+                parsedStmt = cteExecutor.splitOuterStmt(parsedStmt);
+                if (parsedStmt.isExplain()) {
+                    // Every time set no send flag and clean all data in buffer
+                    context.getMysqlChannel().reset();
+                    String explainString = cteExecutor.explainCTE(parsedStmt);
+                    handleExplainStmt(explainString);
+                    return;
+                } else {
+                    cteExecutor.prepareRecursiveCTE();
+                }
             }
 
             redirectStatus = RedirectStatus.getRedirectStatus(parsedStmt);
@@ -1037,6 +1062,9 @@ public class StmtExecutor {
 
             // process post-action after query is finished
             context.onQueryFinished();
+            if (cteExecutor != null) {
+                cteExecutor.finalizeRecursiveCTE();
+            }
         }
     }
 
@@ -2990,21 +3018,33 @@ public class StmtExecutor {
             } else if (targetTable.isIcebergTable()) {
                 // TODO(stephen): support abort interface and delete data files when aborting.
                 List<TSinkCommitInfo> commitInfos = coord.getSinkCommitInfos();
-                if (stmt instanceof InsertStmt && ((InsertStmt) stmt).isOverwrite()) {
-                    for (TSinkCommitInfo commitInfo : commitInfos) {
-                        commitInfo.setIs_overwrite(true);
-                    }
-                }
 
-                IcebergTableSink sink = (IcebergTableSink) execPlan.getFragments().get(0).getSink();
-                IcebergMetadata.IcebergSinkExtra extra = null;
-                extra = fillRewriteFiles(stmt, execPlan, commitInfos, extra);
-                if (context.getSkipFinishSink()) {
-                    context.getFinishSinkHandler()
-                            .finish(catalogName, dbName, tableName, commitInfos, sink.getTargetBranch(), (Object) extra);
-                } else {
+                DataSink dataSink = execPlan.getFragments().get(0).getSink();
+                if (dataSink instanceof IcebergDeleteSink deleteSink) {
+                    // This is a DELETE operation, use IcebergDeleteSink
+                    IcebergMetadata.IcebergSinkExtra extra = deleteSink.getSinkExtraInfo();
                     context.getGlobalStateMgr().getMetadataMgr().finishSink(
-                            catalogName, dbName, tableName, commitInfos, sink.getTargetBranch(), (Object) extra);
+                            catalogName, dbName, tableName, commitInfos, null, extra);
+                } else if (dataSink instanceof IcebergTableSink) {
+                    // This is an INSERT/OVERWRITE operation, use IcebergTableSink
+                    IcebergTableSink sink = (IcebergTableSink) dataSink;
+                    if (stmt instanceof InsertStmt && ((InsertStmt) stmt).isOverwrite()) {
+                        for (TSinkCommitInfo commitInfo : commitInfos) {
+                            commitInfo.setIs_overwrite(true);
+                        }
+                    }
+
+                    IcebergMetadata.IcebergSinkExtra extra = null;
+                    extra = fillRewriteFiles(stmt, execPlan, commitInfos, extra);
+                    if (context.getSkipFinishSink()) {
+                        context.getFinishSinkHandler()
+                                .finish(catalogName, dbName, tableName, commitInfos, sink.getTargetBranch(), (Object) extra);
+                    } else {
+                        context.getGlobalStateMgr().getMetadataMgr().finishSink(
+                                catalogName, dbName, tableName, commitInfos, sink.getTargetBranch(), (Object) extra);
+                    }
+                } else {
+                    throw new RuntimeException("Unsupported sink type for Iceberg table: " + dataSink.getClass().getName());
                 }
                 txnStatus = TransactionStatus.VISIBLE;
                 label = "FAKE_ICEBERG_SINK_LABEL";

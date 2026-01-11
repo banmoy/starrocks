@@ -421,6 +421,10 @@ SHOW DATABASES FROM r2;
   - 必須：いいえ
   - 説明：データベースのパスワード。
 
+- `iceberg.catalog.jdbc.init-catalog-tables`
+  - 必須：いいえ
+  - 説明：`iceberg.catalog.uri` で指定されたデータベースにメタデータを格納するためのテーブル `iceberg_namespace_properties` および `iceberg_tables` を作成するかどうか。デフォルト値は `false` です。`iceberg.catalog.uri` で指定されたデータベースにこれらの 2 つのテーブルがまだ作成されていない場合は `true` を指定してください。
+
 次の例は、Iceberg catalog `iceberg_jdbc` を作成し、メタストアとして JDBC を使用します。
 
 ```SQL
@@ -429,12 +433,17 @@ PROPERTIES
 (
     "type" = "iceberg",
     "iceberg.catalog.type" = "jdbc",
-    "iceberg.catalog.warehouse" = "hdfs:///jdbc_iceberg/warehouse/ ",
+    "iceberg.catalog.warehouse" = "s3://my_bucket/warehouse_location",
     "iceberg.catalog.uri" = "jdbc:mysql://ip:port/db_name",
     "iceberg.catalog.jdbc.user" = "username",
-    "iceberg.catalog.jdbc.password" = "password"
+    "iceberg.catalog.jdbc.password" = "password",
+    "aws.s3.endpoint" = "<s3_endpoint>",
+    "aws.s3.access_key" = "<iam_user_access_key>",
+    "aws.s3.secret_key" = "<iam_user_secret_key>"
 );
 ```
+
+MySQL やその他のカスタム JDBC ドライバを使用する場合、対応する JAR ファイルを `fe/lib` ディレクトリおよび `be/lib/jni-packages` ディレクトリに配置する必要があります。
 
 </TabItem>
 
@@ -1431,7 +1440,7 @@ ORDER BY (column_name [sort_direction] [nulls_order], ...)
 
 ###### compression_codec
 
-説明: Iceberg テーブルに使用される圧縮アルゴリズム。サポートされている圧縮アルゴリズムは SNAPPY、GZIP、ZSTD、および LZ4 です。デフォルト値: `gzip`。このプロパティは v3.2.3 で非推奨となり、それ以降のバージョンでは Iceberg テーブルにデータをシンクするために使用される圧縮アルゴリズムはセッション変数 [connector_sink_compression_codec](../../../sql-reference/System_variable.md#connector_sink_compression_codec) によって一元的に制御されます。
+説明: Iceberg テーブルに使用される圧縮アルゴリズム。サポートされている圧縮アルゴリズムは SNAPPY、GZIP、ZSTD、および LZ4 です。デフォルト値: `zstd`。
 
 ---
 
@@ -1477,6 +1486,37 @@ ORDER BY (column_name [sort_direction] [nulls_order], ...)
    )
    PARTITION BY bucket(id, 10), year(dt);
    ```
+
+---
+
+### パーティション Spec の進化（ADD/DROP PARTITION COLUMN）
+
+StarRocks は `ALTER TABLE ... ADD|DROP PARTITION COLUMN` を使用して Iceberg テーブルのパーティション Spec（変換式を含む）を進化させることをサポートします。
+
+#### 構文
+
+```SQL
+ALTER TABLE [catalog.][database.]table_name
+ADD PARTITION COLUMN partition_expr [, partition_expr ...];
+
+ALTER TABLE [catalog.][database.]table_name
+DROP PARTITION COLUMN partition_expr [, partition_expr ...];
+```
+
+`partition_expr` は列名（Identity 変換）または次の変換式のいずれかを指定できます: `year`、`month`、`day`、`hour`、`truncate`、`bucket`。
+
+#### 例
+
+```SQL
+ALTER TABLE test_part_evo
+ADD PARTITION COLUMN dt, truncate(value, 10), bucket(id, 10);
+
+ALTER TABLE test_part_evo
+DROP PARTITION COLUMN dt;
+
+ALTER TABLE test_part_evo
+ADD PARTITION COLUMN month(dt);
+```
 
 ---
 

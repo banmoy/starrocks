@@ -458,6 +458,12 @@ SHOW DATABASES FROM r2;
 
 描述：数据库的密码。
 
+##### iceberg.catalog.jdbc.init-catalog-tables
+
+必需：否
+
+描述：是否在 `iceberg.catalog.uri` 指定的数据库中创建用于存储元数据的表 `iceberg_namespace_properties` 和 `iceberg_tables`，默认值为`false`。当`iceberg.catalog.uri` 指定的数据库中尚未创建上述两张表时需要指定为`true`。
+
 以下示例创建了一个名为 `iceberg_jdbc` 的 Iceberg catalog，并使用 JDBC 作为元存储：
 
 ```SQL
@@ -466,12 +472,16 @@ PROPERTIES
 (
     "type" = "iceberg",
     "iceberg.catalog.type" = "jdbc",
-    "iceberg.catalog.warehouse" = "hdfs:///jdbc_iceberg/warehouse/ ",
+    "iceberg.catalog.warehouse" = "s3://my_bucket/warehouse_location",
     "iceberg.catalog.uri" = "jdbc:mysql://ip:port/db_name",
     "iceberg.catalog.jdbc.user" = "username",
-    "iceberg.catalog.jdbc.password" = "password"
+    "iceberg.catalog.jdbc.password" = "password",
+    "aws.s3.endpoint" = "<s3_endpoint>",
+    "aws.s3.access_key" = "<iam_user_access_key>",
+    "aws.s3.secret_key" = "<iam_user_secret_key>"
 );
 ```
+若使用MySQL或其他自定义的JDBC驱动程序，需要将相应的JAR包放置于 `fe/lib` 和 `be/lib/jni-packages` 目录下。
 
 </TabItem>
 
@@ -1471,7 +1481,7 @@ ORDER BY (column_name [sort_direction] [nulls_order], ...)
 
 ###### compression_codec
 
-描述：Iceberg 表使用的压缩算法。支持的压缩算法有 SNAPPY、GZIP、ZSTD 和 LZ4。默认值：`gzip`。此属性在 v3.2.3 中已弃用，从该版本开始，导入数据到 Iceberg 表时使用的压缩算法由会话变量 [connector_sink_compression_codec](../../../sql-reference/System_variable.md#connector_sink_compression_codec) 统一控制。
+描述：Iceberg 表使用的压缩算法。支持的压缩算法有 SNAPPY、GZIP、ZSTD 和 LZ4。默认值：`zstd`。
 
 ---
 
@@ -1517,6 +1527,38 @@ ORDER BY (column_name [sort_direction] [nulls_order], ...)
    )
    PARTITION BY bucket(id, 10), year(dt);
    ```
+
+---
+
+### 分区演进（ADD/DROP PARTITION COLUMN）
+
+StarRocks 支持使用 `ALTER TABLE ... ADD|DROP PARTITION COLUMN` 为 Iceberg 表演进分区 Spec（包括转换表达式）。
+
+#### 语法
+
+```SQL
+ALTER TABLE [catalog.][database.]table_name
+ADD PARTITION COLUMN partition_expr [, partition_expr ...];
+
+ALTER TABLE [catalog.][database.]table_name
+DROP PARTITION COLUMN partition_expr [, partition_expr ...];
+```
+
+`partition_expr` 可以是列名（Identity 变换）或以下转换表达式之一：`year`、`month`、`day`、`hour`、`truncate`、`bucket`。
+
+#### 示例
+
+```SQL
+ALTER TABLE test_part_evo
+ADD PARTITION COLUMN dt, truncate(value, 10), bucket(id, 10);
+
+ALTER TABLE test_part_evo
+DROP PARTITION COLUMN dt;
+
+ALTER TABLE test_part_evo
+ADD PARTITION COLUMN month(dt);
+```
+
 ---
 
 ### 将数据下沉到 Iceberg 表
