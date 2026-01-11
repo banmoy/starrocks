@@ -47,6 +47,7 @@ import com.starrocks.warehouse.WarehouseLoadInfoBuilder;
 import com.starrocks.warehouse.WarehouseLoadStatusInfo;
 import com.starrocks.warehouse.cngroup.ComputeResource;
 import io.netty.handler.codec.http.HttpHeaders;
+import org.apache.arrow.util.VisibleForTesting;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -285,8 +286,31 @@ public class StreamLoadMgr implements MemoryTrackable {
         return db;
     }
 
-    // add load tasks and also add callback factory
+    /**
+     * Adds a stream load task to the manager and registers it for transaction state callbacks.
+     *
+     * <p>This is a convenience method that calls {@link #addLoadTask(AbstractStreamLoadTask, boolean)}
+     * with {@code addTxnCallback} set to {@code true}.</p>
+     *
+     * @param task the stream load task to add
+     */
     public void addLoadTask(AbstractStreamLoadTask task) {
+        addLoadTask(task, true);
+    }
+
+    /**
+     * Adds a stream load task to the manager with optional transaction callback registration.
+     *
+     * <p>This method registers the task for tracking and management. If {@code addTxnCallback} is
+     * {@code true}, the task is also registered as a transaction state change callback.
+     *
+     * <p>The method also performs automatic cleanup of old tasks if the task count exceeds the
+     * configured threshold.</p>
+     *
+     * @param task the stream load task to add
+     * @param addTxnCallback whether to register the task as a transaction state change callback
+     */
+    public void addLoadTask(AbstractStreamLoadTask task, boolean addTxnCallback) {
         if (task instanceof StreamLoadTask && ((StreamLoadTask) task).isSyncStreamLoad()) {
             txnIdToSyncStreamLoadTasks.put(task.getTxnId(), (StreamLoadTask) task);
         }
@@ -314,7 +338,9 @@ public class StreamLoadMgr implements MemoryTrackable {
         idToStreamLoadTask.put(label, task);
 
         // register txn state listener
-        GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().getCallbackFactory().addCallback(task);
+        if (addTxnCallback) {
+            GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().getCallbackFactory().addCallback(task);
+        }
     }
 
     public TNetworkAddress executeLoadTask(String label, int channelId, HttpHeaders headers,
@@ -598,13 +624,13 @@ public class StreamLoadMgr implements MemoryTrackable {
         return idToStreamLoadTask.get(label);
     }
 
-    public StreamLoadTask getTaskById(long id) {
+    public AbstractStreamLoadTask getTaskById(long id) {
         readLock();
         try {
             List<AbstractStreamLoadTask> taskList =
                     idToStreamLoadTask.values().stream().filter(streamLoadTask -> id == streamLoadTask.getId())
-                            .collect(Collectors.toList());
-            return taskList.isEmpty() ? null : (StreamLoadTask) taskList.get(0);
+                            .toList();
+            return taskList.isEmpty() ? null : taskList.get(0);
         } finally {
             readUnlock();
         }
@@ -645,6 +671,11 @@ public class StreamLoadMgr implements MemoryTrackable {
 
     public long getStreamLoadTaskCount() {
         return idToStreamLoadTask.size();
+    }
+
+    @VisibleForTesting
+    public List<AbstractStreamLoadTask> getAllTasks() {
+        return new ArrayList<>(idToStreamLoadTask.values());
     }
 
     public int numOfStreamLoadTask() {
