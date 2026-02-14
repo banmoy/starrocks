@@ -1357,6 +1357,19 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
             locker.unLockTableWithIntensiveDbLock(db.getId(), olapTable.getId(), LockType.READ);
         }
 
+        // [DEBUG] Sleep to allow concurrent SWAP to happen between READ unlock and WRITE lock
+        while (Config.debug_sleep_before_addpartition_write_lock_ms > 0) {
+            LOG.info("[DEBUG] waiting before write lock in addPartitions, db: {}, table: {} (id={}), interval={}ms",
+                    db.getFullName(), tableName, olapTable.getId(),
+                    Config.debug_sleep_before_addpartition_write_lock_ms);
+            try {
+                Thread.sleep(Config.debug_sleep_before_addpartition_write_lock_ms);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+
         Preconditions.checkNotNull(distributionInfo);
         Preconditions.checkNotNull(olapTable);
         Preconditions.checkNotNull(copiedTable);

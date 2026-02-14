@@ -1575,6 +1575,9 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, comment = "The interval of create partition batch, to avoid too frequent")
     public static long mv_create_partition_batch_interval_ms = 1000;
 
+    @ConfField(mutable = true, comment = "Debug: sleep ms before write lock in addPartitions, 0 means disabled")
+    public static long debug_sleep_before_addpartition_write_lock_ms = 0;
+
     @ConfField(mutable = true, comment = "Whether to prefer string type for fixed length varchar column " +
             "in materialized view creation/ctas")
     public static boolean transform_type_prefer_string_for_varchar = true;
