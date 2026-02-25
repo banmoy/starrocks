@@ -2,7 +2,7 @@
 
 ### 1. 背景与用户价值
 
-Time Travel 的目标是提供**时间点查询（point-in-time query）**能力：让用户能够以"时间戳 / 版本号"读取表在历史某个提交点的历史版本，并以可控的保留策略保存这些可回溯点，从而支撑数据恢复、审计与可复现分析。
+增量物化视图（IVM）刷新时需要查询历史版本、当前版本以及两个版本之间的变更，这里关注如何支持历史版本查询。从产品的角度，查询历史版本的能力在业界通常称为**时间点查询（point-in-time query）**，提供这种能力的的产品为**Time Travel**，让用户能够以"时间戳 / 版本号"读取表在历史某个提交点的历史版本，并以可控的保留策略保存这些可回溯点，从而支撑数据恢复、审计、可复现分析等场景。如果支持了 Time Travel，自然能满足 IVM 的需求，但满足 IVM 需求不一定需要支持完整的 Time Travel。我们希望能从 IVM 需求出发，最终拓展到 Time Travel，因此本文档会整体讨论下 StarRocks Time Travel，以及在 IVM 场景的特化。
 
 - **误操作恢复（数据工程 / DBA）**
   - 误删、误更新、写入坏数据后，需要快速找回"出问题前"的数据状态。
@@ -10,8 +10,6 @@ Time Travel 的目标是提供**时间点查询（point-in-time query）**能力
   - 上周/昨天生成的报表与今天不一致，需要复现当时的输入数据口径以定位差异来源。
 - **审计取证（合规）**
   - 需要证明某个时间点的数据状态，并可重复跑出同样结果（提交点一致性）。
-- **增量物化视图 IVM**
-  - IVM 的共同前提是 **Table 多版本读取**：需要能够读取基表在 `[v_from, v_to]` 的任意版本（至少能读到 base/head 两端），并在需要时读取期间 changes（Δ）。
 
 ### 2. 产品调研
 
@@ -24,30 +22,36 @@ Time Travel 的目标是提供**时间点查询（point-in-time query）**能力
 | **查询使用的 Schema** | 当前 schema | 历史 schema | **Snapshot ID/Timestamp/Tag → 历史 schema**；**Branch → 当前 schema**；通过唯一列 ID 保证演进正确性 | 当前 schema |
 | **数据恢复能力** | **UNDROP** ✅（表/Schema/DB）、**零拷贝 CLONE** ✅、CTAS ✅；不支持**同表回滚** | **RESTORE（同表回滚）** ✅（生成新版本，可逆）、Deep/Shallow **CLONE** ✅、INSERT/MERGE 恢复 ✅；**UNDROP** ❌ | **rollback_to_snapshot/timestamp** ✅、**set_current_snapshot** ✅、**cherrypick** ✅、CTAS ✅；**UNDROP** ❌ | Copy 恢复 ✅（bq cp / CTAS）、**Table Snapshot**（零拷贝只读）✅、**Table Clone**（零拷贝可写）✅；**同表 ROLLBACK** ❌、**UNDROP** ❌（需先 copy） |
 
-### 3. 产品定义与范围
 
-先对通用场景的 Time Travel 进行定义，然后在 3.6 中讨论增量物化视图的特殊性
+### 3. 目标
 
-#### 3.1 Time Travel 定义
+- 讨论 StarRocks Time Travel 产品能力，确保覆盖 IVM 需求
+- 讨论实现路径，短期要能支持 IVM 场景
+
+### 3. 产品定义
+
+先对通用场景的 Time Travel 进行定义，尽量和其它产品能力对齐，然后在 3.5 中讨论增量物化视图的特殊性
+
+#### 3.1 Time Travel
 
 Time Travel 允许用户访问**过去一段时间**内、**任意一个历史版本**所对应的数据状态。
 
 - **适用对象**：普通内表与异步物化视图；同步物化视图本质是内表的 Rollup Index，内表历史版本也包含了同步 MV 历史状态。
-- **版本生成**：当表发生**DML** 或**影响查询结果的 DDL** 时，会形成新的版本，例如：
-  - **DML**：`INSERT`、`INSERT OVERWRITE`、`DELETE`、`UPDATE`，以及各类导入（`STREAM LOAD`/`BROKER LOAD`/`ROUTINE LOAD` 等）。
-  - **部分影响查询结果的 DDL**：`TRUNCATE TABLE/PARTITION`、`ALTER TABLE ADD/DROP PARTITION`、以及会改变数据可见性或查询语义的表结构变更（如新增/删除列等）。
+- **版本定义**：当表发生**DML** 或**影响查询结果的 DDL** 时，会生成新的版本，例如：
+  - **DML**：`INSERT INTO`、`INSERT OVERWRITE`、`DELETE`、`UPDATE`，以及各类导入（`STREAM LOAD`/`BROKER LOAD`/`ROUTINE LOAD` 等）。
+  - **部分影响查询结果的 DDL**：`TRUNCATE TABLE/PARTITION`、`DROP PARTITION`、以及会改变数据可见性或查询语义的表结构变更（如新增/删除列等）。
   - **暂不纳入 `DROP TABLE`**：`DROP TABLE` 属于对象删除，涉及回收站/元数据生命周期等额外复杂度，本期 Time Travel 暂不覆盖；误删表的恢复场景由 `RECOVER`（Recycle Bin）机制覆盖。
 - **版本定位**：可以用 **timestamp** 来指定，系统会解析到不晚于该时间点的最近一个版本；若超出保留范围则报错。
   - **对外接口简化**：Time Travel 面向用户侧只暴露 **timestamp**（不提供按 `version` 精确定位），以减少概念负担，提升易用性。
   - **内部可使用更具体的 version**：在系统内部实现中（例如增量物化视图版本推进），可以使用与物理实现相关的 version 标识，进行细粒度控制；该部分不作为用户侧语义的一部分，具体见技术实现部分。
-- **时间点查询 Schema 语义**：使用时间点的历史 schema，提供严格的业务一致性语义。
+- **时间点查询 Schema 语义**：使用时间点的历史 schema，提供严格的一致性语义。(讨论：是否支持使用当前 Schema)
 
 #### 3.2 核心能力
 
 Time Travel 的核心能力由三部分组成：
 
 - **历史版本保留**
-  - 通过保留策略决定历史版本的可访问窗口。
+  - 保留表的历史状态，包括表定义等元数据以及数据，业界产品默认都是天级别的保留时长。
 - **时间点查询**
   - 支持按 **timestamp** 访问历史版本：`FOR TIMESTAMP AS OF <timestamp>`（解析到不晚于该时间点的最近一次提交点）。
 - **数据恢复**
@@ -146,15 +150,19 @@ Time Travel 与 Cluster Snapshot 都能保留并恢复表的历史状态，但�
 
 **IVM 的场景特征：**
 
-1. **只需要两个版本**：IVM 增量刷新读取基表的 base version（MV 上次刷新对应的基表版本）与 head version（当前最新版本），并计算二者之间的变更（Δ）。从读取历史版本的角度，两次刷新之间的版本不需要保留。（注：计算变更（Change Data Capture）可能需要保留中间版本，该需求在 CDC 设计中讨论，不在本节范围内。）
+1. **只需保留一个完整的历史版本**：IVM 增量刷新读取基表的 base version（MV 上次刷新对应的基表版本）、head version（当前最新版本）以及两个版本之间的变更。从时间点查询的角度，只需要保留 base version 的完整状态即可，base 到 head 之间的版本不必保留完整状态。（注：获取变更依赖中间版本，至于是否需要保留中间版本在 CDC 设计中讨论，不在这里讨论。）
 2. **实时刷新**：IVM 目标是秒级刷新延迟，大部分情况下保留小时级的历史版本应该足够。
-3. **始终使用最新 schema**：IVM 按最新 schema 执行增量计算，不需要保留历史 schema。
+3. **始终使用最新 schema 查询**：当前 MV 实现中，基表变更的列如果被 MV 使用，MV 会自动刷新确保 MV 和基表的 Schema 一致，如果 IVM 遵循同样的模式，那么就不存在使用历史 Schema 查询的需求，因此不需要保留历史 Schema 。
 4. **天然具备 fallback 能力**：IVM 同时支持增量与全量刷新，只有增量刷新依赖历史版本读取。当历史版本不可用时，可自动退化为全量刷新，对用户透明。
 
 **基于上述特征，IVM 需求特点（待讨论）：**
 
-1. **更轻量的保留策略**：IVM 不需要天级别的保留窗口，小时级足够；也不需要保留窗口内的所有历史版本，只需保留 MV 依赖的个别版本即可，从而降低历史版本的保留开销。
-2. **可以优先支持 DML （除 INSERT OVERWRITE）**：DDL（如 TRUNCATE TABLE/PARTITION、DROP PARTITION、重写数据的 Schema Change 等）支持 Time Travel 实现复杂度高（参考 4.2.2），但实时场景下发生频率低，作为折衷这些 DDL 发生后可退化为全量刷新，从而降低 Time Travel 首期的实现范围。
+1. **不需要保留历史 Schema 等元数据**：原因见上面第 3 点
+2. **更轻量和灵活的保留策略**：可以采取不同的策略降低历史版本的保留开销
+- 实时刷新场景不需要天级别的保留窗口，大部分情况小时级应该足够
+- 可以只保留需要的版本，而不是所有 DML 版本
+- 可以是 MV 刷新驱动的淘汰策略，刷新完即可释放，不需要等固定的时间窗口
+3. **可以优先只支持 DML （除 INSERT OVERWRITE）**：INSERT OVERWRITE 和 DDL（如 TRUNCATE TABLE/PARTITION、DROP PARTITION 等）一般是批处理模式，IVM 可能用全量刷新更好，尤其是 partition 粒度比较大，比如按天分区，另外这些操作支持 Time Travel 实现复杂度较高，参考 4.2.2，可以降低支持的优先级。有些用户可以接受这种模式，比如 Applovin https://celerdata.slack.com/archives/C08RQ5H2GP6/p1771900805931829
 
 ### 4. 技术方案
 
@@ -203,17 +211,17 @@ Time Travel 与 Cluster Snapshot 都能保留并恢复表的历史状态，但�
    当前 Table Meta 在数据结构 `OlapTable` 中维护，发生变更后直接原地更新或替换，只保留最新状态，不保留历史版本，因此没有机制能回答"时间 T 时刻的表定义和数据分片是什么"。
 
 3. **数据分片拓扑变更带来的额外复杂度**
-   对于无拓扑变更的操作（DML、Compaction），Tablet 持续存在，Time Travel 只需保留旧版本数据文件即可按版本读取。但拓扑变更操作（DROP/TRUNCATE PARTITION、Reshard、非 Fast Schema Change 等）会替换或删除 Tablet 本身，带来不同的挑战——历史查询需要访问当前已不存在的 Tablet。这要求在保留窗口内额外保留：(1) 历史数据分片拓扑（知道历史时刻有哪些 Tablet）；(2) StarManager 中旧 Tablet 的 Shard 元数据或 StarManager 支持 on-demand 调度（历史 Tablet 可调度）；(3) 对象存储上旧 Tablet 的 tablet metadata 和数据文件（历史数据可读取）。
+   对于无拓扑变更的操作（DML、Compaction），Tablet 持续存在，Time Travel 只需保留旧版本数据文件即可按版本读取。但拓扑变更操作（DROP/TRUNCATE PARTITION、Reshard、非 Fast Schema Change 等）会替换或删除 Tablet 本身，带来不同的挑战——历史查询需要访问当前已不存在的 Tablet。这要求在保留窗口内额外保留：(1) 历史数据分片拓扑（知道历史时刻有哪些 Tablet）；(2) StarManager 中旧 Tablet 的 Shard 元数据（历史 Tablet 可调度）；(3) 对象存储上旧 Tablet 的 tablet metadata 和数据文件（历史数据可读取）。涉及到与已有机制的协同，比如 `CatalogRecycleBin`、`StarMgrMetaSyncer`、Reshard 新旧 tablet 数据文件共享等。
 
 4. **Vacuum/GC 保留策略扩展**
    现有 vacuum 需要考虑 Time Travel 保留策略 `history_retention`，避免保留窗口内数据被清理。
 
 5. **FE 元数据内存压力**
-   当前 FE 元数据全部驻留内存。若为 Time Travel 保留天级别的历史元数据版本，内存开销可能显著增长，需要考虑历史元数据的存储与淘汰策略。
+   当前 FE 元数据全部驻留内存。若为 Time Travel 保留天甚至更长时间的历史元数据版本，内存开销可能显著增长，需要考虑历史元数据的存储与淘汰策略，如果有频繁的 tablet 删除，还需要考虑 `StarManager` 保留旧 shard 元数据的存储开销。
 
 #### 4.3 可选方案
 
-基于 4.2.2 的技术挑战，本节提出两个方案，分别基于不同的目标和场景假设：
+在产品能力和技术实现复杂度之间进行折衷，基于不同的目标和假设提供两个方案：
 
 **方案一 面向 IVM 的最小实现** ：
 - 目标：以最小改动支撑 IVM 增量刷新的历史版本读取需求，快速交付
@@ -221,7 +229,7 @@ Time Travel 与 Cluster Snapshot 都能保留并恢复表的历史状态，但�
   - 支持 DML（INSERT / DELETE / UPDATE / 各类 LOAD），以及不涉及 Tablet 删除的 DDL（如 ADD PARTITION、Fast Schema Change）。
   - 涉及 Tablet 删除或替换的操作（TRUNCATE / DROP PARTITION / INSERT OVERWRITE / 非 Fast Schema Change / Reshard 等）发生后，该操作之前的版本不可读，IVM 回退到全量刷新。
   - 使用最新 schema，不需要保留历史 schema。
-  - 保留窗口短（小时级）。
+  - 保留窗口短（小时级），或者提供 MV 刷新驱动的保留策略。
 
 **方案二 通用 Time Travel**
 - 目标：支持完整的 Time Travel 场景，与其它产品能力对齐
@@ -231,16 +239,21 @@ Time Travel 与 Cluster Snapshot 都能保留并恢复表的历史状态，但�
 
 | 技术挑战 | 方案一（IVM 最小实现） | 方案二（通用 Time Travel） |
 |---|---|---|
-| **1. Table Version 语义** | 需要保证多个 PhysicalPartition 的 visible version 一致（point-in-time 视图）| 除 visible version 一致性外，还需保证表定义、数据分片拓扑等在同一 Table Version 下一致 |
+| **1. Table Version 语义** | 只需要保证多个 PhysicalPartition 的 visible version 一致（point-in-time 视图），可以用 <physical partitoin, version> 集合表示 | 除 visible version 一致性外，还需保证表定义、数据分片拓扑等在同一 Table Version 下一致 |
 | **2. Table Meta 多版本** | 仅需 PhysicalPartition visible version 的多版本；当前 Meta 其余部分直接可用 | 需要所有 Table Meta 的多版本——表定义（schema）、数据分片拓扑、visible version 等均需多版本 |
 | **3. 数据分片拓扑变更** | 涉及 Tablet 删除/替换的操作直接标记版本链断裂，IVM 降级全量刷新 | 保留历史拓扑、StarManager Shard 元数据延迟清理、对象存储上旧 Tablet 数据保留 |
 | **4. Vacuum/GC 保留策略** | 适配 `history_retention`，延长数据文件保留；不涉及已删除 Tablet 的保留 | 数据文件、已删除 Tablet 的 Shard 元数据等均需协调保留与淘汰 |
-| **5. FE 元数据内存压力** | 低——仅增加 PhysicalPartition visible version 历史版本，小时级窗口） | 高-需关注天级保留，考虑历史 Meta 的存储与淘汰策略（按需加载、冷数据下沉等） |
+| **5. FE 元数据内存压力** | 低——轻量的保留策略，假设可以全内存 | 高-需关注天级保留，考虑历史 Meta 的存储与淘汰策略（按需加载、冷数据下沉等） |
 
 ##### 4.3.1 方案一：面向 IVM 的最小实现
 
+IVM 使用 Table Version 来表示 “时间点”
 
 ##### 4.3.2 方案二：通用 Time Travel
+
+### 5. 总结
+
+TODO
 
 
 #### 附录
