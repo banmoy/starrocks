@@ -133,6 +133,10 @@ ALTER TABLE t SET ('history_retention' = '0');
 
 ##### 4.3.1 方案一：面向 IVM 的最小实现
 
+Net Changes，非严格的语义
+- 文件对比，伪变更
+- log-based，
+
 
 ##### 4.3.2 方案二：通用 Time Travel
 
