@@ -369,11 +369,6 @@ For module-specific guidelines, refer to:
 - `test/AGENTS.md` - SQL integration testing
 - `docs/AGENTS.md` - Documentation contribution
 
-## Branch Sync Rules
-- **Upstream**: `starrocks/starrocks` (remote name: `upstream`)
-- Sync with upstream using `git rebase`, never `git merge`.
-- Avoid force push unless explicitly approved by the user.
-
 ## Useful Resources
 
 - [Official Documentation](https://docs.starrocks.io/)
