@@ -1,0 +1,13 @@
+## Branch Sync Rules
+- **Upstream**: `starrocks/starrocks` (remote name: `upstream`)
+- Sync with upstream using `git rebase`, never `git merge`.
+- Avoid force push unless explicitly approved by the user.
+
+## Pull Request Rules
+- PR title **must** start with a type prefix: `[BugFix]`, `[Enhancement]`, `[Feature]`, `[Refactor]`, `[UT]`, `[Doc]`, `[Tool]`, or `Revert`.
+- PR description **must** follow the template in `.github/PULL_REQUEST_TEMPLATE.md`, including:
+  - **Why I'm doing** — motivation or context.
+  - **What I'm doing** — summary of changes, with `Fixes #issue` if applicable.
+  - **What type of PR is this** — check the matching type.
+  - **Behavior change** — indicate yes/no and specify the type if yes.
+  - **Checklist** — mark applicable items (test cases, documentation, backport).
