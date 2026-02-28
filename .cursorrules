@@ -1,0 +1,4 @@
+## Branch Sync Rules
+- **Upstream**: `starrocks/starrocks` (remote name: `upstream`)
+- Sync with upstream using `git rebase`, never `git merge`.
+- Avoid force push unless explicitly approved by the user.
