@@ -1,0 +1,53 @@
+@QUERY_ID	STEP_ID	OPERATOR_ID	PARENT_OPERATORS	OPERATOR_TYPE	OPERATOR_STATISTICS	EXECUTION_TIME_BREAKDOWN	OPERATOR_ATTRIBUTES
+01c2bfe4-3202-6513-0013-df16000dd17e	1	0		Result	"{
+  ""dml"": {
+    ""number_of_rows_inserted"": 1
+  },
+  ""input_rows"": 0
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""expressions"": [
+    ""number of rows inserted""
+  ]
+}"
+01c2bfe4-3202-6513-0013-df16000dd17e	1	1		Insert	"{
+  ""input_rows"": 1,
+  ""io"": {
+    ""bytes_written"": 2560
+  },
+  ""output_rows"": 0
+}"	"{
+  ""network_communication"": 3.333333333333333e-01,
+  ""overall_percentage"": 3.333333333333333e-01
+}"	{}
+01c2bfe4-3202-6513-0013-df16000dd17e	1	2	"[
+  1
+]"	TableScan	"{
+  ""io"": {
+    ""bytes_scanned"": 2048,
+    ""percentage_scanned_from_cache"": 1,
+    ""scan_progress"": 1
+  },
+  ""output_rows"": 1,
+  ""pruning"": {
+    ""partitions_scanned"": 1,
+    ""partitions_total"": 1
+  }
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""columns"": [
+    ""INT1"",
+    ""INT2"",
+    ""STR1"",
+    ""STR2"",
+    ""METADATA$ORIGINAL_PARTITION_NAME"",
+    ""T_INSERT.METADATA$PARTITION_NAME"",
+    ""METADATA$ORIGINAL_PARTITION_ROW_NUMBER"",
+    ""T_INSERT.METADATA$PARTITION_ROW_NUMBER"",
+    ""T_INSERT.METADATA$PRIMARY_PARTITION_NAME""
+  ],
+  ""table_alias"": ""T_INSERT"",
+  ""table_name"": ""DT_SELECT.PUBLIC.T1""
+}"

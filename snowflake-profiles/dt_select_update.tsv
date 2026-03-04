@@ -1,0 +1,222 @@
+QUERY_ID	STEP_ID	OPERATOR_ID	PARENT_OPERATORS	OPERATOR_TYPE	OPERATOR_STATISTICS	EXECUTION_TIME_BREAKDOWN	OPERATOR_ATTRIBUTES
+01c2bfe5-3202-6513-0013-df16000dd19a	1	0		Result	"{
+  ""input_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""expressions"": [
+    ""number of rows deleted"",
+    ""number of rows inserted""
+  ]
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	1		Insert	"{
+  ""dml"": {
+    ""number_of_rows_deleted"": 1,
+    ""number_of_rows_inserted"": 1
+  },
+  ""input_rows"": 2,
+  ""io"": {
+    ""bytes_scanned"": 2560,
+    ""bytes_written"": 2560,
+    ""percentage_scanned_from_cache"": 1
+  },
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 3.333333333333333e-01,
+  ""processing"": 3.333333333333333e-01
+}"	{}
+01c2bfe5-3202-6513-0013-df16000dd19a	1	2	"[
+  1
+]"	Join	"{
+  ""input_rows"": 2,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""equality_join_condition"": ""(UNION_ALL(METADATA$ROW_ID, METADATA$ROW_ID) = MV1.METADATA$MT_ROW_ID)"",
+  ""join_type"": ""LEFT OUTER""
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	3		Projection	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	{}
+01c2bfe5-3202-6513-0013-df16000dd19a	1	4	"[
+  3
+]"	Filter	"{
+  ""input_rows"": 2,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""filter_condition"": ""(IFF((IFF(1 >= (ABS(SUM(METADATA$ACTION))), SUM(METADATA$ACTION), TO_NUMBER(RAISE_USER_ERROR('XX000', TO_NUMBER('091973', 18, 0), 'Internal Stream/CHANGES query error for ROW_ID: ''%1%''.', REGEXP_REPLACE(UNION_ALL(METADATA$ROW_ID, METADATA$ROW_ID), '~.{0,20}:([A-Za-z0-9+\\\\/=]{20,})', '~[OBFVAL]:\\\\1', 1, 0, 'c')), 18, 5))) > (0), 'INSERT', 'DELETE')) = 'DELETE'""
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	5		Projection	"{
+  ""input_rows"": 2,
+  ""output_rows"": 2
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	{}
+01c2bfe5-3202-6513-0013-df16000dd19a	1	6	"[
+  5
+]"	Filter	"{
+  ""input_rows"": 2,
+  ""output_rows"": 2
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""filter_condition"": ""(SUM(METADATA$ACTION)) <> 0""
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	7	"[
+  6
+]"	Aggregate	"{
+  ""input_rows"": 2,
+  ""output_rows"": 2
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""functions"": [
+    ""SUM(METADATA$ACTION)""
+  ],
+  ""grouping_keys"": [
+    ""UNION_ALL(METADATA$ROW_ID, METADATA$ROW_ID)"",
+    ""UNION_ALL(T_INSERT.INT1, T_DELETE.INT1)"",
+    ""UNION_ALL(T_INSERT.INT2, T_DELETE.INT2)"",
+    ""UNION_ALL(T_INSERT.STR1, T_DELETE.STR1)"",
+    ""UNION_ALL(T_INSERT.STR2, T_DELETE.STR2)""
+  ]
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	8	"[
+  7
+]"	UnionAll	"{
+  ""input_rows"": 2,
+  ""output_rows"": 2
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	{}
+01c2bfe5-3202-6513-0013-df16000dd19a	1	9	"[
+  8
+]"	TableScan	"{
+  ""io"": {
+    ""bytes_scanned"": 2560,
+    ""percentage_scanned_from_cache"": 1,
+    ""scan_progress"": 1
+  },
+  ""output_rows"": 1,
+  ""pruning"": {
+    ""partitions_scanned"": 1,
+    ""partitions_total"": 1
+  }
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""columns"": [
+    ""INT1"",
+    ""INT2"",
+    ""STR1"",
+    ""STR2"",
+    ""METADATA$ORIGINAL_PARTITION_NAME"",
+    ""T_INSERT.METADATA$PARTITION_NAME"",
+    ""METADATA$ORIGINAL_PARTITION_ROW_NUMBER"",
+    ""T_INSERT.METADATA$PARTITION_ROW_NUMBER"",
+    ""T_INSERT.METADATA$PRIMARY_PARTITION_NAME""
+  ],
+  ""table_alias"": ""T_INSERT"",
+  ""table_name"": ""DT_SELECT.PUBLIC.T1""
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	10	"[
+  8
+]"	TableScan	"{
+  ""io"": {
+    ""bytes_scanned"": 2048,
+    ""percentage_scanned_from_cache"": 1,
+    ""scan_progress"": 1
+  },
+  ""output_rows"": 1,
+  ""pruning"": {
+    ""partitions_scanned"": 1,
+    ""partitions_total"": 1
+  }
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""columns"": [
+    ""INT1"",
+    ""INT2"",
+    ""STR1"",
+    ""STR2"",
+    ""METADATA$ORIGINAL_PARTITION_NAME"",
+    ""T_DELETE.METADATA$PARTITION_NAME"",
+    ""METADATA$ORIGINAL_PARTITION_ROW_NUMBER"",
+    ""T_DELETE.METADATA$PARTITION_ROW_NUMBER"",
+    ""T_DELETE.METADATA$PRIMARY_PARTITION_NAME""
+  ],
+  ""table_alias"": ""T_DELETE"",
+  ""table_name"": ""DT_SELECT.PUBLIC.T1""
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	11	"[
+  2
+]"	Filter	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""filter_condition"": ""MV1.METADATA$MT_ROW_ID IS NOT NULL""
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	12	"[
+  11
+]"	JoinFilter	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""join_id"": ""2""
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	13	"[
+  12
+]"	TableScan	"{
+  ""io"": {
+    ""bytes_scanned"": 2560,
+    ""percentage_scanned_from_cache"": 1,
+    ""scan_progress"": 1
+  },
+  ""output_rows"": 1,
+  ""pruning"": {
+    ""partitions_scanned"": 1,
+    ""partitions_total"": 1
+  }
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""columns"": [
+    ""INT1"",
+    ""INT2"",
+    ""STR1"",
+    ""STR2"",
+    ""METADATA$ORIGINAL_PARTITION_NAME"",
+    ""METADATA$ORIGINAL_PARTITION_ROW_NUMBER"",
+    ""METADATA$ROW_VERSION"",
+    ""METADATA$MT_ROW_ID""
+  ],
+  ""table_alias"": ""MV1"",
+  ""table_name"": ""DT_SELECT.PUBLIC.MV1""
+}"
+01c2bfe5-3202-6513-0013-df16000dd19a	1	14		Projection	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	{}
+01c2bfe5-3202-6513-0013-df16000dd19a	1	15	"[
+  14
+]"	Filter	"{
+  ""input_rows"": 2,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""filter_condition"": ""(IFF((IFF(1 >= (ABS(SUM(METADATA$ACTION))), SUM(METADATA$ACTION), TO_NUMBER(RAISE_USER_ERROR('XX000', TO_NUMBER('091973', 18, 0), 'Internal Stream/CHANGES query error for ROW_ID: ''%1%''.', REGEXP_REPLACE(UNION_ALL(METADATA$ROW_ID, METADATA$ROW_ID), '~.{0,20}:([A-Za-z0-9+\\\\/=]{20,})', '~[OBFVAL]:\\\\1', 1, 0, 'c')), 18, 5))) > (0), 'INSERT', 'DELETE')) = 'INSERT'""
+}"

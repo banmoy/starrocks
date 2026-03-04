@@ -1,0 +1,262 @@
+QUERY_ID	STEP_ID	OPERATOR_ID	PARENT_OPERATORS	OPERATOR_TYPE	OPERATOR_STATISTICS	EXECUTION_TIME_BREAKDOWN	OPERATOR_ATTRIBUTES
+01c2bfc8-3202-650a-0013-df16000dbad6	1	0		Result	"{
+  ""input_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""expressions"": [
+    ""number of rows deleted"",
+    ""number of rows inserted""
+  ]
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	1		Insert	"{
+  ""dml"": {
+    ""number_of_rows_inserted"": 1
+  },
+  ""input_rows"": 1,
+  ""io"": {
+    ""bytes_written"": 2048
+  },
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 5.000000000000000e-01,
+  ""processing"": 5.000000000000000e-01
+}"	{}
+01c2bfc8-3202-650a-0013-df16000dbad6	1	2	"[
+  1
+]"	Join	"{
+  ""input_rows"": 0,
+  ""output_rows"": 0
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""equality_join_condition"": ""(METADATA$ROW_ID = MV1_AGG.METADATA$MT_ROW_ID)"",
+  ""join_type"": ""LEFT OUTER""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	3		Projection	"{
+  ""input_rows"": 0,
+  ""output_rows"": 0
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	{}
+01c2bfc8-3202-650a-0013-df16000dbad6	1	4	"[
+  3
+]"	Filter	"{
+  ""input_rows"": 1,
+  ""output_rows"": 0
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""filter_condition"": ""(IFF((IFF(1 >= (ABS(SUM(METADATA$ACTION))), SUM(METADATA$ACTION), TO_NUMBER(RAISE_USER_ERROR('XX000', TO_NUMBER('091973', 18, 0), 'Internal Stream/CHANGES query error for ROW_ID: ''%1%''.', REGEXP_REPLACE(METADATA$ROW_ID, '~.{0,20}:([A-Za-z0-9+\\\\/=]{20,})', '~[OBFVAL]:\\\\1', 1, 0, 'c')), 18, 5))) > (0), 'INSERT', 'DELETE')) = 'DELETE'""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	5		Projection	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	{}
+01c2bfc8-3202-650a-0013-df16000dbad6	1	6	"[
+  5
+]"	Filter	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""filter_condition"": ""(SUM(METADATA$ACTION)) <> 0""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	7	"[
+  6
+]"	Aggregate	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""functions"": [
+    ""SUM(METADATA$ACTION)""
+  ],
+  ""grouping_keys"": [
+    ""METADATA$ROW_ID"",
+    ""T_TO.STR1"",
+    ""SUM(T_TO.INT1)""
+  ]
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	8	"[
+  7
+]"	Aggregate	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""functions"": [
+    ""SUM(SUM(SUM(T_TO.INT1)))""
+  ],
+  ""grouping_keys"": [
+    ""T_TO.STR1"",
+    ""'INSERT'""
+  ]
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	9	"[
+  8
+]"	Aggregate	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""functions"": [
+    ""SUM(SUM(T_TO.INT1))""
+  ],
+  ""grouping_keys"": [
+    ""T_TO.STR1"",
+    ""'INSERT'""
+  ]
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	10	"[
+  9
+]"	Join	"{
+  ""input_rows"": 2,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""equality_join_condition"": ""(T_TO.STR1 = T_INSERT.STR1)"",
+  ""join_type"": ""SEMI""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	11	"[
+  10
+]"	Aggregate	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""functions"": [
+    ""SUM(T_TO.INT1)""
+  ],
+  ""grouping_keys"": [
+    ""T_TO.STR1""
+  ]
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	12	"[
+  11
+]"	TableScan	"{
+  ""io"": {
+    ""bytes_scanned"": 2048,
+    ""percentage_scanned_from_cache"": 1,
+    ""scan_progress"": 1
+  },
+  ""output_rows"": 1,
+  ""pruning"": {
+    ""partitions_scanned"": 1,
+    ""partitions_total"": 1
+  }
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""columns"": [
+    ""INT1"",
+    ""STR1"",
+    ""METADATA$ORIGINAL_PARTITION_NAME"",
+    ""T_TO.METADATA$PARTITION_NAME"",
+    ""METADATA$ORIGINAL_PARTITION_ROW_NUMBER"",
+    ""T_TO.METADATA$PARTITION_ROW_NUMBER"",
+    ""T_TO.METADATA$PRIMARY_PARTITION_NAME""
+  ],
+  ""table_alias"": ""T_TO"",
+  ""table_name"": ""DT.PUBLIC.T1""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	13	"[
+  10
+]"	JoinFilter	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""join_id"": ""10""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	14	"[
+  13
+]"	TableScan	"{
+  ""io"": {
+    ""bytes_scanned"": 2048,
+    ""percentage_scanned_from_cache"": 1,
+    ""scan_progress"": 1
+  },
+  ""output_rows"": 1,
+  ""pruning"": {
+    ""partitions_scanned"": 1,
+    ""partitions_total"": 1
+  }
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""columns"": [
+    ""INT1"",
+    ""STR1"",
+    ""METADATA$ORIGINAL_PARTITION_NAME"",
+    ""T_INSERT.METADATA$PARTITION_NAME"",
+    ""METADATA$ORIGINAL_PARTITION_ROW_NUMBER"",
+    ""T_INSERT.METADATA$PARTITION_ROW_NUMBER"",
+    ""T_INSERT.METADATA$PRIMARY_PARTITION_NAME""
+  ],
+  ""table_alias"": ""T_INSERT"",
+  ""table_name"": ""DT.PUBLIC.T1""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	15	"[
+  2
+]"	Filter	"{
+  ""input_rows"": 0,
+  ""output_rows"": 0
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""filter_condition"": ""MV1_AGG.METADATA$MT_ROW_ID IS NOT NULL""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	16	"[
+  15
+]"	JoinFilter	"{
+  ""input_rows"": 0,
+  ""output_rows"": 0
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""join_id"": ""2""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	17	"[
+  16
+]"	TableScan	"{
+  ""output_rows"": 0
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""columns"": [
+    ""STR1"",
+    ""SUM_INT1"",
+    ""METADATA$ORIGINAL_PARTITION_NAME"",
+    ""METADATA$ORIGINAL_PARTITION_ROW_NUMBER"",
+    ""METADATA$ROW_VERSION"",
+    ""METADATA$MT_ROW_ID""
+  ],
+  ""table_alias"": ""MV1_AGG"",
+  ""table_name"": ""DT.PUBLIC.MV1_AGG""
+}"
+01c2bfc8-3202-650a-0013-df16000dbad6	1	18		Projection	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	{}
+01c2bfc8-3202-650a-0013-df16000dbad6	1	19	"[
+  18
+]"	Filter	"{
+  ""input_rows"": 1,
+  ""output_rows"": 1
+}"	"{
+  ""overall_percentage"": 0.000000000000000e+00
+}"	"{
+  ""filter_condition"": ""(IFF((IFF(1 >= (ABS(SUM(METADATA$ACTION))), SUM(METADATA$ACTION), TO_NUMBER(RAISE_USER_ERROR('XX000', TO_NUMBER('091973', 18, 0), 'Internal Stream/CHANGES query error for ROW_ID: ''%1%''.', REGEXP_REPLACE(METADATA$ROW_ID, '~.{0,20}:([A-Za-z0-9+\\\\/=]{20,})', '~[OBFVAL]:\\\\1', 1, 0, 'c')), 18, 5))) > (0), 'INSERT', 'DELETE')) = 'INSERT'""
+}"
