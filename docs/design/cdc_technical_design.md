@@ -8,17 +8,18 @@
 ## 目录
 
 1. [问题定义与设计目标](#1-问题定义与设计目标)
-2. [基本概念与语义约定](#2-基本概念与语义约定)
-3. [消费接口](#3-消费接口)
-4. [端到端流程总览](#4-端到端流程总览)
-5. [Version Range 计算（FE 侧）](#5-version-range-计算fe-侧)
-6. [Changes 生成机制（CN 侧）](#6-changes-生成机制cn-侧)
-7. [Compaction 交互](#7-compaction-交互)
-8. [Scan 架构与并行模型](#8-scan-架构与并行模型)
-9. [Net Changes](#9-net-changes)
-10. [边界场景与 Fallback](#10-边界场景与-fallback)
-11. [小文件优化](#11-小文件优化)
-12. [总结与 Roadmap](#12-总结与-roadmap)
+2. [应用场景与需求推导](#2-应用场景与需求推导)
+3. [基本概念与语义约定](#3-基本概念与语义约定)
+4. [消费接口](#4-消费接口)
+5. [端到端流程总览](#5-端到端流程总览)
+6. [Version Range 计算（FE 侧）](#6-version-range-计算fe-侧)
+7. [Changes 生成机制（CN 侧）](#7-changes-生成机制cn-侧)
+8. [Compaction 交互](#8-compaction-交互)
+9. [Scan 架构与并行模型](#9-scan-架构与并行模型)
+10. [Net Changes](#10-net-changes)
+11. [边界场景与 Fallback](#11-边界场景与-fallback)
+12. [小文件优化](#12-小文件优化)
+13. [总结与 Roadmap](#13-总结与-roadmap)
 
 ---
 
@@ -47,11 +48,90 @@
 
 ---
 
-## 2. 基本概念与语义约定
+## 2. 应用场景与需求推导
 
-本节定义 CDC 的基础语义，是后续所有技术方案讨论的前提。
+CDC 的语义和技术设计由应用场景驱动。不同场景对变更类型、消费模式、顺序性等有不同要求，本节逐一分析后汇总为需求矩阵，作为后续设计决策的依据。
 
-### 2.1 变更类型（Change Type）
+### 2.1 增量物化视图（IVM）
+
+**场景**：MV 定期刷新时，只处理上次刷新以来基表的增量变更，避免全量重算。
+
+**CDC 需求**：
+- 需要知道两个版本之间的**集合差**（delta）：哪些行新增了、删除了、变了
+- 不需要知道中间每一步的变化过程，只关心最终净效果 → **需要 Net Changes**
+- UPDATE 不需要保留完整语义，拆成 DELETE + INSERT 对 IVM 算法更自然、实现更轻量 → **UPDATE = DELETE + INSERT**
+- 批处理模式，所有变更处理完才原子可见，不需要变更之间严格有序 → **无序可接受**
+- 异步消费，对延迟容忍度较高，但对写入路径的影响要极低 → **写入性能优先**
+
+### 2.2 流计算（Flink / Spark Structured Streaming）
+
+**场景**：外部流计算引擎消费 StarRocks 的行级变更，驱动下游实时计算和写入。
+
+**CDC 需求**：
+- 以 record 为粒度处理，中间结果对下游可见
+- 需要区分 UPDATE 和 DELETE，因为下游 sink 语义不同（比如 upsert sink 可以只处理 UPDATE_AFTER，跳过 BEFORE）→ **需要 UPDATE_BEFORE + UPDATE_AFTER**
+- 需要严格按照变更发生顺序消费，否则下游可能看到非预期的中间状态 → **需要有序**
+- 需要持续消费，有新变更就推送或拉取 → **流式 / 低延迟消费**
+- 不需要 Net Changes（流计算本身就是逐条处理）
+
+### 2.3 合规审计
+
+**场景**：记录数据的所有历史变更，满足合规要求，支持回溯查询"某行数据何时被谁改成了什么"。
+
+**CDC 需求**：
+- 需要**完整的变更历史**，每一次变更都要保留，不能合并 → **不能 Net Changes**
+- 需要 UPDATE_BEFORE + UPDATE_AFTER，明确记录改前改后的值
+- 需要变更的时间戳和版本信息
+- 对实时性要求不高，可以批量查询
+
+### 2.4 数据同步
+
+**场景**：将 StarRocks 的数据变更同步到下游系统（另一个数据库、数据湖、消息队列等）。
+
+**CDC 需求**：
+- 需要行级变更，下游按变更类型做对应操作（INSERT → insert，DELETE → delete，UPDATE → upsert）
+- 根据下游系统能力，可能需要 UPDATE_BEFORE + UPDATE_AFTER（完整语义），也可能只需要 UPDATE_AFTER（upsert 语义的目标系统）
+- 需要保序以确保最终一致性
+- Net Changes 可选——如果下游是幂等写入，合并后效率更高
+
+### 2.5 SCD Type 2 表
+
+**场景**：缓慢变化维度表，需要保留维度数据的历史版本，每次变更生成新行而非覆盖旧行。
+
+**CDC 需求**：
+- 需要 UPDATE_BEFORE + UPDATE_AFTER：旧行标记失效（设 end_date），新行插入（设 start_date）
+- 不能 Net Changes，每次变更都要独立处理
+- 对顺序有一定要求（变更的先后影响 start_date / end_date 的正确性）
+
+### 2.6 需求矩阵
+
+| 需求维度 | IVM | 流计算 | 审计 | 数据同步 | SCD Type 2 |
+|---------|-----|--------|------|---------|------------|
+| **Update 语义** | DELETE+INSERT | BEFORE+AFTER | BEFORE+AFTER | 视下游而定 | BEFORE+AFTER |
+| **Net Changes** | 需要 | 不需要 | 不能 | 可选 | 不能 |
+| **顺序性** | 无序 | 严格有序 | 不要求 | 有序 | 有序 |
+| **消费模式** | 批量 | 流式 | 批量查询 | 流式/批量 | 批量 |
+| **写入影响容忍度** | 极低 | 低 | 低 | 低 | 低 |
+| **Row Tracking** | 需要(Net Changes) | 可选 | 需要 | 可选 | 需要 |
+
+### 2.7 设计推导
+
+从需求矩阵可以得出以下设计方向：
+
+1. **Update 语义必须同时支持两种模式**：IVM 使用 DELETE+INSERT（成本低），其他场景需要 BEFORE+AFTER（语义完整）。通过参数切换。
+2. **Net Changes 作为可选能力**：IVM 需要，其他场景可能不需要甚至不能使用。通过参数控制。
+3. **存储层不保序，计算层按需排序**：IVM 不需要有序（占比最大的短期场景），流计算等需要有序的场景在计算层解决。存储层专注并行 IO。
+4. **写入路径零/极低开销**：所有场景都不希望 CDC 影响导入，IVM 作为最大场景更是如此。这直接排除了"导入时生成 changelog"的方案。
+5. **Row Tracking 是基础依赖**：Net Changes 和审计都依赖 ROW_ID / ROW_VERSION，需要存储层支持。
+6. **短期聚焦 IVM**：IVM 的需求恰好是最"宽松"的（无序、DELETE+INSERT、Net Changes、批量），可以作为最小实现，后续逐步扩展到更严格的场景。
+
+---
+
+## 3. 基本概念与语义约定
+
+基于上节场景分析的结论，本节定义 CDC 的基础语义，是后续所有技术方案讨论的前提。
+
+### 3.1 变更类型（Change Type）
 
 | 类型 | 编码 | 含义 |
 |------|------|------|
@@ -60,7 +140,7 @@
 | UPDATE_BEFORE | 2 | 更新前的旧值 |
 | UPDATE_AFTER | 3 | 更新后的新值 |
 
-### 2.2 Update 语义：两种表示模式
+### 3.2 Update 语义：两种表示模式
 
 UPDATE 产生的变更有两种表示方式，适用于不同场景，实现成本也不同：
 
@@ -76,11 +156,11 @@ UPDATE 产生的变更有两种表示方式，适用于不同场景，实现成�
 - 适用场景：IVM 只关心集合差（delta），不需要 UPDATE 语义
 - 实现成本低：主键表只需要根据 delete vector diff 生成 DELETE，新 segment 生成 INSERT，不需要 old/new segment 之间做 PK 映射
 
-**设计决策**：两种模式都支持，通过参数配置。IVM 使用模式 B（DELETE + INSERT），降低实现和计算成本。
+**设计决策**：两种模式都支持，通过参数配置。IVM 使用模式 B（DELETE + INSERT），降低实现和计算成本（场景推导见 §2.7）。
 
 > 关于两种模式对下游影响的具体分析，参见 [change_data_capture_proposal_shared_data.md Appendix A](change_data_capture_proposal_shared_data.md#appendix-a-flink-update-change-type)。
 
-### 2.3 顺序性
+### 3.3 顺序性
 
 **存储层输出无序**，具体表现为：
 
@@ -95,11 +175,11 @@ UPDATE 产生的变更有两种表示方式，适用于不同场景，实现成�
   - **IVM**：批处理，version 之间和 BEFORE/AFTER 之间都不需要有序。Net Changes 会对同一 row 的 changes 排序合并，但这是相对宽松的局部排序。
   - **流计算**（Flink 等）：以 record 为粒度处理，中间结果对下游可见，需要严格按 `(row_version, change_type)` 排序，由计算层保证。
 
-### 2.4 消费粒度
+### 3.4 消费粒度
 
 **批量模式，以 version 为粒度**：可以指定读取某个版本或连续几个版本的变更，但不能只读取某个版本的部分变更。这与 IVM 的批处理语义一致。
 
-### 2.5 CHANGES 组成
+### 3.5 CHANGES 组成
 
 ```
 CHANGES = 数据列 + 元数据列
@@ -114,7 +194,7 @@ CHANGES = 数据列 + 元数据列
 | ROW_ID | BIGINT | 逻辑行标识，同一行的所有变更具有相同的 ROW_ID |
 | ROW_VERSION | BIGINT | 产生变更的版本，配对的 UPDATE_BEFORE/UPDATE_AFTER 共享相同 ROW_VERSION |
 
-### 2.6 Row Tracking（前置依赖）
+### 3.6 Row Tracking（前置依赖）
 
 CDC 依赖存储层为每行维护的两个属性：
 
@@ -123,7 +203,7 @@ CDC 依赖存储层为每行维护的两个属性：
 
 Row Tracking 的具体生成方案、唯一性保证、存储格式等在单独文档中设计，本文假设存储层已具备此能力。
 
-### 2.7 支持的表类型
+### 3.7 支持的表类型
 
 | 表类型 | 支持的 DML | 变更类型 | 说明 |
 |--------|-----------|---------|------|
@@ -134,11 +214,11 @@ Row Tracking 的具体生成方案、唯一性保证、存储格式等在单独�
 
 ---
 
-## 3. 消费接口
+## 4. 消费接口
 
 在深入技术实现前，先介绍 CDC 的使用方式，建立"CDC 长什么样"的直观认知。
 
-### 3.1 SQL 查询接口
+### 4.1 SQL 查询接口
 
 面向 Ad-hoc 查询，指定 timestamp 或 version 范围：
 
@@ -151,7 +231,7 @@ SELECT * FROM tbl CHANGES FROM TIMESTAMP t1 TO t2;
 SELECT * FROM table_changes('tbl', v1, v2);
 ```
 
-### 3.2 STREAM 对象
+### 4.2 STREAM 对象
 
 自动管理消费 offset，类似 Snowflake Stream：
 
@@ -165,12 +245,12 @@ SELECT * FROM my_stream;
 INSERT INTO target_tbl SELECT * FROM my_stream;
 ```
 
-### 3.3 SDK / RPC（对接 Flink / Spark）
+### 4.3 SDK / RPC（对接 Flink / Spark）
 
 - **PULL 模式**：客户端通过 SDK 发起查询，指定消费范围，CN 执行特殊 scan plan，通过 RPC 返回数据。类似当前 connector scan。
 - **PUSH 模式**：客户端订阅，服务端有新 CHANGES 自动推送。实时性更高，暂不考虑。
 
-### 3.4 IVM 内部 Java API
+### 4.4 IVM 内部 Java API
 
 IVM 不经过 SQL 层，在 Analyze 阶段通过 Java API 直接获取版本信息并注入 plan：
 
@@ -189,7 +269,7 @@ DeltaState delta = TableStateUtils.computeDeltaState(oldState, newState, catalog
 
 ---
 
-## 4. 端到端流程总览
+## 5. 端到端流程总览
 
 CDC 的完整链路如下，后续章节逐一展开各环节。
 
@@ -199,30 +279,30 @@ CDC 的完整链路如下，后续章节逐一展开各环节。
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ① FE: 获取 old/new TableState                                [§5]          │
+│ ① FE: 获取 old/new TableState                                [§6]          │
 │    从 TableVersionKeeper 获取上次 refresh 的 oldState 和当前 newState        │
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ② FE: Diff TableState，计算 Version Range                    [§5]          │
+│ ② FE: Diff TableState，计算 Version Range                    [§6]          │
 │    对比 old/new State，按 partition → physical partition 逐层 diff           │
 │    输出每个 tablet 的 version range (oldVisibleVer, newVisibleVer]           │
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ③ FE: 构造 OlapTableChangesScanNode                          [§8]          │
+│ ③ FE: 构造 OlapTableChangesScanNode                          [§9]          │
 │    将 tablet id + version range 封装到 scan range，下发给 CN                │
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ④ CN: 每个 Tablet 生成 Changes                                [§6]          │
+│ ④ CN: 每个 Tablet 生成 Changes                                [§7]          │
 │    - 明细表/聚合表：读 delta rowset，标记 INSERT                            │
 │    - 主键表：根据 bitmap vector 定位 INSERT/DELETE/UPDATE，                  │
 │      读取新值（顺序读）和旧值（攒批读）                                      │
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ⑤ CN: Net Changes（可选）                                     [§9]          │
+│ ⑤ CN: Net Changes（可选）                                     [§10]         │
 │    计算层按 row_id 合并多版本变更，输出最小等价 changes                       │
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   ▼
@@ -233,11 +313,11 @@ CDC 的完整链路如下，后续章节逐一展开各环节。
 
 ---
 
-## 5. Version Range 计算（FE 侧）
+## 6. Version Range 计算（FE 侧）
 
 FE 负责确定"哪些 tablet 有变更、每个 tablet 需要读哪个版本范围的 changes"，这是连接 PITQ（版本管理）和 CDC（变更扫描）的桥梁。
 
-### 5.1 输入与输出
+### 6.1 输入与输出
 
 - **输入**：
   - `oldState`：上次 MV refresh 时快照的 TableState（从 `TableVersionKeeper` 获取）
@@ -245,7 +325,7 @@ FE 负责确定"哪些 tablet 有变更、每个 tablet 需要读哪个版本范
   - `catalogTable`：当前 catalog 中的 `OlapTable`（用于获取 partition/tablet 的物理拓扑）
 - **输出**：每个需要 scan 的 tablet 的 version range `(oldVisibleVersion, newVisibleVersion]`
 
-### 5.2 Diff 逻辑
+### 6.2 Diff 逻辑
 
 按 logical partition → physical partition 逐层比较 oldState 和 newState：
 
@@ -264,7 +344,7 @@ FE 负责确定"哪些 tablet 有变更、每个 tablet 需要读哪个版本范
     → IVM 最小化实现中，触发 fallback 全量刷新
 ```
 
-### 5.3 示例
+### 6.3 示例
 
 一张 3 个 partition 的表，经历 2 次导入：
 
@@ -291,7 +371,7 @@ Diff 结果：
 | T3, T4 | (3, 4] | P2 有变更，覆盖一次导入 |
 | T5, T6 | 跳过 | P3 无变化 |
 
-### 5.4 Tablet Reshard 场景
+### 6.4 Tablet Reshard 场景
 
 如果 physical partition 发生了 tablet reshard（数据在新旧 tablet 之间重新分布），同一个 physical partition 会存在多组 materialized index，每组覆盖部分 version range。
 
@@ -303,7 +383,7 @@ PP1 在 version 6 发生 reshard:
 
 FE 需要将这两组 index 的 version range 都下发，CN 分别读取后在计算层合并。这也是 `MaterializedIndexDeltaState` 数据结构中 `List<MaterializedIndexDeltaState>` 的设计意图——支持一个 physical partition 内多段 version range 的覆盖。
 
-### 5.5 下发结构
+### 6.5 下发结构
 
 FE 将计算好的信息封装到 `OlapTableChangesScanNode` 的 scan range 中：
 
@@ -319,11 +399,11 @@ ScanRange {
 
 ---
 
-## 6. Changes 生成机制（CN 侧）
+## 7. Changes 生成机制（CN 侧）
 
 CN 拿到 tablet + version range `(V_old, V_new]` 后，需要输出这个范围内的所有行级 changes。这是整个 CDC 最核心的技术环节。
 
-### 6.1 问题分解
+### 7.1 问题分解
 
 **明细表 / 聚合表**：只有 append 操作，`(V_old, V_new]` 范围内的 delta rowset 就是全部 INSERT 变更，直接顺序读取即可，实现简单。
 
@@ -332,7 +412,7 @@ CN 拿到 tablet + version range `(V_old, V_new]` 后，需要输出这个范围
 1. **定位（Locate）**：哪些行是 INSERT、哪些是 DELETE、哪些是 UPDATE，以及 UPDATE 的 BEFORE/AFTER 配对
 2. **取值（Fetch）**：INSERT 和 UPDATE_AFTER 的值在新 segment 中可以顺序读取；但 DELETE 和 UPDATE_BEFORE 的旧值需要从历史 segment 中读取，列式存储下随机读取代价高
 
-### 6.2 方案对比
+### 7.2 方案对比
 
 以下讨论主键表的 changes 生成方案。
 
@@ -373,7 +453,7 @@ CN 拿到 tablet + version range `(V_old, V_new]` 后，需要输出这个范围
 2. **方案 B 无法区分 DELETE 和 UPDATE**：这是方案 B 的根本缺陷
 3. **攒批优化空间**：方案 C 的 bitmap vector 支持跨版本合并（详见 6.4），查询性能可接受
 
-### 6.3 主键表当前存储结构回顾
+### 7.3 主键表当前存储结构回顾
 
 理解方案 C 需要先回顾主键表的存储机制：
 
@@ -399,7 +479,7 @@ Tablet
 
 **关键观察**：在步骤 2-4 中，PK Index 已经知道了每行的 change type。方案 C 就是在这个时机把信息记录下来。
 
-### 6.4 Bitmap Vector 方案详解
+### 7.4 Bitmap Vector 方案详解
 
 导入时，除了更新 delete vector，额外记录以下 bitmap vector：
 
@@ -462,13 +542,13 @@ merged_bitmap = {A} ∪ {C} ∪ {D} = {A, C, D}
 → 再根据各版本的原始 bitmap 拆分回各版本的 changes
 ```
 
-这将多次"不确定位置的随机读"转化为"已知位置的单次批量读"，显著减少 IO 次数。此优化在 Scan 架构（§8）中进一步展开。
+这将多次"不确定位置的随机读"转化为"已知位置的单次批量读"，显著减少 IO 次数。此优化在 Scan 架构（§9）中进一步展开。
 
-### 6.5 明细表
+### 7.5 明细表
 
 只有 append 操作，直接读取 `(V_old, V_new]` 范围内的 delta rowset，所有行标记为 INSERT。
 
-### 6.6 聚合表
+### 7.6 聚合表
 
 同样只有 append，读取 delta rowset。注意 rowset 中存储的是 aggregate 后的结果，因此 CHANGES 也是聚合后的语义。
 
@@ -487,18 +567,18 @@ CHANGES 输出（INSERT 语义）:
 
 ---
 
-## 7. Compaction 交互
+## 8. Compaction 交互
 
 Compaction 是影响 CDC 正确性的关键因素，需要确保 CDC 窗口内的变更信息在 compaction 后仍然可用。
 
-### 7.1 Compaction 对 Changes 的影响
+### 8.1 Compaction 对 Changes 的影响
 
 主键表 compaction 会将多个 segment 合并为一个新 segment，过程中：
 - 旧 segment 被合并后逻辑删除
 - 新 segment 只包含最新版本的活跃行
 - 旧 segment 上的 delete vector 和 bitmap vector 如果跨越了 CDC 窗口，可能影响变更信息
 
-### 7.2 方案 C 的兼容性
+### 8.2 方案 C 的兼容性
 
 Bitmap vector 方案天然兼容 compaction，原因在于 **bitmap vector 记录的是每个 version 对 segment 的增量操作，而不是 segment 之间的 diff**：
 
@@ -506,7 +586,7 @@ Bitmap vector 方案天然兼容 compaction，原因在于 **bitmap vector 记�
 - 旧 segment 上已记录的 bitmap vector 在 compaction 完成前仍然有效
 - Compaction 完成后，如果 CDC 窗口的 `V_old` 在 compaction 之前，旧 segment 的 bitmap vector 仍可用于生成该版本范围的 changes
 
-### 7.3 保留策略
+### 8.3 保留策略
 
 关键约束：**CDC 窗口 `(V_old, V_new]` 引用的 segment 和 bitmap vector 不能被 vacuum 清理掉**。
 
@@ -514,9 +594,9 @@ Bitmap vector 方案天然兼容 compaction，原因在于 **bitmap vector 记�
 
 ---
 
-## 8. Scan 架构与并行模型
+## 9. Scan 架构与并行模型
 
-### 8.1 Scan Plan 结构
+### 9.1 Scan Plan 结构
 
 ```
 OlapTableChangesScanNode
@@ -527,7 +607,7 @@ OlapTableChangesScanNode
 
 BE/CN 侧对应 `OlapChangesDataSource`（通过 `ConnectorScanOperator`，`ConnectorType = OLAP_CHANGES`），每个 tablet 的 scan range 由一个或多个 `OlapChangesDataSource` 实例处理。
 
-### 8.2 单 Tablet Scan 流程（主键表）
+### 9.2 单 Tablet Scan 流程（主键表）
 
 对于一个 tablet，version range `(V_old, V_new]`，scan 分为两个阶段：
 
@@ -557,7 +637,7 @@ BE/CN 侧对应 `OlapChangesDataSource`（通过 `ConnectorScanOperator`，`Conn
         根据 update_after_bitmap 区分 UPDATE_AFTER 和 INSERT
 ```
 
-### 8.3 并行模型
+### 9.3 并行模型
 
 并行发生在多个维度：
 
@@ -570,7 +650,7 @@ BE/CN 侧对应 `OlapChangesDataSource`（通过 `ConnectorScanOperator`，`Conn
 
 **旧值批量读取是性能关键**：通过 bitmap 合并机制（§6.4），将多次随机读合并为单次批量读，每个旧 segment 只读一次。这是方案 C 查询性能可接受的重要保证。
 
-### 8.4 Project / Filter 下推
+### 9.4 Project / Filter 下推
 
 - **Project（列裁剪）**：数据列支持只读取需要的列，减少 IO。元数据列（CHANGE_TYPE, ROW_ID, ROW_VERSION）根据上层是否需要来决定是否输出。
 - **Filter**：
@@ -580,9 +660,9 @@ BE/CN 侧对应 `OlapChangesDataSource`（通过 `ConnectorScanOperator`，`Conn
 
 ---
 
-## 9. Net Changes
+## 10. Net Changes
 
-### 9.1 动机
+### 10.1 动机
 
 当 CDC 窗口覆盖多个版本时，同一行可能有多条变更（insert → update → update → delete）。直接交给下游处理所有原始 changes，存在两个问题：
 
@@ -591,7 +671,7 @@ BE/CN 侧对应 `OlapChangesDataSource`（通过 `ConnectorScanOperator`，`Conn
 
 Net Changes 将同一 `row_id` 下的多条变更合并为最小等价变更。
 
-### 9.2 合并规则
+### 10.2 合并规则
 
 对每个 `row_id`，根据 `row_version` 确定 `first_type`（最小版本的变更类型）和 `last_type`（最大版本的变更类型），然后按规则合并：
 
@@ -605,7 +685,7 @@ Net Changes 将同一 `row_id` 下的多条变更合并为最小等价变更。
 
 > 规则 4/5 中输出的 `row_version` 统一使用 `max_ver`，确保配对的 UPDATE_BEFORE/UPDATE_AFTER 版本一致。
 
-### 9.3 为什么在计算层做
+### 10.3 为什么在计算层做
 
 Net Changes 在计算层而非存储层完成，原因：
 
@@ -613,7 +693,7 @@ Net Changes 在计算层而非存储层完成，原因：
 2. **与并行 scan 解耦**：存储层专注并行 IO 效率，Net Changes 是纯计算逻辑
 3. **灵活性**：不同场景对 Net Changes 的需求不同（IVM 需要，审计不需要），在计算层可通过参数控制
 
-### 9.4 计算实现
+### 10.4 计算实现
 
 利用窗口函数，`PARTITION BY row_id` 与分桶键一致时可 local shuffle 避免全局 shuffle：
 
@@ -658,11 +738,11 @@ WHERE cnt = 1
 
 ---
 
-## 10. 边界场景与 Fallback
+## 11. 边界场景与 Fallback
 
 IVM 最小化实现中，部分场景暂不支持增量 CDC，触发 **fallback 到全量刷新**。
 
-### 10.1 Fallback 条件
+### 11.1 Fallback 条件
 
 | 场景 | 原因 | 处理 |
 |------|------|------|
@@ -672,7 +752,7 @@ IVM 最小化实现中，部分场景暂不支持增量 CDC，触发 **fallback 
 | **Schema Change（非 fast）** | 数据被重写到新 tablet，历史版本不可访问 | Fallback 全量刷新 |
 | **CDC 窗口内的版本已被 vacuum** | `TableVersionKeeper` 的版本已过期释放 | Fallback 全量刷新 |
 
-### 10.2 Fallback 机制
+### 11.2 Fallback 机制
 
 IVM 刷新流程中，以下检查点会触发 fallback：
 
@@ -684,13 +764,13 @@ Fallback 不影响正确性——MV 回退到全量刷新，只是消耗更多�
 
 ---
 
-## 11. 小文件优化
+## 12. 小文件优化
 
-### 11.1 问题
+### 12.1 问题
 
 高频实时导入 + MV refresh 间隔较大（如小时级）的场景下，CDC 窗口内会积累大量小文件（每次导入一个 delta rowset）。逐文件 scan 的 IO 开销高。
 
-### 11.2 优化思路
+### 12.2 优化思路
 
 **前提**：只需 Net Changes，且 Update 使用 DELETE+INSERT 模式（IVM 场景适用）。
 
@@ -703,22 +783,22 @@ new version (V_new): compacted segments [S0_new, S1_new]
 比较 new - old，差异即为 Net Changes
 ```
 
-### 11.3 Carry-over Row 去重
+### 12.3 Carry-over Row 去重
 
 直接比较 old/new 版本文件时，存在 **carry-over row** 问题：某些行在 old 和 new 中都存在且未变化，但由于 compaction 重新组织了文件，可能出现在 diff 结果中。
 
 解决方式：在计算层通过 `(row_id, row_version)` 去重——如果同一 `row_id` 在 old 和 new 中的 `row_version` 相同，说明该行未变化，过滤掉。
 
-### 11.4 限制
+### 12.4 限制
 
 - **聚合表不适用**：compaction 后会 aggregate，无法还原出增量变更
 - 需要 old 和 new 版本都经过充分 compaction 才能发挥效果
 
 ---
 
-## 12. 总结与 Roadmap
+## 13. 总结与 Roadmap
 
-### 12.1 短期（P0）— IVM 最小可行
+### 13.1 短期（P0）— IVM 最小可行
 
 | 能力 | 范围 |
 |------|------|
@@ -730,7 +810,7 @@ new version (V_new): compacted segments [S0_new, S1_new]
 | Version Range | 只能查询被 MV 引用的范围（依赖 TableVersionKeeper subscribe） |
 | 边界场景 | DROP/TRUNCATE PARTITION、Tablet Reshard、Schema Change → Fallback 全量刷新 |
 
-### 12.2 短期（P1）
+### 13.2 短期（P1）
 
 | 能力 | 范围 |
 |------|------|
@@ -739,7 +819,7 @@ new version (V_new): compacted segments [S0_new, S1_new]
 | 小文件优化 | 基于 compaction 后的文件比较 |
 | UPDATE_BEFORE + UPDATE_AFTER | 支持完整 UPDATE 语义（面向流计算场景） |
 
-### 12.3 长期
+### 13.3 长期
 
 | 能力 | 范围 |
 |------|------|
