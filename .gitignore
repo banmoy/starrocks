@@ -103,7 +103,9 @@ be/tags
 build/
 cmake-build-debug/
 CMakeLists.txt
-.claude
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 .clangd
 .cursor/*
 !.cursor/commands/
