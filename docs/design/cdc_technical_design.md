@@ -344,6 +344,7 @@ CN 拿到 tablet + version range `(V_old, V_new]` 后，需要输出这个范围
 - 缺点：
   - **影响导入性能**：每次导入额外随机读旧值 + 写 changelog，对实时导入延迟影响大
   - **存储开销高**：changelog 需要存储所有列的完整旧值，即使查询只需要部分列
+  - **小文件成本**：高频实时导入场景下，每次导入都生成 changelog 文件，产生大量小文件，在存算分离架构下直接增加 S3 请求次数和存储成本，还需要额外的 changelog compaction 机制来治理
   - **维护复杂**：changelog 文件的生命周期管理、与 compaction 的交互等引入额外复杂度
   - 对于 Net Changes 场景，中间版本的 changelog 最终会被合并掉，提前生成是浪费
 
