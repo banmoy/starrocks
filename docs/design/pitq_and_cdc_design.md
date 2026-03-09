@@ -86,7 +86,7 @@ Time Travel 是 PITQ 最完整的产品形态——以下 Time Travel 需求来�
 | **目标** | 查询数据，主要关注数据内容 | 查询 + 恢复，关注元数据 + 数据（schema、分区定义等） |
 | **覆盖的操作** | DML（INSERT / DELETE / UPDATE / 各类 LOAD）。分区级 DDL（DROP / TRUNCATE PARTITION）和 INSERT OVERWRITE 不一定适合增量刷新，可低优支持，遇到可以考虑降级全量刷新 | DML + 影响表结构和数据的 DDL（schema change、分区变更等） |
 | **Schema 语义** | 使用最新 schema 查询历史数据——MV 刷新目标是与基表最新状态保持一致 | 语义上应使用历史版本对应的 schema（业界实践不一：Spark + Iceberg 默认使用历史 schema，Snowflake 使用当前 schema） |
-| **用户接口** | Java API——参考当前 Iceberg IVM 实现，查询 Analyze 阶段构造历史版本 scan plan | SQL 接口——`FOR TIMESTAMP/VERSION AS OF`，用户通过时间戳/ VERSION ID 指定要读取的版本 |
+| **用户接口** | Java API——Analyze 阶段构建 Plan | SQL 接口——`FOR TIMESTAMP/VERSION AS OF`，用户通过时间戳/ VERSION ID 指定要读取的版本 |
 | **保留时间** | 短窗口，取决于 MV refresh interval（实时场景通常很短）；可以 best-effort，版本提前释放时 MV 可降级全量刷新 | 固定时间窗口，通常天级（Databricks 默认 7 天，Snowflake Standard 默认 1 天）；严格遵循，否则用户可能无法恢复数据 |
 | **保留版本** | 只需保留 MV 上次刷新对应的基表版本 | 保留时间窗口内所有 DML + DDL 产生的版本，支持查询任意版本 |
 
@@ -124,10 +124,10 @@ CDC 的核心目标是捕获两个版本之间的行级数据变更。
 |:-----|:----|:--------------------------|
 | **本质需求** | 两个版本之间的净变更（Net Changes），不需要逐条的中间变更 | 逐条行级变更，可能需要完整的中间过程，比如审计 |
 | **覆盖的操作** | DML（INSERT / DELETE / UPDATE / 各类 LOAD）。类似 PITQ，分区级 DDL 和 INSERT OVERWRITE 可低优支持，遇到时降级全量刷新 | DML + 部分 DDL（DROP/TRUNCATE PARTITION 等，以 DELETE 变更体现） |
-| **Update 语义** | DELETE + INSERT 即可，不需要将 BEFORE/AFTER 关联 | 可能需要 UPDATE_BEFORE + UPDATE_AFTER 完整语义（参见附录 E 示例） |
-| **消费粒度** | 保证事务语义，以版本为粒度批量消费，可以一次消费多个版本的变更 | 可能需要按版本逐条消费 |
-| **顺序保证** | 不需要——IVM 本质是批处理，中间结果不可见，对顺序依赖弱 | 一些场景需要严格有序，否则影响正确性，比如 Flink 没有事务机制，以 record 为粒度消费 |
-| **消费接口** | Java API——参考当前 Iceberg IVM 实现，在 MV 刷新的 Analyze 阶段通过 API 获取版本信息并构造增量 SCAN plan，不使用 SQL API | SQL：CHANGES 语句（指定任意版本区间的无状态查询）、STREAM 对象（自动管理消费位点，每次只返回上次消费之后的变更）；SDK/RPC（对接 Flink/Spark） |
+| **Update 语义** | DELETE + INSERT 即可，不需要将 BEFORE/AFTER 关联 | 需要 UPDATE_BEFORE + UPDATE_AFTER 完整语义（参见附录 E 示例） |
+| **消费粒度** | 保证事务语义，以版本为粒度批量消费，可以一次消费多个版本的变更 | 可以按版本批量或按 record 粒度消费 |
+| **顺序保证** | 不需要——IVM 本质是批处理，中间结果不可见，对顺序依赖弱 | 一些场景需要严格有序，否则影响正确性，比如流计算场景|
+| **消费接口** | Java API——Analyze 阶段构建 Plan | SQL 或 SDK（对接 Flink/Spark） |
 
 #### 3.2.3 支持的表类型与操作范围
 
@@ -154,12 +154,12 @@ CHANGES：(1,1,1,3) (2,2,2,1) (3,3,3,1) (2,2,2,2)
 
 ### 3.3 IVM 最小需求边界总结
 
-基于上述分析，IVM 对 PITQ 和 CDC 的最小需求如下（均为 `[已定]`）：
+基于上述分析，IVM 对 PITQ 和 CDC 的最小需求如下：
 
 **PITQ**：
 - 覆盖 DML（除 INSERT OVERWRITE）
 - 使用最新 schema，不需要保留历史 schema
-- Java API（Analyze 阶段构造增量 scan plan），不需要 SQL 接口
+- Java API，不依赖 SQL 接口
 - 短窗口保留，MV 刷新完成后即可释放旧版本引用
 - 版本不可用时可降级全量刷新
 
@@ -363,7 +363,7 @@ SELECT ... FROM t FOR VERSION AS OF 10;
 可通过 `SHOW HISTORY FOR TABLE t`（参见 4.5）查看当前保留的版本列表，获取可用的 timestamp 和 version id。
 
 - IVM 通过 Java API 在 Analyze 阶段注入版本信息构造 scan plan，不经过 SQL 层（参见 3.1）
-- 长期 Time Travel 场景面向用户暴露上述 SQL 接口
+- Time Travel 场景面向用户暴露上述 SQL 接口
 
 ### 5.2 查询流程
 
@@ -387,140 +387,563 @@ PITQ 的查询流程在短期和长期 MVCC 方案下**基本一致**——都�
 
 ## 6. CDC：方案设计
 
-### 6.1 CHANGES 数据格式与 Row Tracking
+CDC（Change Data Capture）的目标是捕获两个版本之间的行级数据变更。变更类型和 Net Changes 等基本概念已在 3.2.1 中定义，支持的表类型与操作范围详见 3.2.3。
 
-变更类型和 Net Changes 的概念已在 3.2.1 中介绍。本节补充 CDC 方案设计所需的数据格式和存储层前提。
+### 6.1 CHANGES 数据格式
 
-**CHANGES 数据格式**：每条行级变更由**数据列**（与表的列一致，可只包含需要的列）和**元数据列**组成：
+每条行级变更由**数据列**（与表的列一致，可只包含需要的列）和**元数据列**组成：
 
 | 元数据列 | 类型 | 含义 |
 |:--------|:-----|:-----|
-| CHANGE_TYPE | TINYINT | 变更类型：INSERT / DELETE / UPDATE_BEFORE / UPDATE_AFTER |
+| CHANGE_TYPE | TINYINT | 变更类型编码：INSERT(0) / DELETE(1) / UPDATE_BEFORE(2) / UPDATE_AFTER(3) |
 | ROW_ID | BIGINT | 逻辑行标识，同一行的所有变更具有相同的 ROW_ID |
 | ROW_VERSION | BIGINT | 产生变更的版本，配对的 UPDATE_BEFORE / UPDATE_AFTER 具有相同的 ROW_VERSION |
 
 **Row Tracking（行追踪）**：存储层为每行数据维护的元信息，是生成上述元数据列的前提能力。
 
-- **ROW_ID**：逻辑行唯一标识。INSERT 时生成全局唯一 ID，UPDATE 后保持不变
-- **ROW_VERSION**：行的版本。INSERT 时生成初始版本，UPDATE 后版本增加（不一定连续），具体可用 partition version 或 GTID 表示
+- **ROW_ID**：逻辑行唯一标识。INSERT 时分配全局唯一值，UPDATE 后保持不变，DELETE 后不再复用。Net Changes 依赖 ROW_ID 做同行变更合并
+- **ROW_VERSION**：行版本。INSERT 时生成初始版本，UPDATE 后版本递增（不一定连续）。Update 配对和 Net Changes 排序依赖 ROW_VERSION
 
-### 6.2 核心问题
+> Row Tracking 的具体生成方案、唯一性保证、存储格式等在单独文档中设计，本文假设存储层已具备此能力。
 
-CDC 的技术难度因表类型而异：
+### 6.2 用户查询接口
 
-- **明细表、聚合表、只有 INSERT 的主键表**：CHANGES 就是导入产生的增量 rowset，直接顺序 scan 文件即可读取，无特殊挑战
-- **主键表有 UPDATE / DELETE**：这是核心难点。UPDATE 产生的旧值（BEFORE）和 DELETE 的旧值需要从历史 segment 中读取。列式存储下，按 ROW_ID 定位旧值意味着随机 IO，在高频小导入场景下可能产生大量随机读
+**CHANGES 语法**
 
-### 6.3 推荐方案：查询时生成 + bitmap vector 辅助 `[已定]`
-
-整体上存在两种方案思路：
-
-| 方案 | 思路 | 优点 | 缺点 |
-|:-----|:-----|:-----|:-----|
-| **方案 1：导入时生成** | 主键表更新 primary index 时拿到旧 rssid，读取旧值，配对写入 changelog | 利用 PK 已有机制配对 BEFORE/AFTER；查询读取 changelog 效率高 | 读取旧值影响导入性能；changelog 增加存储和维护开销；Net Changes 场景不一定需要保留每次导入的完整 changes |
-| **方案 2：查询时生成** | 导入时增加轻量元信息辅助定位变更行，旧值读取推迟到查询时 | 不影响导入性能；无额外存储开销；查询时可攒批读取旧值提高效率；运行时 filter/project | 查询 scan 效率不如直接读 changelog；增加少量元数据开销 |
-
-**推荐方案 2** `[已定]`。核心理由：
-
-1. **导入性能优先**：实时导入场景对延迟和抖动敏感，IVM 本身是异步消费方，对查询延迟的容忍度更高
-2. **维护复杂度低**：不引入额外的 changelog 文件生命周期管理
-
-**具体机制**（主键表）：
-
-导入时增加以下 bitmap vector 元数据：
-- 旧 segment 的 **delta delete bitmap**：记录本次导入新增的删除标记（当前只记录累积的全量 delete vector，无法知道 delta）
-- 旧 segment 的 **update_before bitmap**：标记哪些行是因为 UPDATE 被删除的（区别于 DELETE 操作的删除）
-- 新 segment 的 **update_after bitmap**：标记哪些行是 UPDATE 产生的新值（区别于 INSERT 的新行）
-
-查询时，根据 delta rowset 和这些 bitmap vector 推导出每个 segment 需要读取的行及其 change type。关键特性：
-
-- **每个 version 的 changes 只依赖自己 version 的 tablet metadata**，不需要跨 tablet 比对。这意味着即使发生了 tablet reshard，changes 仍然可以正确生成
-- segment 之间、segment 内部都可以并行 scan，提高 IO 效率
-
-### 6.4 Update 语义 `[已定]`
-
-支持两种模式，通过配置切换：
-
-- **DELETE + INSERT**：轻量模式，不需要关联 BEFORE 和 AFTER。IVM 使用此模式
-- **UPDATE_BEFORE + UPDATE_AFTER**：完整模式，保留 UPDATE 语义。流式计算场景可能需要
-
-> 两种模式在不同下游场景的差异参见附录 E（以 Flink 同步到 Redis 为例）。
-
-### 6.5 Net Changes `[已定]`
-
-**核心思想**：对每个 ROW_ID，根据其最早变更（first_type）和最晚变更（last_type）的类型组合，确定合并后的净输出。
-
-**合并规则概要**（5 条规则）：
-
-| # | first_type | last_type | 输出 | 语义 |
-|:--|:-----------|:----------|:-----|:-----|
-| 1 | 仅单条变更 | — | 原样输出 | 无需合并 |
-| 2 | INSERT | UPDATE_AFTER | 1 条 INSERT（最终值） | 新建后被更新，等价于直接以最终值插入 |
-| 3 | INSERT | DELETE | 0 条 | 新建后被删除，变更相互抵消 |
-| 4 | UPDATE_BEFORE | UPDATE_AFTER | 2 条：BEFORE（原始值）+ AFTER（最终值） | 多次更新合并为一次 |
-| 5 | UPDATE_BEFORE | DELETE | 1 条 DELETE（原始值） | 先更新后删除，等价于直接删除 |
-
-> 完整规则定义、示例数据和 SQL 实现见附录 C。
-
-**实现位置：计算层** `[已定]`
-
-Net Changes 在计算层通过窗口函数完成，利用表按 ROW_ID 分桶的特性避免全局 shuffle（所有 `PARTITION BY row_id` 与分桶键一致，可本地执行）。
-
-选择在计算层而非存储层做的理由：
-- 存储层首要任务是并行 scan 提高 IO 效率，在并行 scan 基础上支持保序和合并会引入额外复杂度，不一定比计算层更高效
-- 计算层实现更灵活——天然处理 tablet reshard 后同一 row 的 changes 来自不同 tablet 的场景（此时不能用 local shuffle，但 reshard 频率低，可接受）
-- 不同场景对 Net Changes 的需求不同（IVM 需要，审计不需要），在计算层做更容易按需选择
-
-### 6.6 排序 `[已定]`
-
-存储层 scan 返回的 CHANGES 数据在以下维度上**无序**：
-- Row 之间无序
-- 同一 version + row 下的 UPDATE_BEFORE / UPDATE_AFTER 之间无序，且不保证相邻
-- 一次消费多个 version 时，version 之间无序
-
-如果下游需要保序（如流式计算场景），在计算层按 `(row_version, row_id, change_type)` 排序即可。IVM 作为批处理不需要保序。
-
-### 6.7 小文件优化思路 `[待讨论]`
-
-**场景**：高频实时导入 + MV 刷新间隔较大（如小时级），两次刷新之间会产生大量小文件。
-
-**思路**：在 IVM 只需要 Net Changes 且 UPDATE = DELETE + INSERT 的假设下，可以直接比较 old version 和 new version 的文件——new version 经过 compaction 后小文件数量少，scan 效率高。对于 `(ROW_ID, ROW_VERSION)` 相同的行（carry-over row，在新旧版本中都存在且未变化），通过 ROW_VERSION deduplication 过滤。
-
-**局限**：聚合表 compaction 后数据已 aggregate，无法通过 snapshot diff 获取变更。
-
-### 6.8 系统接口
-
-**存储层接口**：
-
-```
-TabletChangesReader : ChunkIterator
-  输入：读取的列、predicates、version range [start_version, end_version)
-  输出：Chunk（数据列 + 元数据列 CHANGE_TYPE / ROW_ID / ROW_VERSION）
-```
-
-**与查询层对接**：
-- Plan 节点：`OlapChangesScanNode`
-- 执行层：`ConnectorScanNode` / `ConnectorScanOperator`（ConnectorType = `OLAP_CHANGES`）+ `OlapChangesDataSource`
-- 如果 tablet 支持并行读取 CHANGES，可以有多个实例并行 scan，每个负责一部分
-
-**用户接口（长期）** `[暂不展开]`：
+- 手动指定 offset，查询任意范围的 CHANGES
+- 适用于 ad-hoc 查询、debug 排查
 
 ```sql
--- 按 timestamp 或 version 查询变更
+-- Option 1: CHANGES clause, 参考 SnowFlake, Spark
+-- https://docs.snowflake.com/en/sql-reference/constructs/changes
+-- https://issues.apache.org/jira/browse/SPARK-55668
 SELECT * FROM tbl CHANGES FROM VERSION v1 TO v2;
 SELECT * FROM tbl CHANGES FROM TIMESTAMP t1 TO t2;
 
--- STREAM 对象，自动管理消费进度
-CREATE STREAM stream ON tbl;
-SELECT * FROM stream;
-INSERT INTO target_tbl SELECT * FROM stream;
-
--- SDK/RPC 对接 Flink/Spark（PULL 模式）
+-- Option 2: Table Function, 参考 BigQuery
+-- https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/time-series-functions#changes
+SELECT * FROM table_changes('tbl', t1, t2);
+SELECT * FROM table_changes('tbl', v1, v2);
 ```
 
-**增量数据统计信息** `[待讨论]`：
-- 动态查询方式：从 tablet metadata 收集（删除行数、新增行数、文件数等）
-- 导入结果附带方式：在 FE 缓存，可先不持久化
+**STREAM 对象**
+
+- 自动管理消费进度，用于命令式构建增量 ETL pipeline，通常需要配合 Task 调度框架定期触发。相比 IVM 声明式方式，STREAM 更复杂但也更灵活，适合 IVM 无法表达的复杂增量逻辑
+- 参考 Snowflake STREAM https://docs.snowflake.com/en/sql-reference/sql/create-stream
+
+```sql
+CREATE STREAM my_stream ON tbl;
+
+-- 查询 offset 到最新版本之间的 CHANGES
+SELECT * FROM my_stream;
+
+-- DML 中消费 stream，执行成功后自动推进 offset
+INSERT INTO target_tbl SELECT * FROM my_stream;
+```
+
+**SDK / RPC**
+- 对接 Flink / Spark Stuctured Streaming，客户端通过 SDK 与 StarRocks 交互。
+
+### 6.3 能力范围与约束
+
+CDC 引擎本身按通用能力设计——Update 语义（DELETE+INSERT / UPDATE_BEFORE+UPDATE_AFTER）、Net Changes、排序都通过参数配置适配不同场景，不需要针对 IVM 做特殊裁剪。
+
+实际的能力边界来自 MVCC：短期 MVCC（4.4）只覆盖 DML，因此 CDC 也只覆盖 DML，IVM 遇到不支持场景降级全量刷新；长期 MVCC（4.3）支持后，CDC 能力自然扩展到 DDL 和任意版本区间。
+
+接口上，先支持 CHANGES 语法——它是所有消费方式的基础，目前只用于 debug 和问题排查；STREAM 对象和 SDK/RPC 暂不支持，后面按需支持。
+
+| 维度 | 能力范围 |
+|:-----|:--------|
+| **操作类型** | INSERT / UPDATE / DELETE / 各类 LOAD；不含 INSERT OVERWRITE 和 DDL（受限于短期 MVCC） |
+| **表类型** | 明细表（INSERT）、主键表（INSERT / DELETE / UPDATE_BEFORE / UPDATE_AFTER）、聚合表（INSERT，aggregate 后语义）；更新表不支持 |
+| **消费模式** | 批量，以 version 为粒度 |
+| **消费接口** | CHANGES 语法；STREAM 对象和 SDK/RPC 暂不支持 |
+| **Update 语义** | 两种模式都支持，参数切换 |
+| **Net Changes** | 可选能力，参数配置 |
+| **排序** | 可选能力，参数配置 |
+
+### 6.4 端到端流程
+
+CDC 的链路分为 FE 和 CN 两个阶段：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ FE: 确定"读什么"                                           │
+│   对比 old/new TableState，计算每个 tablet 的                │
+│   version range，封装为 scan range 下发给 CN                │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ CN: 执行"怎么读"                                           │
+│   每个 tablet 根据 version range 生成行级 changes，          │
+│   可选经过 Net Changes 合并后输出                            │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+                    消费端处理 Changes
+```
+
+**FE 要解决的问题**：如何从两个 TableState 的 diff 中推导出每个 tablet 需要读取的版本区间，以及如何处理 partition 新增/删除、tablet reshard 等拓扑变化。
+
+**CN 要解决的问题**：如何从 tablet 的版本区间中高效生成行级 changes。明细表和聚合表只有 append，直接读 delta rowset 即可；**主键表是核心难点**——需要定位哪些行是 INSERT / DELETE / UPDATE，并从历史 segment 中读取旧值（DELETE 和 UPDATE_BEFORE），列式存储下这意味着随机 IO。
+
+### 6.5 FE 侧：确定每个 Tablet 的变更版本区间
+
+FE 的任务是从两个 TableState（old 和 new）中推导出"哪些 tablet 有变更、每个 tablet 需要读哪个版本范围"，然后封装为 scan range 下发给 CN。
+
+**Diff 思路**：按 logical partition → physical partition 逐层比较 old 和 new 两个 TableState 中各 physical partition 的 visible version。version 相同则跳过，version 不同则该 partition 下所有 tablet 需要读取 `(oldVisibleVersion, newVisibleVersion]` 区间的变更。新增的 partition 从 version 0 开始读取；被删除的 partition 在短期方案中触发 fallback 全量刷新。
+
+**示例**：一张 3 个 partition 的表，经历 2 次导入：
+
+```
+初始状态（oldState, versionId=100）:
+  P1: PP1(visibleVersion=5)  → tablets [T1, T2]
+  P2: PP2(visibleVersion=3)  → tablets [T3, T4]
+  P3: PP3(visibleVersion=7)  → tablets [T5, T6]
+
+第 1 次导入: 写入 P1 和 P2
+第 2 次导入: 写入 P1
+
+当前状态（newState, versionId=102）:
+  P1: PP1(visibleVersion=8)  → tablets [T1, T2]    // 两次导入，version 5→8
+  P2: PP2(visibleVersion=4)  → tablets [T3, T4]    // 一次导入，version 3→4
+  P3: PP3(visibleVersion=7)  → tablets [T5, T6]    // 无变化
+```
+
+Diff 结果：
+
+| Tablet | Version Range | 说明 |
+|:-------|:-------------|:-----|
+| T1, T2 | (5, 8] | P1 有变更，覆盖两次导入的 3 个 version |
+| T3, T4 | (3, 4] | P2 有变更，覆盖一次导入 |
+| T5, T6 | 跳过 | P3 无变化 |
+
+**Tablet Reshard**：如果 physical partition 在版本区间内发生了 reshard，同一个 physical partition 会存在多组 tablet，每组覆盖部分版本区间：
+
+```
+PP1 在 version 6 发生 reshard:
+  旧 tablets [T1, T2], 覆盖 version (5, 6]
+  新 tablets [T1', T2'], 覆盖 version (6, 8]
+```
+
+FE 将两组版本区间都下发，CN 分别读取后在计算层合并。
+
+### 6.6 CN 侧：从版本区间生成行级 Changes
+
+#### 6.6.1 明细表与聚合表
+
+**明细表和聚合表**只有 append 操作，读取 `(V_old, V_new]` 范围内的 delta rowset，所有行标记为 INSERT。聚合表的 delta rowset 存储的是 aggregate 后的结果，CHANGES 也是聚合后的语义。
+
+**如何找到 delta rowset**：
+
+- 目标：从 tablet metadata 中找到 `(V_old, V_new]` 范围内所有导入产生的 delta rowset
+- **跳过 compaction**：compaction 产生的 rowset 不包含新数据，只是合并，需要跳过
+- **回溯查找**：compaction 会合并旧 rowset，因此 `V_new` 对应的 tablet metadata 可能不包含所有版本的 delta rowset。被 compaction 合并掉的 delta rowset 需要查找更早版本的 tablet metadata，最差情况需要遍历 `(V_old, V_new]` 范围内所有版本的 tablet metadata
+- **遇到 DELETE 降级**：如果遇到 DELETE 操作产生的 rowset，返回特殊错误码给上层
+
+**示例**：查询 `(2, 6]` 范围的 changes
+
+```
+version 3: tablet metadata 包含 [rowset-2(v2, LOAD), rowset-3(v3, LOAD)]
+version 4: tablet metadata 包含 [rowset-2(v2, LOAD), rowset-3(v3, LOAD), rowset-4(v4, LOAD)]
+version 5: tablet metadata 包含 [rowset-5(v5, COMPACTION)]
+           ← v5 发生 compaction，rowset-2 ~ rowset-4 被合并为 rowset-5
+version 6: tablet metadata 包含 [rowset-5(v5, COMPACTION), rowset-6(v6, LOAD)]
+```
+
+从 `V_new=6` 的 tablet metadata 开始：
+- rowset-6(v6, LOAD) → 在范围内，读取
+- rowset-5(v5, COMPACTION) → 在范围内，但是 COMPACTION 跳过
+- 回溯到 version 4 的 tablet metadata，找到 rowset-3(v3, LOAD) 和 rowset-4(v4, LOAD) → 读取
+- 找到所有 delta rowset，不需要回溯 version 3 tablet metadata，中止
+
+最终读取 rowset-3、rowset-4、rowset-6，所有行标记为 INSERT。
+
+#### 6.6.2 主键表
+
+主键表支持 INSERT / UPDATE / DELETE，是 Changes 生成的核心难点。需要解决两个子问题：**定位**（如何知道哪些行是 INSERT / DELETE / UPDATE）和**取值**（DELETE 和 UPDATE 的旧值散落在历史 segment 中，如何高效读取）。
+
+##### 方案对比
+
+**方案 A：导入时生成 Changelog**
+- 思路：PK Index 更新时读旧值，配对写入独立的 changelog 文件
+- 优点：查询效率高（顺序读 changelog）
+- 缺点：
+  - 读取并持久化旧值影响导入性能
+  - changelog 增加存储和维护开销，高频导入还会面临小文件问题
+  - Net Changes 场景中间版本 changelog 最终被合并，提前生成是浪费
+  - 存储所有列的值，而查询可能只需要部分列
+
+**方案 B：Delete Vector Diff**
+- 思路：查询时定位并读取旧值，Delta rowset 中的行是新增或更新后的行，其它 segment 比较导入前后两个版本的 delete vector，新增被标记删除的行（差集）就是被删除或被更新的行
+- 优点：
+  - 无导入开销，概念简单，不需要额外存储
+  - 查询时合并多个导入对同一个 segment delete 的读取，减少随机 IO
+- 缺点：
+  - **无法区分 DELETE 和 UPDATE**——delete vector 只记录"行被标记删除"，无法判断是 DELETE 还是 UPDATE 导致的旧行标记删除
+  - 要区分就必须拿被标记删除的行去新 segment 做 PK 匹配，复杂且代价高
+
+**方案 C：Changes Vector（推荐）**
+- 思路
+  - 导入时在 PK Index 更新阶段记录 RoaringBitmap 标记每行 change type，和 delete vector 存在一起
+  - 查询时据此精确定位旧 segment 是 delete 还是 update_before，新 segment 是 insert 还是 update_after
+- 优点：
+  - 可以区分 DELETE 和 UPDATE，无需额外的 PK 匹配
+  - 导入增加的额外开销极低
+  - 查询时合并多个导入对同一个 segment delete 的读取，减少随机 IO
+  - 变更信息自包含，不依赖跨 version diff
+- 缺点：scan 效率略低于方案 A
+
+**选择方案 C** 的理由：
+
+1. 导入性能优先，对导入影响小
+2. 能区分 DELETE 和 UPDATE
+3. 查询可以跨版本合并 segment delete，减少随机 IO
+3. 实现复杂度低
+
+##### Changes Vector 示例
+
+**核心思路**：导入时 PK Index 更新过程中已经知道每行是 INSERT / UPDATE / DELETE，在这个时机顺便记录三个轻量 bitmap（changes vector），查询时据此精确定位每行的变更类型和位置：
+
+| Changes Vector | 记录位置 | 含义 |
+|:-------------|:--------|:-----|
+| **delete_type_vector** | 旧 segment | 被 DELETE 操作删除的行（区别于 UPDATE 导致的删除） |
+| **before_type_vector** | 旧 segment | 被 UPDATE 的行（旧值位置） |
+| **after_type_vector** | 新 segment | UPDATE 结果写入的行（新值位置），其余行为 INSERT |
+
+三者的关系：
+
+- 旧 segment 的 `delete vector diff` = `delete_type_vector` ∪ `before_type_vector`（互斥）
+- 新 segment 中的行 = INSERT 行 ∪ UPDATE_AFTER 行（由 `after_type_vector` 区分）
+
+**示例**：一次导入的 changes vector 生成
+
+```
+导入前（version 5）:
+  Segment S0: rows [A=1, B=2, C=3, D=4]    delete_vector = {}
+
+导入操作:
+  UPDATE A SET val=10    (A 原值 1)
+  DELETE B               (B 原值 2)
+  INSERT E val=5         (新行)
+
+导入后（version 6）:
+  S0: delete_vector={A,B}, delete_type_vector[v6]={B}, before_type_vector[v6]={A}
+  S1(新): rows [A=10, E=5], after_type_vector[v6]={A}
+```
+
+查询 version 6 的 changes 时：
+
+- 读 S0 中被 `delete_type_vector[v6]` 和 `before_type_vector[v6]` 标记的行（A 和 B 一起读取），根据所在的 vector 设置 CHANGE_TYPE：B → DELETE，A → UPDATE_BEFORE
+- 读 S1 全量顺序读取（A 和 E 一起读取），根据 `after_type_vector[v6]` 设置 CHANGE_TYPE：A 在 vector 中 → UPDATE_AFTER，E 不在 → INSERT
+
+**跨版本合并优化**：CDC 窗口覆盖多个版本时，同一旧 segment 可能被多个版本的 changes vector 引用，逐版本读取会产生多次独立 IO。优化方式：将同一 segment 上所有版本的 bitmap 合并（OR）后一次批量读取，再按原始 bitmap 拆分回各版本的 changes。
+
+```
+CDC 窗口 (5, 8]，S0 被三个版本引用：
+  version 6: before_type_vector = {A}
+  version 7: delete_type_vector = {C}
+  version 8: before_type_vector = {D}
+
+逐版本读取 → 3 次独立 IO
+合并后读取 → merged = {A} ∪ {C} ∪ {D} = {A, C, D}，1 次批量读取 S0 的 A, C, D 三行
+           → 再按原始 vector 拆分：A → v6 UPDATE_BEFORE, C → v7 DELETE, D → v8 UPDATE_BEFORE
+```
+
+---
+
+#### 6.6.3 并行 Scan
+
+> TODO 重构这部分内容
+
+对所有表模型，changes 均可在如下粒度并行 scan：
+
+- **Tablet 间并行**：FE 将不同 tablet 的 scan range 分配到不同 CN 节点，tablet 之间完全独立
+- **Segment 文件间并行**：同一 tablet 内，可以从多个 segment 文件并行读取 CHNAGES。对于主键表，UPDATE 
+- **Segment 内部并行**：同一 segment 内，列式存储天然支持按列并行读取
+
+**主键表 segment 内并行时 changes vector 的处理**：segment 内部并行读取时，每个并行实例读取一部分行。changes vector（delete_type_vector / before_type_vector / after_type_vector）是 bitmap 结构，可以按行范围切分——每个并行实例只需检查自己负责的行范围内 bitmap 对应位置的值，即可确定该行的 CHANGE_TYPE，不需要全局协调。
+
+#### 6.6.4 Net Changes
+
+##### 6.6.4.1 Motivation
+
+对于主键表，当 CDC 窗口覆盖多个版本时，同一行可能有多条变更（如先 UPDATE 再 UPDATE）。如果不合并，下游需要逐条处理所有中间变更，数据量大且计算浪费。Net Changes 将同一 `row_id` 下的多条变更合并为最小等价变更。
+
+**示例**：以 IVM 为例，表 A(id, score) 与表 B(id, name) 做 JOIN，MV 定义为 `SELECT id, name, score FROM A JOIN B ON A.id = B.id`。A 的 id=1 行经历两次 UPDATE（score: 1→2→3）：
+
+```
+不合并（原始 changes）:
+  A changes: -(1, 1), +(1, 2), -(1, 2), +(1, 3)           ← 4 条
+  IVM 处理: 每条 change 都需要 join B → -(1, n, 1), +(1, n, 2), -(1, n, 2), +(1, n, 3)
+  顺序 merge into MV                                       ← 4 次 MV 更新
+
+Net Changes 合并后:
+  A changes: -(1, 1), +(1, 3)                               ← 2 条
+  IVM 处理: -(1, n, 1), +(1, n, 3)
+  顺序 merge into MV                                       ← 2 次 MV 更新，结果相同
+```
+
+Net Changes 将 4 条中间变更合并为 2 条，IVM 的 join 计算量和 MV 更新次数减半，结果等价。
+
+
+##### 6.6.4.2 合并规则
+
+对每个 `row_id`，根据 `row_version` 确定最早变更类型（first_type）和最晚变更类型（last_type），然后按规则合并。变更类型编码：`0` = INSERT，`1` = DELETE，`2` = UPDATE_BEFORE，`3` = UPDATE_AFTER。
+
+**规则 1（单条变更）**：若某个 `row_id` 下只有一条变更（只可能是 INSERT 或 DELETE），原样输出。
+
+**规则 2-5（多条变更合并）**：
+
+| # | first_type | last_type | 输出 | 语义 |
+|:--|:-----------|:----------|:-----|:-----|
+| 2 | INSERT (0) | UPDATE_AFTER (3) | 1 条 INSERT（最终值） | 新建后被更新，等价于直接以最终值插入 |
+| 3 | INSERT (0) | DELETE (1) | 0 条 | 新建后被删除，变更相互抵消 |
+| 4 | UPDATE_BEFORE (2) | UPDATE_AFTER (3) | 2 条：BEFORE（原始值）+ AFTER（最终值） | 多次更新合并为一次 |
+| 5 | UPDATE_BEFORE (2) | DELETE (1) | 1 条 DELETE（原始值） | 先更新后删除，等价于直接删除 |
+
+> 规则 4 和 5 中，输出记录的 `row_version` 统一使用 `max_ver`，确保配对的 UPDATE_BEFORE / UPDATE_AFTER 具有相同版本。
+
+
+##### 6.6.4.3 实现
+
+**原理概述**：Net Changes 的实现分为两层——存储层做廉价快筛，计算层做精确兜底。
+
+- **存储层**：对同一个 segment，将 CDC 窗口内所有版本的 changes vector 合并为两个 bitmap——**enter**（insert ∪ after_type_vector，即"进入"该 segment 的行）和 **leave**（delete_type_vector ∪ before_type_vector，即"离开"该 segment 的行）。对两者做 XOR：同时出现在 enter 和 leave 中的行说明"进了又出了"，属于可抵消的中间态，从 changes vector 中移除，后续不再读取。
+- **计算层**：Compaction 会将多个 segment 合并为新 segment，导致某些行的"进入"和"离开"分散在不同 segment 上，存储层的 segment 内 XOR 无法发现这些配对，形成**漏网**。计算层通过窗口函数对所有 segment 输出的 changes 做全局 Net Changes 合并（合并规则见 6.6.4.2），利用表按 `ROW_ID` 分桶的特性避免全局 shuffle（所有 `PARTITION BY row_id` 与分桶键一致，可本地执行）。
+
+**为什么在计算层而非存储层兜底**：跨 segment 的抵消本质上是按 `row_id` 做 group by——需要等所有 segment 扫完、将同一行散落在不同 segment 的变更聚到一起、再应用合并规则。这是一个聚合操作，而存储层的执行模型是 per-segment 并行扫描，引入全局聚合会破坏并行性并重复实现计算层已有的能力。计算层天然适合做这件事，且因表按 `ROW_ID` 分桶，窗口函数可本地执行，无网络开销。
+
+两层结合：存储层以极低成本减少大部分数据量，计算层保证无论是否发生 compaction 结果都正确。
+
+---
+
+**完整示例**
+
+以下通过一个覆盖全部 4 种 change type、跨 3 次导入的例子，演示两层过滤的完整流程。
+
+**初始状态**：S0 是已有 segment，包含行 {A, B}。
+
+**Version 3（第一次导入，创建 S1）**：更新 A 和 B，插入 C D E F。
+
+```
+S0:  before_type_vector[v3] = {A, B}           ← A, B 旧值标记
+S1:  rows = {A, B, C, D, E, F}
+     after_type_vector[v3]  = {A, B}            ← A, B 是 UPDATE_AFTER
+     隐含 INSERT            = {C, D, E, F}      ← 新行
+```
+
+**Version 5（第二次导入）**：更新 B，删除 D。
+
+```
+S1:  before_type_vector[v5] = {B}               ← B 旧值离开 S1
+     delete_type_vector[v5] = {D}               ← D 被删除
+S2:  rows = {B'}, after_type_vector[v5] = {B}   ← B 的新值落到 S2
+```
+
+**Version 7（第三次导入）**：更新 A，删除 F。
+
+```
+S1:  before_type_vector[v7] = {A}               ← A 旧值离开 S1
+     delete_type_vector[v7] = {F}               ← F 被删除
+S3:  rows = {A'}, after_type_vector[v7] = {A}   ← A 的新值落到 S3
+```
+
+S1 的 changes vector 汇总（4 种 change type 全部出现）：
+
+```
+             ┌─ v3 创建 ─┐   ┌── v5 ──┐   ┌── v7 ──┐
+             AFTER INSERT   BEFORE DEL   BEFORE DEL
+      Row A:  ✓                           ✓
+      Row B:  ✓              ✓
+      Row C:       ✓
+      Row D:       ✓                ✓
+      Row E:       ✓
+      Row F:       ✓                            ✓
+```
+
+**Step 1：存储层 XOR（无 compaction）**
+
+合并 S1 在 CDC 窗口内所有版本的 bitmap，做 XOR：
+
+```
+enter（进入 S1）= after ∪ insert = {A, B, C, D, E, F}
+leave（离开 S1）= before ∪ delete = {A, B, D, F}
+
+         A  B  C  D  E  F
+enter:   1  1  1  1  1  1
+leave:   1  1  0  1  0  1
+                ↓ XOR
+result:  0  0  1  0  1  0   →  surviving = {C, E}，cancelled = {A, B, D, F}
+```
+
+逐行分析：
+
+| 行 | 进入(v3) | 离开 | 抵消? | 效果 |
+|:--|:---------|:-----|:-----:|:-----|
+| A | AFTER | BEFORE(v7) | ✓ | 中间态消除；原始 BEFORE 在 S0，最终 AFTER 在 S3，留给计算层 |
+| B | AFTER | BEFORE(v5) | ✓ | 中间态消除；原始 BEFORE 在 S0，最终 AFTER 在 S2，留给计算层 |
+| C | INSERT | — | ✗ | 无离开，直接通过 |
+| D | INSERT | DELETE(v5) | ✓ | 生了又死了，完全抵消（规则 #3），0 条输出 |
+| E | INSERT | — | ✗ | 同 C，直接通过 |
+| F | INSERT | DELETE(v7) | ✓ | 完全抵消（规则 #3），0 条输出 |
+
+存储层效果：**S1 从 6 行降至 2 行**（C 和 E），减少 67% 的读取量。
+
+**Step 2：Compaction 如何导致漏网**
+
+假设 v5 和 v7 之间发生 compaction，S1 + S2 合并为 S_merged：
+
+```
+时间线：
+  v3           v5          compaction        v7
+  ├── S1 创建 ──┤── S2 创建 ──┤── S1+S2→S_merged ──┤── S3 创建 ──┤
+```
+
+v7 时，A 和 F 的数据已在 S_merged 中，变更记录在 S_merged 上而非 S1：
+
+```
+S1 的 XOR（只经历 v3 + v5，v7 的变更不在 S1 了）:
+  enter = {A, B, C, D, E, F}
+  leave = {B, D}                ← 只有 v5，没有 v7
+  cancelled = {B, D}
+  surviving = {A, C, E, F}     ← A 和 F 没能被抵消！
+
+S_merged 的 XOR:
+  enter = {}                    ← compaction 不产生 changes vector
+  leave = {A, F}                ← v7 的 BEFORE(A) + DELETE(F)
+  cancelled = {}                ← enter 为空，无法抵消
+```
+
+对比无 compaction 的情况：
+
+| | 无 compaction | 有 compaction |
+|:--|:-------------|:-------------|
+| 存储层消除行数 | 4 行（A, B, D, F） | 2 行（B, D） |
+| 传给计算层行数 | 6 行 | 10 行 |
+| 最终结果正确性 | ✓ | ✓（计算层兜底） |
+
+A 和 F 因为"进入"和"离开"分散在不同 segment（S1 vs S_merged），存储层 XOR 看不到配对，**漏网**了。
+
+**Step 3：计算层窗口函数兜底**
+
+以漏网的 **F** 为例，计算层收到：
+
+```
+row_id=F, row_version=v3, change_type=0(INSERT)   ← 来自 S1
+row_id=F, row_version=v7, change_type=1(DELETE)    ← 来自 S_merged
+```
+
+窗口函数计算：`cnt=2, first_type=INSERT(0), last_type=DELETE(1)` → **规则 #3**，0 条输出。存储层没消掉的，计算层消掉了。
+
+以漏网的 **A** 为例，计算层收到 4 条：
+
+```
+row_id=A, v3, BEFORE(2), old_val    ← S0
+row_id=A, v3, AFTER(3),  mid_val    ← S1（漏网）
+row_id=A, v7, BEFORE(2), mid_val    ← S_merged（漏网）
+row_id=A, v7, AFTER(3),  new_val    ← S3
+```
+
+窗口函数：`first_type=BEFORE(2), last_type=AFTER(3)` → **规则 #4**，输出 `BEFORE(old_val) + AFTER(new_val)`，两次 UPDATE 合并为一次，中间态被 WHERE 过滤。
+
+**最终输出**（无论是否发生 compaction，结果相同）：
+
+```
+  A: BEFORE(old) + AFTER(new)    ← 规则 #4，两次更新合并为一次
+  B: BEFORE(old) + AFTER(new)    ← 规则 #4，两次更新合并为一次
+  C: INSERT(val)                 ← 规则 #1，直接通过
+  D: (无输出)                    ← 规则 #3，INSERT+DELETE 抵消
+  E: INSERT(val)                 ← 规则 #1，直接通过
+  F: (无输出)                    ← 规则 #3，INSERT+DELETE 抵消
+```
+
+SQL 实现见附录 C。
+
+---
+
+#### 6.6.5 小文件优化：Snapshot Diff
+
+##### 问题
+
+6.6.4 的标准 CDC 路径是逐版本、逐 segment 读取 changes vector 生成变更。在高频导入 + 长 CDC 窗口的场景下，这种方式面临 IO 放大问题：
+
+```
+场景：每秒导入 1 次，MV 每小时刷新 1 次
+  → CDC 窗口内 3,600 个 delta rowset（每次导入产生 1 个）
+  → 逐文件读取：3,600 次文件打开 + bitmap 解析 + 行读取
+```
+
+每个 delta rowset 可能只有几百行，但文件打开和元数据解析的固定开销不可忽略，累积起来 IO 开销远大于实际有效数据量。
+
+##### 思路：从"逐文件追变更"到"两个快照做 Diff"
+
+核心观察：IVM 只需要 Net Changes（不需要中间过程），而 new 版本经过 compaction 后文件少、数据紧凑。因此可以换一种策略——不逐文件读取 delta rowset，直接比较 old 和 new 两个版本的快照，用集合差运算得出变更：
+
+```
+标准路径（逐文件）:
+  old ──→ [delta_v1] [delta_v2] ... [delta_v3600] ──→ new
+          逐个读取 3,600 个小文件，生成 changes，再做 Net Changes
+
+Snapshot Diff 路径:
+  old snapshot
+       ↕ diff
+  new snapshot (compacted, 少量大文件)
+  → 直接产出 Net Changes
+```
+
+**前提条件**：只需 Net Changes、Update 使用 DELETE + INSERT 模式（适合 IVM 场景）。
+
+##### Carry-over Row 问题
+
+Snapshot diff 会产生**假变更**——某些行在 old 和 new 中完全一样（从未被修改），但因为 compaction 重新组织了文件布局，同一行在 old 里属于 segment S1、在 new 里属于 S_merged，diff 时会误判为变更。
+
+```
+示例：行 X 从未修改（row_version 始终为 v2）
+
+  old snapshot: S1 包含 X (row_id=X, row_version=v2, val=10)
+  new snapshot: S_merged 包含 X (row_id=X, row_version=v2, val=10)  ← compaction 搬迁
+
+  Snapshot diff 输出:
+    old 侧: -(X, v2, 10)    ← DELETE（误判）
+    new 侧: +(X, v2, 10)    ← INSERT（误判）
+
+  实际上 X 没有任何变化，这就是 carry-over row
+```
+
+**解决方式**：在计算层通过 `(row_id, row_version)` 去重。同一 `row_id` 若在 old 和 new 中 `row_version` 相同，说明该行未变化，过滤掉：
+
+```sql
+-- carry-over row 过滤（概念性 SQL）
+SELECT * FROM (
+    SELECT *, COUNT(*) OVER (PARTITION BY row_id, row_version) AS dup_cnt
+    FROM snapshot_diff
+)
+WHERE dup_cnt = 1   -- 只保留不重复的行，即真正的变更
+```
+
+##### 适用范围与局限
+
+| 条件 | 说明 |
+|:-----|:-----|
+| **适用表模型** | 明细表、主键表（compaction 不改变行内容）|
+| **不适用** | 聚合表（compaction 会 aggregate 行，snapshot 中是聚合后的结果，无法还原原始变更）|
+| **compaction 要求** | old 和 new 版本都需经过充分 compaction 才能发挥效果；若 new 版本尚未 compaction，小文件依然多，diff 效率不高 |
+
+##### 与标准 CDC 路径的关系
+
+两种路径互补，可根据场景选择：
+
+| | 标准路径（changes vector） | Snapshot Diff |
+|:--|:--------------------------|:-------------|
+| 输出 | 完整 changes（支持所有 change type） | 仅 Net Changes |
+| IO 模式 | 逐文件顺序读取 | 两次全量 scan（old + new） |
+| 最优场景 | CDC 窗口短、delta 文件少 | CDC 窗口长、delta 文件多但 compaction 充分 |
+| 适用表模型 | 所有 | 明细表、主键表 |
+
+### 6.7 增量数据统计信息
+
+- **动态查询方式**：从 tablet metadata 收集（删除行数、新增行数、文件数等）
+- **导入结果附带方式**：在 FE 缓存，可先不持久化
 
 ---
 
@@ -589,7 +1012,7 @@ INSERT INTO target_tbl SELECT * FROM stream;
 
 | # | 问题 | 背景 |
 |:--|:-----|:-----|
-| 3 | bitmap vector 的存储开销是否可接受？ | 主键表每次导入增加 delta delete bitmap、update_before bitmap、update_after bitmap，需要评估在高频导入场景下的额外存储和 IO 开销 |
+| 3 | changes vector 的存储开销是否可接受？ | 主键表每次导入增加 delete_type_vector、before_type_vector、after_type_vector，需要评估在高频导入场景下的额外存储和 IO 开销 |
 | 4 | 查询时读取旧值的性能是否满足 IVM 需求？ | 列式存储下按 ROW_ID 定位旧值可能产生随机 IO，需要在实际场景中验证性能 |
 | 5 | Net Changes 计算层实现的性能？ | 窗口函数 + local shuffle 的开销需要在大数据量下验证 |
 
@@ -641,28 +1064,9 @@ INSERT INTO target_tbl SELECT * FROM stream;
 
 > Table State 组件说明：**表定义** = schema、分区定义、分布定义、索引等（FE）；**数据分片** = Physical Partition、Tablet 实例（FE）；**数据** = 对象存储上的数据文件。**系统操作**不改变用户可见的数据或定义，仅改变物理组织。
 
-### 附录 C：Net Changes 合并规则
+### 附录 C：Net Changes 示例与 SQL 实现
 
-#### 规则定义
-
-变更类型编码：`0` = INSERT，`1` = DELETE，`2` = UPDATE_BEFORE，`3` = UPDATE_AFTER。配对的 UPDATE_BEFORE 和 UPDATE_AFTER 共享相同的 `row_version`。
-
-对每个 `row_id`，根据 `row_version` 确定：
-- **first_type**：最小 `row_version` 处的变更类型，取 `MIN(change_type)`
-- **last_type**：最大 `row_version` 处的变更类型，取 `MAX(change_type)`
-
-**规则 1（单条变更）**：若某个 `row_id` 下只有一条变更（只可能是 INSERT 或 DELETE），原样输出。
-
-**规则 2-5（多条变更合并）**：
-
-| # | first_type | last_type | 输出 | 语义 |
-|:--|:-----------|:----------|:-----|:-----|
-| 2 | INSERT (0) | UPDATE_AFTER (3) | 1 条 `(row_id, max_ver, INSERT, max_after_val)` | 新建后被更新，净效果等价于以最终值直接插入 |
-| 3 | INSERT (0) | DELETE (1) | 0 条 | 新建后被删除，变更相互抵消 |
-| 4 | UPDATE_BEFORE (2) | UPDATE_AFTER (3) | 2 条：`BEFORE(min_before_val)` + `AFTER(max_after_val)` | 多次更新合并，净效果等价于从原始值更新到最终值 |
-| 5 | UPDATE_BEFORE (2) | DELETE (1) | 1 条 `(row_id, max_ver, DELETE, min_before_val)` | 先更新后删除，净效果等价于直接删除，val 携带原始值 |
-
-> 规则 4 和 5 中，输出记录的 `row_version` 统一使用 `max_ver`，确保配对的 UPDATE_BEFORE / UPDATE_AFTER 具有相同版本。
+> 合并规则定义见 6.6.3。
 
 #### 示例
 
