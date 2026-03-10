@@ -653,15 +653,65 @@ CDC 窗口 (5, 8]，S0 被三个版本引用：
 
 #### 6.6.3 并行 Scan
 
-> TODO 重构这部分内容
+##### 为什么并行 Scan 重要
 
-对所有表模型，changes 均可在如下粒度并行 scan：
+CDC scan 的数据量可能远大于普通查询——CDC 窗口覆盖的版本越多，需要读取的 segment 越多；主键表还需要额外读取旧 segment 中的历史值。如果 CDC scan 无法充分并行，就会成为增量刷新链路的瓶颈，抵消 IVM 相对全量刷新的优势。
 
-- **Tablet 间并行**：FE 将不同 tablet 的 scan range 分配到不同 CN 节点，tablet 之间完全独立
-- **Segment 文件间并行**：同一 tablet 内，可以从多个 segment 文件并行读取 CHNAGES。对于主键表，UPDATE 
-- **Segment 内部并行**：同一 segment 内，列式存储天然支持按列并行读取
+##### 三级并行结构
 
-**主键表 segment 内并行时 changes vector 的处理**：segment 内部并行读取时，每个并行实例读取一部分行。changes vector（delete_type_vector / before_type_vector / after_type_vector）是 bitmap 结构，可以按行范围切分——每个并行实例只需检查自己负责的行范围内 bitmap 对应位置的值，即可确定该行的 CHANGE_TYPE，不需要全局协调。
+```
+┌───────────────────────────────────────────────────────────┐
+│ Level 1: Tablet 间并行                                     │
+│   FE 将不同 tablet 的 scan range 分配到不同 CN 节点          │
+│   tablet 之间完全独立，无共享状态                            │
+├───────────────────────────────────────────────────────────┤
+│ Level 2: Segment 间并行                                    │
+│   同一 tablet 内，多个 segment 可并行读取                    │
+│   每个 segment 的 changes vector 独立，互不依赖             │
+├───────────────────────────────────────────────────────────┤
+│ Level 3: Segment 内并行                                    │
+│   同一 segment 内，按行范围切分并行读取                      │
+│   列式存储天然支持，bitmap 可按行范围切分                    │
+└───────────────────────────────────────────────────────────┘
+```
+
+**Level 1：Tablet 间并行**
+
+FE 为每个 tablet 计算独立的版本区间（6.5），封装为 scan range 下发给不同 CN 节点。tablet 之间没有共享状态——每个 tablet 有独立的 segment 集合和 changes vector，可以完全独立地生成 changes。这与普通查询的 tablet 并行模型一致，无需额外设计。
+
+**Level 2：Segment 间并行**
+
+同一 tablet 内，CDC 需要读取多个 segment。对于明细表和聚合表，每个 delta rowset（segment）只包含 INSERT 行，segment 之间天然独立，可直接并行读取。
+
+主键表更复杂——一次 CDC scan 涉及两类 segment 读取：
+
+- **新 segment**（delta rowset）：包含 INSERT 和 UPDATE_AFTER 行，顺序读取
+- **旧 segment**：包含被 DELETE 或 UPDATE 影响的行（旧值），按 bitmap 定位读取
+
+这两类读取能否并行，取决于是否存在跨 segment 依赖。Changes Vector 的自包含设计（6.6.2）消除了这种依赖：
+
+- 新 segment 通过 `after_type_vector` 自行判断哪些行是 INSERT、哪些是 UPDATE_AFTER
+- 旧 segment 通过 `delete_type_vector` 和 `before_type_vector` 自行判断哪些行是 DELETE、哪些是 UPDATE_BEFORE
+- 不需要跨 segment 做 PK 匹配或比对（这正是 Changes Vector 方案优于 Delete Vector Diff 方案的原因之一）
+
+因此新旧 segment 之间、以及同类 segment 之间，均可并行读取。
+
+此外，跨版本合并优化（6.6.2）将同一旧 segment 上多个版本的 bitmap 合并为一次批量读取，使得每个旧 segment 只需被调度一次，简化并行调度的同时减少 IO 次数。
+
+**Level 3：Segment 内并行**
+
+同一 segment 内，列式存储天然支持按行范围切分并行读取。对于主键表，每个并行实例需要额外检查 changes vector 以确定行的 CHANGE_TYPE。changes vector 是 RoaringBitmap 结构，支持按行号范围做子集查询——每个并行实例只需检查自己负责的行范围内 bitmap 对应位的值，不需要全局协调。
+
+##### 哪些设计选择为并行创造了条件
+
+| 设计选择 | 对并行的贡献 |
+|:---------|:------------|
+| FE 按 tablet 粒度下发独立 scan range（6.5） | 支撑 Level 1，tablet 间无依赖 |
+| Changes Vector 自包含于 segment（6.6.2） | 支撑 Level 2，segment 间无需 PK 匹配或跨 segment 比对 |
+| 跨版本 bitmap 合并（6.6.2） | 减少旧 segment 调度次数，简化 Level 2 并行调度 |
+| RoaringBitmap 结构 | 支撑 Level 3，bitmap 可按行范围切分，无需全局协调 |
+| Net Changes 存储层 XOR 是 per-segment 操作（6.6.4） | 融入 Level 2 并行，不引入全局依赖 |
+| 表按 ROW_ID 分桶 | Net Changes 计算层窗口函数可本地执行，无需跨节点 shuffle |
 
 #### 6.6.4 Net Changes
 
