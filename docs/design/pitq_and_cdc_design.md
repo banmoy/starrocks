@@ -975,13 +975,15 @@ CDC 方案围绕"FE 确定读什么、CN 执行怎么读"的两阶段链路展�
 
 | 模块 | 范围 | 优先级 |
 |:-----|:-----|:------|
-| **Table Version** | 基于 GTID，仅记录 DML。TableVersionHistory 短窗口内存存储 + EditLog 持久化 | P0 |
-| **PITQ** | 仅 MV 引用的版本可查；最新 schema；Java API | P0 |
-| **CDC** | 仅 MV 引用范围 `[oldVersion, headVersion)` 的 CHANGES；DELETE + INSERT 语义 | P0 |
-| **Row Tracking** | 存储层为每行维护 ROW_ID + ROW_VERSION | P0 |
-| **Net Changes** | 计算层窗口函数实现 | P0 |
-| **Vacuum 协同** | `minRetainVersion` 保护窗口内版本 | P0 |
+| **Table Version** | 基于 GTID，仅记录 DML。`OlapTable` 增加表级 `versionId`，MV 订阅模式管理版本生命周期（4.4） | P0 |
+| **PITQ** | 仅 MV 引用的版本可查；最新 schema；Java API（5.2） | P0 |
+| **CDC——明细表/聚合表** | 读取 delta rowset，跳过 compaction rowset，回溯历史 tablet metadata（6.6.1） | P0 |
+| **CDC——主键表** | Changes Vector 方案：导入时记录三个轻量 bitmap（delete_type_vector / before_type_vector / after_type_vector），查询时精确定位变更类型和旧值位置；支持跨版本 bitmap 合并减少 IO（6.6.2） | P0 |
+| **Row Tracking** | 存储层为每行维护 ROW_ID + ROW_VERSION，支撑 CDC 元数据列和 Net Changes 合并（6.1） | P0 |
+| **Net Changes** | 存储层 per-segment XOR 快筛 + 计算层窗口函数兜底，利用表按 ROW_ID 分桶本地执行（6.6.3） | P0 |
+| **Vacuum 协同** | `minRetainVersion` 保护窗口内版本的 tablet metadata 和数据文件不被清理 | P0 |
 | **断链降级** | partition drop/truncate、tablet reshard、INSERT OVERWRITE 等触发断链，IVM 回退全量刷新 | P0 |
+| **CHANGES 语法** | 基础 CDC SQL 接口，用于 debug 和问题排查（6.2、6.3） | P1 |
 
 **假设与约束**：
 - 仅针对存算分离（Cloud-Native）表
@@ -990,15 +992,15 @@ CDC 方案围绕"FE 确定读什么、CN 执行怎么读"的两阶段链路展�
 
 ### Phase 2：增强能力（中期）
 
-**目标**：扩展 PITQ 和 CDC 的操作覆盖范围，提供 CDC SQL 接口。
+**目标**：扩展 PITQ 和 CDC 的操作覆盖范围，优化高频导入场景性能。
 
 | 模块 | 范围 |
 |:-----|:-----|
 | **PITQ** | 支持 drop/truncate partition、tablet reshard 后的历史版本查询——协调 CatalogRecycleBin 保留、StarMgrMetaSyncer 延迟清理旧 Tablet |
-| **CDC** | 支持 INSERT OVERWRITE |
-| **小文件优化** | 高频导入场景基于 snapshot diff 的 CDC 优化 |
-| **CDC SQL 接口** | CHANGES 语句（`SELECT ... FROM tbl CHANGES FROM VERSION v1 TO v2`） |
-| **增量统计** | 增量数据统计信息收集与暴露 |
+| **CDC** | 支持 INSERT OVERWRITE（处理分区替换逻辑） |
+| **Snapshot Diff** | 高频导入 + 长 CDC 窗口场景下，基于两版本快照做集合差直接产出 Net Changes，避免逐文件读取小 delta rowset 的 IO 放大；通过 `(row_id, row_version)` 去重消除 carry-over row（6.6.5） |
+| **增量统计** | 增量数据统计信息收集与暴露（6.7） |
+| **版本可观测** | `SHOW HISTORY FOR TABLE t`——展示版本历史、操作类型、保留策略等信息（4.5） |
 
 ### Phase 3：通用能力（长期）
 
@@ -1006,14 +1008,13 @@ CDC 方案围绕"FE 确定读什么、CN 执行怎么读"的两阶段链路展�
 
 | 模块 | 范围 |
 |:-----|:-----|
-| **Meta MVCC** | 统一的元数据多版本机制——保留历史 schema、数据分片拓扑，支持按历史 schema 查询 |
-| **长周期保留** | 天级保留 + 历史元数据冷存储 |
-| **Time Travel SQL** | `SELECT ... FROM t FOR TIMESTAMP AS OF <ts>` |
+| **Meta MVCC** | 统一的元数据多版本机制——保留历史 schema、数据分片拓扑，支持按历史 schema 查询（4.3） |
+| **长周期保留** | 表级 Retention 配置，天级保留 + 历史元数据冷存储 |
+| **Time Travel SQL** | `SELECT ... FROM t FOR TIMESTAMP/VERSION AS OF`（5.1） |
 | **数据恢复** | Copy 恢复 → CLONE → ROLLBACK，分期引入 |
-| **完整 CDC 语义** | UPDATE_BEFORE + UPDATE_AFTER 完整模式 |
-| **STREAM 对象** | 自动管理消费进度的 CDC 对象 |
+| **完整 CDC 语义** | UPDATE_BEFORE + UPDATE_AFTER 完整模式，面向流式消费场景（附录 E） |
+| **STREAM 对象** | 自动管理消费进度的 CDC 对象（6.2） |
 | **流式对接** | SDK/RPC 对接 Flink/Spark Structured Streaming（PULL 模式） |
-| **版本可观测** | `SHOW HISTORY FOR TABLE t`——展示版本历史、操作类型、统计信息 |
 
 ---
 
@@ -1026,23 +1027,25 @@ CDC 方案围绕"FE 确定读什么、CN 执行怎么读"的两阶段链路展�
 | # | 问题 | 背景 | 选项 |
 |:--|:-----|:-----|:-----|
 | 1 | INSERT OVERWRITE 是否纳入 Phase 1？ | INSERT OVERWRITE 涉及分区替换（数据分片拓扑变更），支持复杂度较高。但部分用户场景频繁使用 INSERT OVERWRITE | A. 不纳入，遇到时降级全量刷新<br>B. 纳入，需额外处理分区替换逻辑 |
-| 2 | 聚合表 CDC 是否纳入 Phase 1？ | 聚合表 CDC 逻辑相对简单（直接读增量 rowset），且有真实用户场景（Applovin） | A. 纳入<br>B. 延后到 Phase 2 |
+| 2 | 聚合表 CDC 是否纳入 Phase 1？ | 聚合表 CDC 逻辑相对简单（直接读增量 rowset，6.6.1），且有真实用户场景（Applovin，3.2.3） | A. 纳入<br>B. 延后到 Phase 2 |
+| 3 | CHANGES 语法是否纳入 Phase 1？ | CHANGES 语法是 CDC 所有消费方式的基础（6.3），Phase 1 即支持有助于 debug 和验证；但 IVM 本身通过 Java API 消费，不依赖 SQL 接口 | A. 纳入（P1 优先级）<br>B. 延后到 Phase 2 |
 
-### 8.2 CDC 技术验证
+### 8.2 技术验证
 
-| # | 问题 | 背景 |
-|:--|:-----|:-----|
-| 3 | changes vector 的存储开销是否可接受？ | 主键表每次导入增加 delete_type_vector、before_type_vector、after_type_vector，需要评估在高频导入场景下的额外存储和 IO 开销 |
-| 4 | 查询时读取旧值的性能是否满足 IVM 需求？ | 列式存储下按 ROW_ID 定位旧值可能产生随机 IO，需要在实际场景中验证性能 |
-| 5 | Net Changes 计算层实现的性能？ | 窗口函数 + local shuffle 的开销需要在大数据量下验证 |
+| # | 问题 | 背景 | 相关章节 |
+|:--|:-----|:-----|:---------|
+| 4 | Changes Vector 的存储开销是否可接受？ | 主键表每次导入增加 delete_type_vector、before_type_vector、after_type_vector 三个 bitmap，需要评估在高频导入场景下的额外存储和 IO 开销 | 6.6.2 |
+| 5 | 查询时读取旧值的性能是否满足 IVM 需求？ | 列式存储下按 bitmap 定位旧 segment 中的历史行可能产生随机 IO，需要在实际场景中验证跨版本 bitmap 合并优化的效果 | 6.6.2 |
+| 6 | Net Changes 两层实现的端到端性能？ | 存储层 XOR 快筛的实际过滤比例、计算层窗口函数在大数据量下的开销，需要在有无 compaction 两种场景下分别验证 | 6.6.3 |
+| 7 | Snapshot Diff 的适用条件和收益？ | 需要验证在不同 compaction 充分度下 Snapshot Diff 相对标准路径的性能收益，以及 carry-over row 去重的额外开销 | 6.6.5 |
 
 ### 8.3 长期方向
 
 | # | 问题 | 背景 |
 |:--|:-----|:-----|
-| 6 | 长期 Meta MVCC 的技术路线？ | 当前多个 feature 都有元数据多版本需求但各自 workaround。需要讨论统一方案的形态——是基于现有 OlapTable 扩展，还是引入独立的元数据版本存储 |
-| 7 | 历史元数据冷存储方案？ | FE 内存压力是长期痛点。可行方案包括使用内表作为冷存储、使用对象存储等 |
-| 8 | Row Tracking 的具体实现方案？ | ROW_ID 的全局唯一性保证、ROW_VERSION 的具体取值（partition version vs GTID）等实现细节需要存储团队确认 |
+| 8 | 长期 Meta MVCC 的技术路线？ | 当前多个 feature 都有元数据多版本需求但各自 workaround（4.2.1）。需要讨论统一方案的形态——是基于现有 OlapTable 扩展，还是引入独立的元数据版本存储 |
+| 9 | 历史元数据冷存储方案？ | FE 内存压力是长期痛点（4.3）。可行方案包括使用内表作为冷存储、使用对象存储等 |
+| 10 | Row Tracking 的具体实现方案？ | ROW_ID 的全局唯一性保证、ROW_VERSION 的具体取值（partition version vs GTID）等实现细节需要存储团队确认 |
 
 ---
 
