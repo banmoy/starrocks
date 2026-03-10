@@ -20,6 +20,7 @@ import com.starrocks.http.BaseRequest;
 import com.starrocks.http.BaseResponse;
 import com.starrocks.http.rest.TransactionResult;
 import com.starrocks.server.GlobalStateMgr;
+import com.starrocks.system.ComputeNode;
 import com.starrocks.transaction.TransactionState;
 import com.starrocks.transaction.TransactionStatus;
 import com.starrocks.warehouse.Warehouse;
@@ -125,6 +126,16 @@ public class TransactionWithoutChannelHandler implements TransactionOperationHan
         TransactionStatus txnStatus = txnState.getTransactionStatus();
         TransactionResult result = new TransactionResult();
         switch (txnStatus) {
+            case PREPARE:
+                if (canAbortPrepareTransactionOnFE(txnState)) {
+                    LOG.info("Abort PREPARE transaction on FE, txnId: {}, label: {}", txnId, label);
+                    GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
+                            .abortTransaction(dbId, txnId, "User Aborted");
+                    result.addResultEntry(TransactionResult.TXN_ID_KEY, txnId);
+                    result.addResultEntry(TransactionResult.LABEL_KEY, label);
+                    break;
+                }
+                return null;
             case PREPARED:
                 GlobalStateMgr.getCurrentState().getGlobalTransactionMgr()
                         .abortTransaction(dbId, txnId, "User Aborted");
@@ -145,6 +156,45 @@ public class TransactionWithoutChannelHandler implements TransactionOperationHan
         }
 
         return result;
+    }
+
+    /**
+     * Check whether a PREPARE-state transaction should be aborted directly on FE
+     * rather than redirecting to the coordinator BE/CN.
+     *
+     * Returns true when the coordinator BE/CN definitely cannot hold the stream load context:
+     * 1. The coordinator node is not found (removed from the cluster).
+     * 2. The coordinator node is not alive.
+     * 3. The coordinator node restarted after the transaction was created,
+     *    so its in-memory stream load context has been lost.
+     */
+    private static boolean canAbortPrepareTransactionOnFE(TransactionState txnState) {
+        TransactionState.TxnCoordinator coordinator = txnState.getCoordinator();
+        if (coordinator == null || !TransactionState.TxnSourceType.BE.equals(coordinator.sourceType)) {
+            return true;
+        }
+        long backendId = coordinator.getBackendId();
+        if (backendId < 0) {
+            return true;
+        }
+        ComputeNode node = GlobalStateMgr.getCurrentState().getNodeMgr()
+                .getClusterInfo().getBackendOrComputeNode(backendId);
+        if (node == null) {
+            LOG.info("Coordinator node {} not found for txn {}, abort on FE",
+                    backendId, txnState.getTransactionId());
+            return true;
+        }
+        if (!node.isAlive()) {
+            LOG.info("Coordinator node {} is not alive for txn {}, abort on FE",
+                    backendId, txnState.getTransactionId());
+            return true;
+        }
+        if (node.getLastStartTime() > txnState.getPrepareTime()) {
+            LOG.info("Coordinator node {} restarted (lastStart={}) after txn {} created (prepareTime={}), abort on FE",
+                    backendId, node.getLastStartTime(), txnState.getTransactionId(), txnState.getPrepareTime());
+            return true;
+        }
+        return false;
     }
 
     private static TransactionState getTxnState(long dbId, String label) throws StarRocksException {

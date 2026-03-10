@@ -1744,6 +1744,157 @@ public class TransactionLoadActionTest extends StarRocksHttpTestCase {
     }
 
     @Test
+    public void rollbackPrepareTransactionAbortOnFEWhenCoordinatorNotFoundTest() throws Exception {
+        long txnId = RandomUtils.nextLong(1, Integer.MAX_VALUE);
+        String label = RandomStringUtils.randomAlphanumeric(32);
+        TransactionState txnState = newTxnStateWithCoordinator(txnId, label,
+                LoadJobSourceType.FRONTEND_STREAMING, TransactionStatus.PREPARE, "localhost", 9999L);
+        txnState.setPrepareTime(System.currentTimeMillis());
+        new Expectations() {
+            {
+                globalTransactionMgr.getLabelTransactionState(anyLong, anyString);
+                times = 2;
+                result = txnState;
+
+                globalTransactionMgr.abortTransaction(anyLong, anyLong, anyString);
+                times = 1;
+            }
+        };
+
+        Request request = newRequest(TransactionOperation.TXN_ROLLBACK, (uriBuilder, reqBuilder) -> {
+            reqBuilder.addHeader(DB_KEY, DB_NAME);
+            reqBuilder.addHeader(LABEL_KEY, label);
+        });
+        try (Response response = networkClient.newCall(request).execute()) {
+            Map<String, Object> body = parseResponseBody(response);
+            assertEquals(OK, body.get(TransactionResult.STATUS_KEY));
+            assertEquals(label, body.get(TransactionResult.LABEL_KEY));
+            assertEquals(txnId, Long.parseLong(Objects.toString(body.get(TransactionResult.TXN_ID_KEY))));
+        }
+    }
+
+    @Test
+    public void rollbackPrepareTransactionAbortOnFEWhenCoordinatorNotAliveTest() throws Exception {
+        long txnId = RandomUtils.nextLong(1, Integer.MAX_VALUE);
+        String label = RandomStringUtils.randomAlphanumeric(32);
+        TransactionState txnState = newTxnStateWithCoordinator(txnId, label,
+                LoadJobSourceType.FRONTEND_STREAMING, TransactionStatus.PREPARE, "localhost", 1234L);
+        txnState.setPrepareTime(System.currentTimeMillis());
+
+        ComputeNode backend = GlobalStateMgr.getCurrentState().getNodeMgr()
+                .getClusterInfo().getBackendOrComputeNode(1234L);
+        backend.setAlive(false);
+        try {
+            new Expectations() {
+                {
+                    globalTransactionMgr.getLabelTransactionState(anyLong, anyString);
+                    times = 2;
+                    result = txnState;
+
+                    globalTransactionMgr.abortTransaction(anyLong, anyLong, anyString);
+                    times = 1;
+                }
+            };
+
+            Request request = newRequest(TransactionOperation.TXN_ROLLBACK, (uriBuilder, reqBuilder) -> {
+                reqBuilder.addHeader(DB_KEY, DB_NAME);
+                reqBuilder.addHeader(LABEL_KEY, label);
+            });
+            try (Response response = networkClient.newCall(request).execute()) {
+                Map<String, Object> body = parseResponseBody(response);
+                assertEquals(OK, body.get(TransactionResult.STATUS_KEY));
+                assertEquals(label, body.get(TransactionResult.LABEL_KEY));
+                assertEquals(txnId, Long.parseLong(Objects.toString(body.get(TransactionResult.TXN_ID_KEY))));
+            }
+        } finally {
+            backend.setAlive(true);
+        }
+    }
+
+    @Test
+    public void rollbackPrepareTransactionAbortOnFEWhenCoordinatorRestartedTest() throws Exception {
+        long txnId = RandomUtils.nextLong(1, Integer.MAX_VALUE);
+        String label = RandomStringUtils.randomAlphanumeric(32);
+        long txnPrepareTime = System.currentTimeMillis() - 60_000L;
+        TransactionState txnState = newTxnStateWithCoordinator(txnId, label,
+                LoadJobSourceType.FRONTEND_STREAMING, TransactionStatus.PREPARE, "localhost", 1234L);
+        txnState.setPrepareTime(txnPrepareTime);
+
+        ComputeNode backend = GlobalStateMgr.getCurrentState().getNodeMgr()
+                .getClusterInfo().getBackendOrComputeNode(1234L);
+        long oldLastStartTime = backend.getLastStartTime();
+        backend.setLastStartTime(System.currentTimeMillis());
+        try {
+            new Expectations() {
+                {
+                    globalTransactionMgr.getLabelTransactionState(anyLong, anyString);
+                    times = 2;
+                    result = txnState;
+
+                    globalTransactionMgr.abortTransaction(anyLong, anyLong, anyString);
+                    times = 1;
+                }
+            };
+
+            Request request = newRequest(TransactionOperation.TXN_ROLLBACK, (uriBuilder, reqBuilder) -> {
+                reqBuilder.addHeader(DB_KEY, DB_NAME);
+                reqBuilder.addHeader(LABEL_KEY, label);
+            });
+            try (Response response = networkClient.newCall(request).execute()) {
+                Map<String, Object> body = parseResponseBody(response);
+                assertEquals(OK, body.get(TransactionResult.STATUS_KEY));
+                assertEquals(label, body.get(TransactionResult.LABEL_KEY));
+                assertEquals(txnId, Long.parseLong(Objects.toString(body.get(TransactionResult.TXN_ID_KEY))));
+            }
+        } finally {
+            backend.setLastStartTime(oldLastStartTime);
+        }
+    }
+
+    @Test
+    public void rollbackPrepareTransactionRedirectWhenCoordinatorAliveTest() throws Exception {
+        long txnId = RandomUtils.nextLong(1, Integer.MAX_VALUE);
+        String label = RandomStringUtils.randomAlphanumeric(32);
+        TransactionState txnState = newTxnStateWithCoordinator(txnId, label,
+                LoadJobSourceType.FRONTEND_STREAMING, TransactionStatus.PREPARE, "localhost", 1234L);
+        txnState.setPrepareTime(System.currentTimeMillis());
+
+        ComputeNode backend = GlobalStateMgr.getCurrentState().getNodeMgr()
+                .getClusterInfo().getBackendOrComputeNode(1234L);
+        backend.setLastStartTime(txnState.getPrepareTime() - 60_000L);
+        long oldLastStartTime = backend.getLastStartTime();
+        try {
+            new Expectations() {
+                {
+                    globalTransactionMgr.getLabelTransactionState(anyLong, anyString);
+                    times = 1;
+                    result = txnState;
+                }
+            };
+
+            setField(TransactionLoadAction.getAction(), "coordinatorMgr", new TransactionLoadCoordinatorMgr() {
+                private static final long serialVersionUID = 1L;
+
+                {
+                    put(label, 1234L);
+                }
+            });
+
+            Request request = newRequest(TransactionOperation.TXN_ROLLBACK, (uriBuilder, reqBuilder) -> {
+                reqBuilder.addHeader(DB_KEY, DB_NAME);
+                reqBuilder.addHeader(LABEL_KEY, label);
+            });
+            try (Response response = networkClient.newCall(request).execute()) {
+                Map<String, Object> body = parseResponseBody(response);
+                assertEquals(OK, body.get(TransactionResult.STATUS_KEY));
+                assertTrue(Objects.toString(body.get(TransactionResult.MESSAGE_KEY)).contains("mock redirect to BE"));
+            }
+        } finally {
+            backend.setLastStartTime(oldLastStartTime);
+        }
+    }
+
+    @Test
     public void rollbackTransactionForBypassWriteTest() throws Exception {
         {
             long txnId = RandomUtils.nextLong(1, Integer.MAX_VALUE);
