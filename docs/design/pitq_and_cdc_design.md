@@ -945,6 +945,22 @@ WHERE dup_cnt = 1   -- 只保留不重复的行，即真正的变更
 - **动态查询方式**：从 tablet metadata 收集（删除行数、新增行数、文件数等）
 - **导入结果附带方式**：在 FE 缓存，可先不持久化
 
+### 6.8 小结
+
+CDC 方案围绕"FE 确定读什么、CN 执行怎么读"的两阶段链路展开，核心设计选择与权衡如下：
+
+| 维度 | 设计选择 | 说明 |
+|:-----|:---------|:-----|
+| **数据格式** | 数据列 + 三个元数据列（CHANGE_TYPE / ROW_ID / ROW_VERSION） | 依赖存储层 Row Tracking 能力，支撑 Update 语义区分和 Net Changes 合并 |
+| **FE 侧** | 逐分区比较 old/new 两个 TableState 的 visible version，推导每个 tablet 的版本区间 | 利用 visible version 连续递增的性质，不需要中间版本的 Meta；Tablet Reshard 场景下发多组版本区间 |
+| **CN 侧——明细表/聚合表** | 直接读取 delta rowset，所有行标记为 INSERT | 实现简单，需回溯历史 tablet metadata 跳过 compaction rowset |
+| **CN 侧——主键表** | Changes Vector 方案（导入时记录三个轻量 bitmap） | 在导入性能、操作类型区分能力和查询效率之间取得平衡；优于 Changelog（导入开销大）和 Delete Vector Diff（无法区分 DELETE/UPDATE） |
+| **Net Changes** | 存储层 XOR 快筛 + 计算层窗口函数兜底 | 存储层以极低成本减少大部分数据量；计算层利用表按 ROW_ID 分桶的特性本地执行，保证无论是否发生 compaction 结果都正确 |
+| **小文件优化** | Snapshot Diff（两版本全量快照做集合差） | 适用于高频导入 + 长 CDC 窗口 + 充分 compaction 的场景，与标准路径互补；通过 `(row_id, row_version)` 去重消除 carry-over row |
+| **并行能力** | Tablet 间、Segment 文件间、Segment 内部三级并行 | Changes Vector 的 bitmap 结构天然支持按行范围切分，无需全局协调 |
+| **用户接口** | 先支持 CHANGES 语法，STREAM 对象和 SDK/RPC 后续按需支持 | CHANGES 是所有消费方式的基础；IVM 通过 Java API 直接构建 Plan |
+| **能力边界** | 受限于短期 MVCC，仅覆盖 DML；Update 语义和 Net Changes 通过参数配置 | CDC 引擎本身按通用能力设计，不针对 IVM 做特殊裁剪；MVCC 扩展后能力自然扩展 |
+
 ---
 
 ## 7. 分阶段 Roadmap
