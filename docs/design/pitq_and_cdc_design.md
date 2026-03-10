@@ -1,8 +1,4 @@
-# [DISCUSSION] 存算分离内表历史版本查询与变更数据捕获
-
-> **文档状态**：讨论稿，面向跨团队方向收敛  
-> **目标读者**：存储、元数据、查询、MV、架构、产品等团队  
-> **约定**：文中以 `[已定]` `[待讨论]` `[暂不展开]` 标注内容状态
+[Proposal] Point-in-time Query and Change Data Capture
 
 ---
 
@@ -228,10 +224,10 @@ PITQ 需要"读取表的某个历史版本"，CDC 需要"比较两个版本之�
 
 **差距**：
 - 三套清理机制覆盖不同的场景，都缺少按“Table Version”保留的语义
-- Retention 时间段，假设假设 FE 内存能存放所有历史元数据（包括 StarManager）
+- 假设 FE 内存能存放所有历史元数据（包括 StarManager），如果 Retention 时间长，并且 DML/DDL 频率高，内存压力大 (**重要**)
 - 均是 FE 级别的 Retention 配置，没有表级配置
 
-### 4.3 长期方案：完整的表级 MVCC
+### 4.3 长期方案：完整的表级 MVCC (Time Travel)
 
 为支持任意历史版本、支持更多 DDL、天级别甚至更长的 retention 等能力，需要补齐完整的表级 MVCC 能力。主要挑战：
 
