@@ -525,9 +525,9 @@ CDC 窗口 (5, 8]，S0 被三个版本引用：
            → 再按原始 vector 拆分：A → v6 UPDATE_BEFORE, C → v7 DELETE, D → v8 UPDATE_BEFORE
 ```
 
-#### 6.6.3 Net Changes
+##### 6.6.2.3 Net Changes
 
-##### 动机
+###### 动机
 
 对于主键表，当 CDC 窗口覆盖多个版本时，同一行可能有多条变更。Net Changes 将同一 `row_id` 下的多条变更合并为最小等价变更，减少下游处理量。
 
@@ -543,7 +543,7 @@ Net Changes 合并后:
   IVM: 2 次 MV 更新，结果等价
 ```
 
-##### 合并规则
+###### 合并规则
 
 对每个 `row_id`，根据 `row_version` 确定最早变更类型（first_type）和最晚变更类型（last_type），然后按规则合并。变更类型编码：`0` = INSERT，`1` = DELETE，`2` = UPDATE_BEFORE，`3` = UPDATE_AFTER。
 
@@ -560,7 +560,7 @@ Net Changes 合并后:
 
 > 规则 4 和 5 中，输出记录的 `row_version` 统一使用 `max_ver`，确保配对的 UPDATE_BEFORE / UPDATE_AFTER 具有相同版本。
 
-##### 两层实现架构
+###### 两层实现架构
 
 Net Changes 的实现分为两层——存储层做廉价快筛，计算层做精确兜底：
 
@@ -572,7 +572,7 @@ Net Changes 的实现分为两层——存储层做廉价快筛，计算层做�
 
 > 完整的三次导入推演（覆盖全部 4 种 change type、含 compaction 对比）详见附录 F。SQL 实现见附录 C。
 
-#### 6.6.4 Snapshot Diff
+#### 6.6.3 Snapshot Diff
 
 Snapshot Diff 是与 Delta Replay 互补的中期路径，适用于高频导入 + 长 CDC 窗口的场景。
 
@@ -618,7 +618,7 @@ LEFT ANTI JOIN TableChangesScan(side='old') o
 | **前提条件** | 只需 Net Changes、Update 使用 DELETE + INSERT 模式（适合 IVM） |
 | **compaction 要求** | old 和 new 版本都需经过充分 compaction 才能发挥效果 |
 
-#### 6.6.5 并行 Scan
+#### 6.6.4 并行 Scan
 
 CDC scan 在三个层面支持并行，前述多项设计选择为此提供了基础：
 
@@ -789,7 +789,7 @@ CDC 方案围绕"FE 确定读什么、CN 执行怎么读"的两阶段链路展�
 
 ### 附录 C：Net Changes 示例与 SQL 实现
 
-> 以下 SQL 是用于说明 Net Changes 合并逻辑的概念性示意，不是最终执行实现。合并规则定义见 6.6.3。
+> 以下 SQL 是用于说明 Net Changes 合并逻辑的概念性示意，不是最终执行实现。合并规则定义见 6.6.2.3。
 
 #### 示例
 
@@ -1065,7 +1065,7 @@ Redis 操作 1 次 DEL + 1 次 SET。DEL 和 SET 之间存在时间窗口，`ord
 
 ### 附录 F：Net Changes 两层过滤完整推演
 
-> 本附录通过一个覆盖全部 4 种 change type、跨 3 次导入的例子，演示存储层 XOR + 计算层窗口函数的完整过滤流程。合并规则定义见 6.6.3。
+> 本附录通过一个覆盖全部 4 种 change type、跨 3 次导入的例子，演示存储层 XOR + 计算层窗口函数的完整过滤流程。合并规则定义见 6.6.2.3。
 
 **初始状态**：S0 是已有 segment，包含行 {A, B}。
 
