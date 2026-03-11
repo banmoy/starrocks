@@ -869,11 +869,18 @@ CDC scan 在三个层面支持并行，前述多项设计选择为此提供了�
           逐个读取 3,600 个小文件，生成 changes，再做 Net Changes
 
 Snapshot Diff 路径:
-  old snapshot
-       ↕ diff
-  new snapshot (compacted, 少量大文件)
-  → 直接产出 Net Changes
+  old snapshot: {S1, S2, S3}        ← compaction 前的文件集合
+  new snapshot: {S2, S3, S_merged}  ← compaction 后的文件集合
+                                       S_merged 合并了 S1 + delta 文件
+
+  文件级 diff:
+    共有文件 {S2, S3} → 跳过（内容完全一样，无需读取）
+    old-only: {S1}       → 扫描，标记为 DELETE 侧
+    new-only: {S_merged} → 扫描，标记为 INSERT 侧
+  → 只读 old-only + new-only 文件，直接产出 Net Changes
 ```
+
+相比标准路径，IO 效率提升来自两点：（1）**文件打开次数**从数千个 delta 小文件降为少量 compaction 后的大文件，大幅减少文件打开和元数据解析的固定开销；（2）**共有文件直接跳过**，只读两个快照之间真正不同的文件，有效 IO 量与实际变更量成正比而非与导入次数成正比。
 
 **前提条件**：只需 Net Changes、Update 使用 DELETE + INSERT 模式（适合 IVM 场景）。
 
@@ -894,16 +901,24 @@ Snapshot diff 会产生**假变更**——某些行在 old 和 new 中完全一�
   实际上 X 没有任何变化，这就是 carry-over row
 ```
 
-**解决方式**：在计算层通过 `(row_id, row_version)` 去重。同一 `row_id` 若在 old 和 new 中 `row_version` 相同，说明该行未变化，过滤掉：
+**解决方式**：引入新的 `TableChangesScanNode`，CN 侧在执行时根据 tablet 的 old/new 两个版本的元数据，自行计算出两组不相交的文件列表（old-only files 和 new-only files）。该节点通过 `side` 参数（`'old'` 或 `'new'`）指定扫描哪一侧的文件，`side='old'` 扫描 old-only 文件产出 DELETE 候选行，`side='new'` 扫描 new-only 文件产出 INSERT 候选行。Plan 中实例化两个 `TableChangesScanNode`（side 不同），利用计算层已有的 anti-join 消除 carry-over row——同一 `(row_id, row_version)` 在两侧都出现，说明该行未变化，anti-join 天然将其排除：
 
 ```sql
 -- carry-over row 过滤（概念性 SQL）
-SELECT * FROM (
-    SELECT *, COUNT(*) OVER (PARTITION BY row_id, row_version) AS dup_cnt
-    FROM snapshot_diff
-)
-WHERE dup_cnt = 1   -- 只保留不重复的行，即真正的变更
+-- old 侧独有的行 → 真正的 DELETE
+SELECT 'DELETE' AS change_type, o.*
+FROM TableChangesScan(side='old') o
+LEFT ANTI JOIN TableChangesScan(side='new') n
+  ON o.row_id = n.row_id AND o.row_version = n.row_version
+UNION ALL
+-- new 侧独有的行 → 真正的 INSERT
+SELECT 'INSERT' AS change_type, n.*
+FROM TableChangesScan(side='new') n
+LEFT ANTI JOIN TableChangesScan(side='old') o
+  ON n.row_id = o.row_id AND n.row_version = o.row_version
 ```
+
+表按 `ROW_ID` 分桶，anti-join key 包含 `row_id`，可走 colocated join，每个 bucket 本地执行，零 shuffle。执行层可进一步将双 anti-join 融合为单遍 symmetric diff（build 一侧 hash table，probe 另一侧，emit 两侧 unmatched 行）。
 
 ##### 适用范围与局限
 
