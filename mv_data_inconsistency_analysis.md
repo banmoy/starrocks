@@ -17,91 +17,121 @@
 | job_id | `293714987` |
 | 来源 | `PartitionBasedMvRefreshProcessor.refreshMaterializedView()` → `InsertOverwriteJobRunner` |
 
-## 2. 从代码和堆栈实锤：INSERT OVERWRITE 本身不会导致数据丢失
+## 2. 纯靠日志 100% 排除 INSERT OVERWRITE
 
-### 2.1 堆栈精确定位失败点
+INSERT OVERWRITE 的整个生命周期中，每个关键步骤都有**唯一对应的日志行**。通过检查这些日志行是否存在，可以 100% 判定 INSERT OVERWRITE 的执行走到了哪一步、是否触碰了源分区。
 
-从异常堆栈可以精确还原调用链：
+### 2.1 INSERT OVERWRITE 完整日志指纹图
 
-```
-run() [line 143]
-  → handle() [line 155, state=PENDING]
-    → prepare() [line 277]
-      → transferTo(RUNNING) [line 224]
-        → handle() [line 158, state=RUNNING]
-          → doLoad() [line 174]
-            → createTempPartitions() [line 176]  ✅ 成功
-            → prepareInsert() [line 177]         ✅ 成功
-            → executeInsert() [line 178]         ❌ 在这里抛出 DdlException
-            → doCommit() [line 179]              ❌ 从未执行（关键！）
-```
-
-`executeInsert()` 内部调用 `stmtExecutor.handleDMLStmt()` (line 409)，而 `handleDMLStmt` 在 `coord.getExecStatus()` 不 OK 时抛出了 `DdlException`（line 2700-2701），错误信息就是 S3 503。
-
-### 2.2 失败后的 GC 路径
-
-`executeInsert()` 抛异常后，控制流是：
+下面是 INSERT OVERWRITE **每个代码路径**对应的唯一日志行（按执行时序排列）：
 
 ```
-doLoad() 抛出 → handle() 抛出 → transferTo() 抛出 → prepare() 抛出
-→ handle() 抛出 → run() 捕获异常
-→ run() 调用 transferTo(OVERWRITE_FAILED)
-  → handle() [state=FAILED] → gc(false)
+阶段               日志关键字                                         代码位置                           含义
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+[1] 创建 Job       "logCreateInsertOverwrite"                        StmtExecutor.java:2447             editlog 记录（FE 内部，不一定在 fe.log 中出现）
+[2] prepare        "dynamic overwrite job {id} begin transaction"    InsertOverwriteJobRunner.java:266  仅 dynamic overwrite 才有
+[3] executeInsert  "insert failed: {errMsg}"                         StmtExecutor.java:2700             ← INSERT 写数据失败才有此行
+[4] executeInsert  "insert overwrite failed. error message:{}"       InsertOverwriteJobRunner.java:413  ← INSERT 写数据失败且 state=ERR 才有
+[5] doCommit ★     "overwrite job {id} replace source partitions"    InsertOverwriteJobRunner.java:646  ← 只有 doCommit 被调用才有！
+[6] doCommit ★     "dynamic overwrite job {id} replace"              InsertOverwriteJobRunner.java:700  ← 仅 dynamic overwrite + doCommit
+[7] gc             "insert overwrite job {id} start to garbage collect" InsertOverwriteJobRunner.java:437 ← 只有失败走 gc 路径才有
+[8] gc             "drop temp partition:{pid}"                       InsertOverwriteJobRunner.java:460  ← gc 清理临时分区
+[9] 最终状态        "insert overwrite job:{id} failed"                InsertOverwriteJobRunner.java:162  ← 失败
+[10] 最终状态       "insert overwrite job:{id} succeed"               InsertOverwriteJobRunner.java:166  ← 成功
+[11] 事务 abort    "successfully rollback"                           DatabaseTransactionMgr.java:636    ← 事务回滚
+[12] DML 失败       "failed to handle stmt [insert overwrite ...]"   StmtExecutor.java:2890             ← handleDMLStmt 的 catch 块
 ```
 
-`gc(false)` 的逻辑（InsertOverwriteJobRunner.java line 436-496）：
+### 2.2 日志判定逻辑：只需 3 条 grep
 
-```java
-// gc() 只做两件事：
-// 1. 清理临时分区（tmpPartitionIds）
-for (long pid : job.getTmpPartitionIds()) {
-    targetTable.dropTempPartition(partition.getName(), true);  // 只 drop 临时分区
-}
-// 2. 写 OVERWRITE_FAILED 日志
-GlobalStateMgr.getCurrentState().getEditLog().logInsertOverwriteStateChange(info);
-```
+拿到 FE 日志后，用 job_id `293714987` 过滤，**只需检查 3 个条件**：
 
-**gc() 从不操作源分区（source partitions）。** 源分区的 drop 只发生在 `doCommit()` 里的 `replaceTempPartitions()` / `replacePartition()` 中，而 `doCommit()` 从未被执行。
-
-### 2.3 结论：INSERT OVERWRITE 机制可以被排除
-
-| 判断依据 | 说明 |
-|----------|------|
-| 堆栈证明 `doCommit()` 未执行 | 异常在 `executeInsert()` 抛出，`doCommit()` 是 `doLoad()` 中的下一行，从未到达 |
-| `gc()` 只清理临时分区 | 源码明确只调用 `dropTempPartition()`，不碰源分区 |
-| 事务状态为 ABORTED | 日志中 `TransactionState` 状态为 ABORTED，确认没有 commit |
-| `doCommit()` 中的 `replaceTempPartitions()` | 这是唯一会 drop 源分区的地方，但它在 `doCommit()` 内部，没有被调用 |
-
-**实锤：INSERT OVERWRITE 的临时分区交换机制没有被触发，不可能是 INSERT OVERWRITE 操作本身导致数据变为 0。**
-
-### 2.4 在日志中验证的方法
-
-如果要在 FE 日志中进一步实锤，可以搜索以下关键日志行：
+#### 条件 A：doCommit 是否被调用过（判断分区交换是否发生）
 
 ```bash
-# 如果 doCommit 被调用了，一定会打印这行日志（line 646）：
-grep "overwrite job .* replace source partitions" fe.log
-
-# 如果 gc 被调用了（说明是失败路径），会打印：
-grep "insert overwrite job .* start to garbage collect" fe.log
-
-# 如果找到了 gc 日志但没找到 replace 日志，实锤 doCommit 没被执行
+grep "293714987" fe.log | grep "replace source partitions"
 ```
 
-针对这个具体的 job_id=293714987：
+- **找到了** → doCommit 执行了，分区交换发生了，INSERT OVERWRITE 可能是原因
+- **没找到** → doCommit 从未执行，**INSERT OVERWRITE 的分区交换 100% 没发生**
+
+> 原理：`doCommit()` 在执行分区替换之前，**必定**先打印 line 646 的日志：
+> ```java
+> LOG.info("overwrite job {} replace source partitions:{} to tmp partitions:{}", job.getJobId(), ...);
+> ```
+> 这行日志在 `replaceTempPartitions()` / `replacePartition()` / `replaceMatchPartitions()` 之前，
+> 没有这行日志 = `replaceTempPartitions()` 不可能被调用 = 源分区不可能被 drop。
+
+#### 条件 B：gc 是否被调用（确认走了失败路径）
 
 ```bash
-# 搜索该 job 的所有日志
-grep "293714987" fe.log
-
-# 预期能找到：
-# 1. "insert overwrite job 293714987 start to garbage collect"   ← gc 被调用
-# 2. "insert overwrite job:293714987 failed"                      ← 状态转为 FAILED
-# 预期找不到：
-# 1. "overwrite job 293714987 replace source partitions"          ← 说明 doCommit 没执行
+grep "293714987" fe.log | grep "start to garbage collect"
 ```
 
-## 3. 真正导致 MV 行数为 0 的嫌疑：Force Refresh
+- **找到了** → 确认走了 gc 路径（gc 只清理临时分区，从不碰源分区）
+- **没找到** → 异常（需要进一步排查）
+
+#### 条件 C：最终状态确认
+
+```bash
+grep "293714987" fe.log | grep -E "job.*failed|job.*succeed"
+```
+
+- 找到 `"failed"` → 确认 INSERT OVERWRITE 以失败结束
+- 找到 `"succeed"` → INSERT OVERWRITE 成功了（如果数据还是 0，说明是上游数据为空或其他原因）
+
+### 2.3 100% 排除的判定标准
+
+**当且仅当以下 3 个条件全部成立，可以 100% 排除 INSERT OVERWRITE 导致 MV 数据丢失**：
+
+| 条件 | grep 命令 | 预期结果 |
+|------|-----------|----------|
+| ① doCommit 未执行 | `grep "293714987" fe.log \| grep "replace source partitions"` | **无匹配** |
+| ② gc 已执行 | `grep "293714987" fe.log \| grep "start to garbage collect"` | **有匹配** |
+| ③ 最终状态为 failed | `grep "293714987" fe.log \| grep "job.*failed"` | **有匹配** |
+
+**三条都满足 → 实锤排除 INSERT OVERWRITE。** 逻辑闭环：
+- ① 证明分区交换从未发生 → 源分区的 drop（在 `replaceTempPartitions()` 内部）不可能被执行
+- ② 证明走了失败路径 → gc 只清理临时分区（`dropTempPartition`），源码中没有任何操作源分区的代码
+- ③ 确认 job 以失败结束 → 没有后续的 doCommit 被延迟执行的可能
+
+### 2.4 补充验证：从已有日志直接确认
+
+实际上，你给出的日志**已经包含了部分实锤信息**：
+
+**证据 1：事务 ABORTED（已有）**
+```
+transaction status: ABORTED, error replicas num: 0
+```
+事务 ABORTED = 数据没有 commit = 临时分区中的数据不会生效。
+
+**证据 2：`handleDMLStmt` 抛异常（已有）**
+```
+[StmtExecutor.handleDMLStmt():2729] insert failed: 172.31.175.175: starlet err ...
+```
+这是 `handleDMLStmt` 中 `coord.getExecStatus()` 不 OK 时打印的（line 2700），此时 `executeInsert()` 还没返回。
+
+**证据 3：`failed to handle stmt`（已有）**
+```
+[StmtExecutor.handleDMLStmt():2919] failed to handle stmt [insert overwrite ...]
+```
+这是 `handleDMLStmt` 的 catch 块（line 2890），说明整个 DML 执行异常退出。
+
+**还缺的关键一条**：需要确认 `"overwrite job 293714987 replace source partitions"` 不存在。这条日志是唯一能打印在 "分区替换" 之前的日志，只有找不到它，才能 100% 排除。
+
+### 2.5 如果 doCommit 确实执行了呢？（逆向分析）
+
+假设 grep 找到了 `"replace source partitions"`，说明 doCommit 被调用了。这意味着：
+1. `executeInsert()` 实际上成功了（尽管之前报错）
+2. 进入了 `doCommit()` → `replaceTempPartitions()` / `replacePartition()`
+3. 在 `replaceTempPartitions()` 中，先 drop 了源分区（line 3003-3006），再 add 临时分区（line 3010-3018）
+4. 如果在两步之间发生异常（极端情况），可能导致数据丢失
+
+但这种情况**和给出的日志矛盾**——日志明确显示事务 ABORTED，而 doCommit 需要事务已 commit 的数据才有意义。所以这种可能性可以提前排除。
+
+## 3. 真正嫌疑：在 INSERT OVERWRITE 之外发生的分区 Drop
+
+INSERT OVERWRITE 被排除后，MV 数据归零只可能发生在 INSERT OVERWRITE **之前**或**之外**。
 
 ### 3.1 Force Refresh 的破坏性流程
 
@@ -119,143 +149,105 @@ if (mvRefreshParams.isForce() && !tentative) {
         }
     }
 }
-// ② 之后才执行 syncAddOrDropPartitions → INSERT OVERWRITE
+// ② 之后才执行 syncAddOrDropPartitions → refreshMaterializedView → INSERT OVERWRITE
 // 如果 INSERT OVERWRITE 失败，MV 就是空的
 ```
 
-**关键时序**：
+**关键：这个 drop 操作不在 INSERT OVERWRITE 的 Job 管理范围内，不受临时分区机制保护。**
 
-```
-Force Refresh 路径：
-  syncPartitions()
-    → drop 现有分区           ← MV 数据变为 0（此操作不可回滚！）
-    → 重建空分区
-  refreshMaterializedView()
-    → INSERT OVERWRITE        ← 如果这步失败，MV 就永远是 0 行
-      → 创建临时分区
-      → 写入数据到临时分区     ← S3 503 在这里发生
-      → 交换分区               ← 未到达
-```
-
-### 3.2 非 Force Refresh 的安全流程
-
-```
-普通 Refresh 路径：
-  syncPartitions()
-    → 同步分区（不 drop 现有数据）
-  refreshMaterializedView()
-    → INSERT OVERWRITE
-      → 创建临时分区
-      → 写入数据到临时分区     ← 如果这步失败
-      → gc() 只清理临时分区    ← 源数据不受影响
-```
-
-### 3.3 如何实锤是否是 Force Refresh
-
-**方法 1：查询 task_runs 表（最直接）**
-
-```sql
--- 获取 MV 的 ID
-SELECT TABLE_ID FROM information_schema.materialized_views
-WHERE TABLE_NAME = 'ta_source_activity_log_employee_mv';
-
--- 查看 3 月 9 日前后的所有刷新任务（替换 <mv_id>）
-SELECT
-    TASK_NAME,
-    CREATE_TIME,
-    FINISH_TIME,
-    STATE,
-    ERROR_MESSAGE,
-    get_json_string(EXTRA_MESSAGE, '$.forceRefresh') AS is_force_refresh,
-    get_json_string(EXTRA_MESSAGE, '$.refreshMode') AS refresh_mode,
-    get_json_string(EXTRA_MESSAGE, '$.mvPartitionsToRefresh') AS mv_partitions
-FROM information_schema.task_runs
-WHERE TASK_NAME = 'mv-<mv_id>'
-  AND CREATE_TIME >= '2026-03-09 00:00:00'
-ORDER BY CREATE_TIME DESC
-LIMIT 50;
-```
-
-**如果 `is_force_refresh = true` 且 `STATE = FAILED`，就是实锤。**
-
-**方法 2：搜索 FE 日志（更直接）**
+### 3.2 Force Refresh 的日志指纹
 
 ```bash
-# 搜索 force refresh 的 drop 日志
-grep "force refresh, drop partitions" fe.log | grep "ta_source_activity_log_employee_mv"
-
-# 如果找到了，时间在 3 月 9 日附近，说明确实做了 force refresh 并 drop 了分区
+# Force refresh 的唯一日志（line 990）
+grep "force refresh, drop partitions" fe.log
 ```
+
+如果在 MV 数据归零的时间窗口内找到了这条日志，结合 INSERT OVERWRITE 失败，就可以 100% 确认根因。
+
+### 3.3 排查决策树
+
+```
+Step 1: grep "293714987" fe.log | grep "replace source partitions"
+        ├── 找到 → INSERT OVERWRITE 的 doCommit 执行了（但和 ABORTED 事务矛盾，需深入分析）
+        └── 没找到 → INSERT OVERWRITE 100% 排除
+            │
+            Step 2: grep "force refresh, drop partitions" fe.log  (时间范围过滤)
+            ├── 找到 → Force Refresh drop 了分区 + INSERT 失败 → 根因确认
+            └── 没找到 → Step 3: 检查其他可能
+                ├── grep "DROP MATERIALIZED VIEW\|TRUNCATE\|ALTER.*DROP PARTITION" fe.audit.log
+                ├── 查 information_schema.task_runs 的刷新历史
+                └── 查 MV 是否 inactive
+```
+
+### 3.4 完整的一键排查脚本
 
 ```bash
-# 搜索这个 MV 相关的 INSERT OVERWRITE 失败
-grep "ta_source_activity_log_employee_mv" fe.log | grep -E "failed|FAILED|error|ABORTED"
+#!/bin/bash
+# 用法: ./check_mv_issue.sh <fe.log路径> <job_id>
+# 示例: ./check_mv_issue.sh /path/to/fe.log 293714987
+
+LOG_FILE=$1
+JOB_ID=$2
+
+echo "====== 1. 检查 INSERT OVERWRITE doCommit 是否执行（分区交换） ======"
+result=$(grep "$JOB_ID" "$LOG_FILE" | grep "replace source partitions")
+if [ -z "$result" ]; then
+    echo "[PASS] doCommit 未执行。INSERT OVERWRITE 的分区交换没有发生。"
+    echo "       → INSERT OVERWRITE 100% 排除为数据丢失原因。"
+else
+    echo "[ALERT] doCommit 被执行了！需要进一步分析："
+    echo "$result"
+fi
+
+echo ""
+echo "====== 2. 检查 gc 是否执行（确认走了失败路径） ======"
+result=$(grep "$JOB_ID" "$LOG_FILE" | grep "start to garbage collect")
+if [ -n "$result" ]; then
+    echo "[PASS] gc 已执行，INSERT OVERWRITE 走了失败清理路径。"
+    echo "$result"
+else
+    echo "[WARN] 未找到 gc 日志，需要检查 job 是否正常结束。"
+fi
+
+echo ""
+echo "====== 3. 检查 INSERT OVERWRITE 最终状态 ======"
+grep "$JOB_ID" "$LOG_FILE" | grep -E "job.*failed|job.*succeed"
+
+echo ""
+echo "====== 4. 检查事务状态 ======"
+grep "$JOB_ID" "$LOG_FILE" | grep -E "ABORTED|successfully rollback|COMMITTED|VISIBLE"
+
+echo ""
+echo "====== 5. 检查是否有 Force Refresh（真正嫌疑） ======"
+echo "--- 搜索 force refresh drop 日志 ---"
+grep "force refresh, drop partitions" "$LOG_FILE" | tail -20
+
+echo ""
+echo "====== 6. 搜索该 Job 的所有日志（完整时间线） ======"
+grep "$JOB_ID" "$LOG_FILE" | head -50
 ```
 
-**方法 3：确认 MV 是否为非分区表**
-
-```sql
-SHOW CREATE MATERIALIZED VIEW ta_source_activity_log_employee_mv;
-```
-
-从日志中的 SQL 来看，SELECT 语句没有涉及分区键：
-```sql
-INSERT OVERWRITE `ta_source_activity_log_employee_mv`
-SELECT ... FROM `analytics`.`employee`
-```
-这极可能是**非分区 MV**。对于非分区 MV，force refresh 会 drop 唯一的分区并重建空的，效果就是**全部数据归零**。
-
-**方法 4：检查 audit log（如果开启了）**
-
-```sql
--- 查看是否有人手动执行了 FORCE REFRESH
-SELECT * FROM starrocks_audit_db__.starrocks_audit_tbl__
-WHERE stmt LIKE '%REFRESH%ta_source_activity_log_employee_mv%'
-  AND event_time >= '2026-03-08'
-ORDER BY event_time;
-```
-
-## 4. 排查决策树（实锤流程）
-
-```
-Q1: task_runs 中是否有 forceRefresh=true 且 STATE=FAILED 的记录？
-    ├── 是 → 实锤是 Force Refresh + INSERT 失败导致
-    │         验证：FE 日志搜 "force refresh, drop partitions"
-    │         结论：Force Refresh 先清空分区，INSERT 失败后数据无法恢复
-    │
-    └── 否 → Q2: task_runs 中最后一次 STATE=SUCCESS 的时间？
-              ├── 很久之前 → Q3: MV 是否 active？
-              │   ├── inactive → MV 可能因 schema 变更失活，数据过期被清理
-              │   └── active → 检查是否有其他操作（DDL、TRUNCATE 等）
-              │
-              └── 最近有成功 → Q4: 最后成功的刷新查询计划中是否数据源为空？
-                    ├── 是 → 问题在上游 employee 表数据
-                    └── 否 → 需要更深层排查（FE 元数据损坏等）
-```
-
-## 5. 针对 doCommit() 非原子性的额外排除
+## 4. 针对 doCommit() 非原子性的额外排除
 
 有人可能怀疑 `replaceTempPartitions()` 的非原子性（先 drop 旧分区、再 add 新分区）导致问题。但可以排除：
 
 | 排除理由 | 说明 |
 |----------|------|
-| `doCommit()` 未被调用 | 堆栈明确显示异常在 `executeInsert()`，`doCommit()` 是下一行 |
+| `doCommit()` 未被调用 | 日志中不存在 `"replace source partitions"` 即可 100% 确认 |
 | 在写锁内执行 | `doCommit()` 获取了 TABLE WRITE LOCK，两步操作在同一个锁内，不会被并发打断 |
 | 纯内存操作 | `replaceTempPartitions()` 是 FE 内存中的 metadata 操作，不涉及 I/O，不会因 S3 异常中断 |
 | 只有 JVM crash 才可能打断 | 在 drop 旧分区和 add 新分区之间，只有 FE 进程 crash 才能中断，但这会触发 editlog replay 恢复 |
 
-**结论：`doCommit()` 中的分区交换不是这次问题的原因。**
-
-## 6. 需要确认的信息汇总
+## 5. 需要确认的信息汇总
 
 | 优先级 | 确认项 | 操作 | 目的 |
 |--------|--------|------|------|
-| **P0** | task_runs 中的 forceRefresh 字段 | 查 `information_schema.task_runs`（见上方 SQL） | **实锤是否 force refresh** |
-| **P0** | FE 日志中的 "force refresh, drop partitions" | grep FE 日志 | **实锤 drop 分区操作是否发生** |
+| **P0** | `"replace source partitions"` 是否存在 | `grep "293714987" fe.log \| grep "replace source partitions"` | **100% 判定 doCommit 是否执行** |
+| **P0** | `"start to garbage collect"` 是否存在 | `grep "293714987" fe.log \| grep "start to garbage collect"` | **确认走了失败清理路径** |
+| **P0** | `"force refresh, drop partitions"` 是否存在 | `grep "force refresh, drop partitions" fe.log` | **确认是否 Force Refresh drop 了分区** |
 | **P1** | MV DDL（是否为非分区表） | `SHOW CREATE MATERIALIZED VIEW` | 确认 force refresh 的影响范围 |
-| **P1** | MV 当前状态 | `SHOW MATERIALIZED VIEWS LIKE '...'` | 确认 is_active、last_refresh_state |
+| **P1** | task_runs 中的 forceRefresh 字段 | 查 `information_schema.task_runs` | 从元数据侧确认 |
 | **P2** | audit log 中是否有手动 FORCE REFRESH | 查 audit 表 | 确认触发方式 |
-| **P2** | S3 限流时间段的其他 load 任务 | 查 `information_schema.loads` | 确认 S3 限流根因 |
 
 ## 7. 修复建议
 
