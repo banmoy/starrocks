@@ -8,9 +8,53 @@
 
 ---
 
+## 根因定论
+
+**已通过 tcpdump 抓包确认根因。**
+
+### 现象
+
+同一集群的两台 BE 节点行为不同：
+
+| | BE 节点 1（有问题） | BE 节点 2（正常） |
+|---|---|---|
+| PUT `/latest/api/token` | **无**（完全跳过） | 有，返回 200 OK |
+| GET 请求带 `x-aws-ec2-metadata-token` | **否** | 是 |
+| IMDS 版本 | **IMDSv1** | IMDSv2 |
+| User-Agent | `aws-sdk-cpp/1.11.267` | `aws-sdk-cpp/1.11.267` |
+| 内核版本 | 6.8.0-1040-aws | 6.8.0-1036-aws |
+
+同一台有问题的机器上，另一个 Go 程序（`aws-sdk-go/1.55.5`）正常使用 IMDSv2。
+
+### 根因
+
+AWS C++ SDK 1.11.267 的 `EC2MetadataClient` 中有一个 `m_tokenRequired` 状态标志：
+
+- 初始值为 `true`（首次尝试 IMDSv2）
+- 如果 IMDSv2 的 PUT `/latest/api/token` 请求失败（超时/非200），SDK 将 `m_tokenRequired` 设为 `false`
+- **此后该 EC2MetadataClient 实例的所有请求永久走 IMDSv1，不再尝试 IMDSv2**
+
+问题 BE 节点在启动时（或首次凭证获取时），IMDSv2 PUT 请求失败（可能因 IMDS 限流或 1 秒超时不够），导致整个 BE 生命周期内都回退到 IMDSv1。正常 BE 节点启动时 PUT 成功，所以一直走 IMDSv2。
+
+这是非确定性问题，取决于 BE 启动那一瞬间 IMDS 是否能在 1 秒内响应 PUT 请求。
+
+---
+
+## SDK 版本信息
+
+| 组件 | SDK | 版本 | IMDSv2 支持 |
+|------|-----|------|------------|
+| **BE** | AWS C++ SDK | 1.11.267 (2024-02-16) | 支持，但有回退问题 |
+| **FE** | AWS Java SDK v2 | 2.29.52 | 完整支持 |
+| **FE** | Hadoop (hadoop-aws) | 3.4.1 | 通过 SDK v2 支持 |
+
+所有版本都满足 AWS IMDSv2 的最低版本要求，SDK 版本本身不是问题。
+
+---
+
 ## 无 Broker 模式的整体架构
 
-无 Broker 模式下，一次 Broker Load 涉及 **FE 和 BE 两个组件分别与 AWS 交互**：
+无 Broker 模式下（`WITH BROKER` 后不指定名称），一次 Broker Load 涉及 **FE 和 BE 两个组件分别与 AWS 交互**：
 
 ```
 SQL: LOAD LABEL db.label (DATA INFILE ("s3://bucket/path") INTO TABLE t)
@@ -31,351 +75,278 @@ SQL: LOAD LABEL db.label (DATA INFILE ("s3://bucket/path") INTO TABLE t)
 
 ## 第一部分：FE 与 AWS 的交互
 
-### 1.1 触发时机
+### 触发时机
 
-FE 在 **Pending 阶段**需要列举 S3 上的文件列表，这是 Load 任务的第一步。
+FE 在 **Pending 阶段**列举 S3 文件列表。
 
-调用链：
+### 调用链
 
 ```
-BrokerLoadPendingTask.executeTask()
+BrokerLoadPendingTask.executeTask()                          [BrokerLoadPendingTask.java]
   └─ getAllFileStatus()
        └─ HdfsUtil.parseFile(path, brokerDesc, fileStatuses)
-            └─ HdfsService.listPath(request, fileStatuses, ...)
-                 └─ HdfsFsManager.listPath(path, fileNameOnly, properties)
-                      └─ getFileSystem(path, properties, tProperties)
+            └─ HdfsService.listPath()
+                 └─ HdfsFsManager.listPath()
+                      └─ getFileSystem() → getS3FileSystem() / getS3AFileSystem()
+                           └─ getFileSystemByCloudConfiguration()
+                                ├── cloudConfiguration.applyToConfiguration(conf)
+                                │   └── AwsCloudCredential.applyToConfiguration()
+                                │       → conf.set("fs.s3a.aws.credentials.provider",
+                                │                  "IAMInstanceCredentialsProvider")
+                                ├── FileSystem.get(uri, conf)  ← Hadoop S3A 初始化
+                                │   └── S3AFileSystem → IAMInstanceCredentialsProvider
+                                │       └── AWS Java SDK v2 InstanceProfileCredentialsProvider
+                                │           └── IMDS 调用
+                                └── cloudConfiguration.toThrift(tCloudConfiguration)
+                                    → tProperties.setCloud_configuration()  ← 传给 BE
 ```
 
-**代码位置：** `fe/fe-core/.../load/loadv2/BrokerLoadPendingTask.java`
+### 关键代码
 
-### 1.2 S3 FileSystem 的创建
+**属性解析** — `fe/fe-core/.../credential/aws/AwsCloudConfigurationProvider.java:74-104`：
+- `aws.s3.use_instance_profile` → `boolean useInstanceProfile`
+- `aws.s3.use_aws_sdk_default_behavior` → `boolean useAWSSDKDefaultBehavior`
 
-`HdfsFsManager.getFileSystem()` 根据 URI scheme 路由：
+**凭证提供者选择** — `fe/fe-core/.../credential/aws/AwsCloudCredential.java:233-268`：
+- `useAWSSDKDefaultBehavior=true` → `OverwriteAwsDefaultCredentialsProvider`（包装 `DefaultCredentialsProvider`）
+- `useInstanceProfile=true` → `IAMInstanceCredentialsProvider`（Hadoop S3A 对 SDK v2 `InstanceProfileCredentialsProvider` 的封装）
+- AK/SK → `SimpleAWSCredentialsProvider`（无 IMDS）
 
-```392:399:fe/fe-core/src/main/java/com/starrocks/fs/hdfs/HdfsFsManager.java
-        switch (scheme) {
-            // ...
-            case S3A_SCHEME:
-                return getS3AFileSystem(path, loadProperties, tProperties);
-            case S3_SCHEMA:
-                return getS3FileSystem(path, loadProperties, tProperties);
-```
-
-- `s3://` → `getS3FileSystem()` → 直接走 `CloudConfiguration` 路径
-- `s3a://` → `getS3AFileSystem()` → 先尝试 `CloudConfiguration`，如果参数不匹配则走 legacy `fs.s3a.*` 路径
-
-### 1.3 CloudConfiguration 路径（核心路径）
-
-当用户设置了 `aws.s3.*` 参数时，走 `getFileSystemByCloudConfiguration()`：
-
-```710:782:fe/fe-core/src/main/java/com/starrocks/fs/hdfs/HdfsFsManager.java
-    private HdfsFs getFileSystemByCloudConfiguration(CloudConfiguration cloudConfiguration, String path,
-                                                     THdfsProperties tProperties) {
-        // ...
-        Configuration conf = new ConfigurationWrap();
-        cloudConfiguration.applyToConfiguration(conf);    // 关键：设置凭证提供者
-        // ...
-        conf.set("fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
-        FileSystem innerFileSystem = FileSystem.get(pathUri.getUri(), conf);
-        // ...
-        // 同时构建 TCloudConfiguration 传给 BE
-        TCloudConfiguration tCloudConfiguration = new TCloudConfiguration();
-        cloudConfiguration.toThrift(tCloudConfiguration);
-        tProperties.setCloud_configuration(tCloudConfiguration);
-    }
-```
-
-这里做了两件事：
-1. **创建 Hadoop FileSystem** 供 FE 自己列举文件
-2. **构建 `TCloudConfiguration`** 通过 Thrift 传给 BE
-
-### 1.4 FE 的凭证提供者选择
-
-`AwsCloudCredential.applyToConfiguration()` 设置 Hadoop S3A 的凭证提供者：
-
-```233:268:fe/fe-core/src/main/java/com/starrocks/credential/aws/AwsCloudCredential.java
-    public void applyToConfiguration(Configuration configuration) {
-        if (useAWSSDKDefaultBehavior) {
-            // → OverwriteAwsDefaultCredentialsProvider (实际创建 DefaultCredentialsProvider)
-            configuration.set(Constants.AWS_CREDENTIALS_PROVIDER, DEFAULT_CREDENTIAL_PROVIDER);
-        } else if (useInstanceProfile) {
-            // → IAMInstanceCredentialsProvider
-            configuration.set(Constants.AWS_CREDENTIALS_PROVIDER, IAM_CREDENTIAL_PROVIDER);
-        } else if (!accessKey.isEmpty() && !secretKey.isEmpty()) {
-            configuration.set(Constants.ACCESS_KEY, accessKey);
-            configuration.set(Constants.SECRET_KEY, secretKey);
-            // → SimpleAWSCredentialsProvider (无 IMDS)
-        }
-        // ...
-    }
-```
-
-三种凭证提供者和 IMDS 的关系：
-
-| 用户配置 | Hadoop Credential Provider | 底层 AWS SDK | 是否触发 IMDS |
-|----------|---------------------------|-------------|-------------|
-| `use_aws_sdk_default_behavior=true` | `OverwriteAwsDefaultCredentialsProvider` | AWS Java SDK v2 `DefaultCredentialsProvider` | **是**（链中包含 IMDS） |
-| `use_instance_profile=true` | `IAMInstanceCredentialsProvider` | AWS Java SDK v2 `InstanceProfileCredentialsProvider` | **是**（专门走 IMDS） |
-| AK/SK | `SimpleAWSCredentialsProvider` | 无 | **否** |
-
-### 1.5 FE 使用的 AWS SDK 版本
-
-```
-Hadoop: 3.4.1
-AWS Java SDK: v2 (software.amazon.awssdk:bundle 2.29.52)
-```
-
-Hadoop 3.4.1 的 `hadoop-aws` 模块已经使用 AWS Java SDK v2。
-SDK v2 的 `InstanceProfileCredentialsProvider` **默认先尝试 IMDSv2，如果失败会回退到 IMDSv1**。
-
-### 1.6 FE 的 IMDS 调用时序
-
-```
-FE 收到 LOAD 语句
-  ↓
-BrokerLoadPendingTask 开始执行
-  ↓
-创建 Hadoop S3AFileSystem（首次或缓存未命中）
-  ↓
-S3AFileSystem 初始化时通过 credential provider 获取凭证
-  ↓
-IAMInstanceCredentialsProvider → 调用 IMDS 获取 IAM Role 临时凭证
-  ↓  (PUT http://169.254.169.254/latest/api/token → IMDSv2 token)
-  ↓  (GET http://169.254.169.254/latest/meta-data/iam/security-credentials/... → 临时凭证)
-  ↓
-使用临时凭证调用 S3 ListObjects 列举文件
-  ↓
-文件列表返回，Pending 阶段完成
-  ↓
-将 TCloudConfiguration 传给 BE，进入 Loading 阶段
-```
+**传递给 BE** — `fe/fe-core/.../planner/FileScanNode.java:295-333`：
+- `!brokerDesc.hasBroker()` 时构建 `THdfsProperties`（含 `cloud_configuration`）
+- `params.setHdfs_properties(hdfsProperties)` + `params.setUse_broker(false)`
 
 ---
 
 ## 第二部分：BE 与 AWS 的交互
 
-### 2.1 触发时机
+### 触发时机
 
-BE 在 **Loading 阶段**需要从 S3 读取实际数据文件。
+BE 在 **Loading 阶段**读取 S3 数据文件。
 
-调用链：
+### 调用链
 
 ```
-file_scanner.cpp → 检测 use_broker=false
+file_scanner.cpp: use_broker=false
   → FileSystem::CreateUniqueFromString(path, FSOptions(&params))
     → fs.cpp: is_s3_uri() → new_fs_s3(options)
-      → S3FileSystem
-        → new_s3client(uri, _options)
+      → S3FileSystem → new_s3client(uri, _options)
+        ├── S3ClientFactory::getClientConfig()  [static, 首次触发 IMDS 查 region]
+        ├── 检测到 cloud_configuration
+        │   → S3ClientFactory::new_client(tCloudConfiguration)
+        │     → CloudConfigurationFactory::create_aws()  [cloud_configuration_factory.cpp:23-55]
+        │       → AWSCloudCredential{use_instance_profile=true, ...}
+        │     → _get_aws_credentials_provider()  [fs_s3.cpp:80-112]
+        │       → Aws::Auth::InstanceProfileCredentialsProvider
+        │         → EC2MetadataClient → IMDS 调用
+        └── S3Client 发起 S3 请求时获取凭证
 ```
 
-### 2.2 S3 Client 的创建
+### 关键代码
 
-`new_s3client()` 检测到 `cloud_configuration` 后走 C++ SDK 路径：
+**凭证提供者选择** — `be/src/fs/fs_s3.cpp:80-112`：
+```cpp
+if (aws_cloud_credential.use_aws_sdk_default_behavior) {
+    credential_provider = std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
+} else if (aws_cloud_credential.use_instance_profile) {
+    credential_provider = std::make_shared<Aws::Auth::InstanceProfileCredentialsProvider>();
+    // ← 使用默认构造函数，内部 EC2MetadataClient 超时仅 1 秒
+} else if (!aws_cloud_credential.access_key.empty() && !aws_cloud_credential.secret_key.empty()) {
+    credential_provider = std::make_shared<Aws::Auth::SimpleAWSCredentialsProvider>(...);
+}
+```
 
-```269:282:be/src/fs/fs_s3.cpp
-static std::shared_ptr<Aws::S3::S3Client> new_s3client(const S3URI& uri, const FSOptions& opts, ...) {
-    Aws::Client::ClientConfiguration config = S3ClientFactory::getClientConfig();
-    const THdfsProperties* hdfs_properties = opts.hdfs_properties();
-    if ((hdfs_properties != nullptr && hdfs_properties->__isset.cloud_configuration) ||
-        (opts.cloud_configuration != nullptr && opts.cloud_configuration->cloud_type != TCloudType::DEFAULT)) {
-        const TCloudConfiguration& tCloudConfiguration = ...;
-        return S3ClientFactory::instance().new_client(tCloudConfiguration, operation_type);
+**ClientConfiguration 静态初始化** — `be/src/fs/fs_s3.h:67-75`：
+```cpp
+static ClientConfiguration& getClientConfig() {
+    // 默认构造函数会触发 EC2 metadata 查询 region（仅首次）
+    // 参考 https://github.com/aws/aws-sdk-cpp/issues/1440
+    static ClientConfiguration instance;
+    return instance;
+}
+```
+
+---
+
+## 第三部分：C++ SDK IMDSv2→v1 回退机制源码分析
+
+以下源码来自 `aws-sdk-cpp` 1.11.267 的 `AWSHttpResourceClient.cpp`。
+
+### EC2MetadataClient 默认超时
+
+```cpp
+// MakeDefaultHttpResourceClientConfiguration()
+res.connectTimeoutMs = 1000;     // 1 秒连接超时
+res.requestTimeoutMs = 1000;     // 1 秒请求超时
+res.retryStrategy = DefaultRetryStrategy(1, 1000);  // 仅 1 次重试，1 秒间隔
+```
+
+### GetDefaultCredentialsSecurely()（IMDSv2 入口）
+
+```cpp
+Aws::String EC2MetadataClient::GetDefaultCredentialsSecurely() const
+{
+    // 如果之前已经回退过，直接走 v1
+    #if !defined(DISABLE_IMDSV1)
+    if (!m_disableIMDSV1 && !m_tokenRequired) {
+        return GetDefaultCredentials();   // ← 直接 IMDSv1，不再尝试 PUT
     }
+    #endif
+
+    // 尝试 IMDSv2：PUT /latest/api/token
+    ss << m_endpoint << EC2_IMDS_TOKEN_RESOURCE;
+    tokenRequest = CreateHttpRequest(ss.str(), HttpMethod::HTTP_PUT, ...);
+    tokenRequest->SetHeaderValue(EC2_IMDS_TOKEN_TTL_HEADER, "21600");
+    auto result = GetResourceWithAWSWebServiceResult(tokenRequest);
+
+    // PUT 失败 → 回退到 IMDSv1
+    #if !defined(DISABLE_IMDSV1)
+    if (!m_disableIMDSV1 && (result.GetResponseCode() != HttpResponseCode::OK || trimmedTokenString.empty()))
+    {
+        m_tokenRequired = false;   // ← 永久缓存：不再尝试 IMDSv2
+        AWS_LOGSTREAM_TRACE(..., "...falling back to less secure way.");
+        return GetDefaultCredentials();   // ← 走 IMDSv1
+    }
+    #endif
+
+    // PUT 成功 → 用 token 继续 GET（IMDSv2）
+    m_token = trimmedTokenString;
+    // ... GET with x-aws-ec2-metadata-token header
+}
+```
+
+### GetDefaultCredentials()（IMDSv1 路径）
+
+```cpp
+Aws::String EC2MetadataClient::GetDefaultCredentials() const
+{
+    if (m_disableIMDSV1) {
+        AWS_LOGSTREAM_INFO(..., "Attempting to call IMDSv1 Service while disabled");
+        return {};   // 如果禁用了 v1，返回空
+    }
+    // 直接 GET，不带 token → IMDSv1
+    auto result = GetResourceWithAWSWebServiceResult(
+        m_endpoint.c_str(), EC2_SECURITY_CREDENTIALS_RESOURCE, nullptr);
     // ...
 }
 ```
 
-### 2.3 从 TCloudConfiguration 构建凭证
+### 关键字段
 
-`S3ClientFactory::new_client()` → `CloudConfigurationFactory::create_aws()`：
-
-```23:55:be/src/fs/credential/cloud_configuration_factory.cpp
-const AWSCloudConfiguration CloudConfigurationFactory::create_aws(const TCloudConfiguration& t_cloud_configuration) {
-    std::map<std::string, std::string> properties = t_cloud_configuration.cloud_properties;
-
-    AWSCloudCredential aws_cloud_credential{};
-    aws_cloud_credential.use_aws_sdk_default_behavior =
-            get_or_default(properties, AWS_S3_USE_AWS_SDK_DEFAULT_BEHAVIOR, false);
-    aws_cloud_credential.use_instance_profile =
-            get_or_default(properties, AWS_S3_USE_INSTANCE_PROFILE, false);
-    aws_cloud_credential.access_key = get_or_default(properties, AWS_S3_ACCESS_KEY, std::string());
-    aws_cloud_credential.secret_key = get_or_default(properties, AWS_S3_SECRET_KEY, std::string());
-    // ... 其余字段 ...
-}
-```
-
-### 2.4 BE 的凭证提供者选择
-
-`_get_aws_credentials_provider()` 根据配置选择 C++ SDK 的 provider：
-
-```80:112:be/src/fs/fs_s3.cpp
-std::shared_ptr<Aws::Auth::AWSCredentialsProvider> S3ClientFactory::_get_aws_credentials_provider(
-        const AWSCloudCredential& aws_cloud_credential) {
-    if (aws_cloud_credential.use_aws_sdk_default_behavior) {
-        credential_provider = std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
-    } else if (aws_cloud_credential.use_instance_profile) {
-        credential_provider = std::make_shared<Aws::Auth::InstanceProfileCredentialsProvider>();
-    } else if (!aws_cloud_credential.access_key.empty() && !aws_cloud_credential.secret_key.empty()) {
-        credential_provider = std::make_shared<Aws::Auth::SimpleAWSCredentialsProvider>(...);
-    }
-    // 如果设置了 iam_role_arn，则包装为 STSAssumeRoleCredentialsProvider
-    if (!aws_cloud_credential.iam_role_arn.empty()) {
-        auto sts = std::make_shared<Aws::STS::STSClient>(credential_provider, clientConfiguration);
-        credential_provider = std::make_shared<Aws::Auth::STSAssumeRoleCredentialsProvider>(...);
-    }
-    return credential_provider;
-}
-```
-
-| 用户配置 | C++ SDK Provider | 是否触发 IMDS |
-|----------|-----------------|-------------|
-| `use_aws_sdk_default_behavior=true` | `DefaultAWSCredentialsProviderChain` | **是** |
-| `use_instance_profile=true` | `InstanceProfileCredentialsProvider` | **是** |
-| AK/SK | `SimpleAWSCredentialsProvider` | **否** |
-
-### 2.5 BE 使用的 AWS SDK 版本
-
-```
-AWS C++ SDK: 1.11.267
-```
-
-**IMDS 行为：**
-- SDK 1.11.267 的 `InstanceProfileCredentialsProvider` 默认**先尝试 IMDSv2**（PUT 请求获取 token），如果 IMDSv2 不可用或超时，**回退到 IMDSv1**（直接 GET）
-- 可通过环境变量 `AWS_EC2_METADATA_V1_DISABLED=true` 禁用 IMDSv1 回退
-
-### 2.6 额外的 IMDS 触发点：ClientConfiguration 初始化
-
-```67:75:be/src/fs/fs_s3.h
-    static ClientConfiguration& getClientConfig() {
-        // We cached config here and make a deep copy each time. Since aws sdk has changed the
-        // Aws::Client::ClientConfiguration default constructor to search for the region
-        // (where as before 1.8 it has been hard coded default of "us-east-1").
-        // Part of that change is looking through the ec2 metadata, which can take a long time.
-        // For more details, please refer https://github.com/aws/aws-sdk-cpp/issues/1440
-        static ClientConfiguration instance;
-        return instance;
-    }
-```
-
-`ClientConfiguration` 的默认构造函数会通过 EC2 metadata 查找 region。这是一个 **static 变量**，只在第一次调用时触发一次 IMDS，后续复用缓存。
-
-### 2.7 BE 的 IMDS 调用时序
-
-```
-BE 收到 FE 发来的 scan range（包含 TCloudConfiguration）
-  ↓
-创建 S3FileSystem → new_s3client()
-  ↓
-S3ClientFactory::getClientConfig()（首次调用时触发 IMDS 查询 region）
-  ↓
-CloudConfigurationFactory::create_aws() → 解析 TCloudConfiguration
-  ↓
-_get_aws_credentials_provider() → InstanceProfileCredentialsProvider
-  ↓
-首次 S3 请求时，provider 获取凭证
-  ↓  (PUT http://169.254.169.254/latest/api/token → 尝试 IMDSv2)
-  ↓  (如果失败，回退 GET http://169.254.169.254/... → IMDSv1)
-  ↓
-使用临时凭证读取 S3 数据
-```
+- `m_tokenRequired`：初始 `true`，PUT 失败后设为 `false`，**永久生效直到进程重启**
+- `m_disableIMDSV1`：来自 `ClientConfiguration.disableImdsV1`，StarRocks 当前未设置（默认 `false`）
+- 也受环境变量 `AWS_EC2_METADATA_V1_DISABLED=true` 控制
 
 ---
 
-## 第三部分：完整的 IMDS 触发点汇总
+## 第四部分：IMDS 触发点汇总
 
 ### FE 侧
 
-| # | 触发点 | 代码位置 | 条件 | SDK |
-|---|--------|---------|------|-----|
-| 1 | Hadoop S3A 文件列举时获取凭证 | `HdfsFsManager.getFileSystemByCloudConfiguration()` → `S3AFileSystem.initialize()` | `use_instance_profile=true` 或 `use_aws_sdk_default_behavior=true` | AWS Java SDK v2 (2.29.52) |
+| # | 触发点 | 条件 | SDK |
+|---|--------|------|-----|
+| 1 | Hadoop S3A 列举文件时获取凭证 | `use_instance_profile=true` 或 `use_aws_sdk_default_behavior=true` | AWS Java SDK v2 (2.29.52) |
 
 ### BE 侧
 
-| # | 触发点 | 代码位置 | 条件 | SDK |
-|---|--------|---------|------|-----|
-| 1 | `ClientConfiguration` 静态初始化时查询 region | `S3ClientFactory::getClientConfig()` (`fs_s3.h:72`) | 首次调用，无条件 | AWS C++ SDK 1.11.267 |
-| 2 | S3 请求时获取凭证 | `_get_aws_credentials_provider()` (`fs_s3.cpp:85-88`) | `use_instance_profile=true` 或 `use_aws_sdk_default_behavior=true` | AWS C++ SDK 1.11.267 |
-
-### 凭证刷新
-
-临时凭证有效期通常为 6 小时（由 IAM Role 配置决定）。但每次新建 S3 Client 或凭证过期时都会重新通过 IMDS 获取。用户的 Broker Load 每 4 小时执行一次，每次都会触发 FE + BE 的 IMDS 调用。
+| # | 触发点 | 条件 | SDK |
+|---|--------|------|-----|
+| 1 | `S3ClientFactory::getClientConfig()` 静态初始化查询 region | 首次调用，无条件 | AWS C++ SDK 1.11.267 |
+| 2 | `InstanceProfileCredentialsProvider` 获取凭证 | `use_instance_profile=true` 或 `use_aws_sdk_default_behavior=true` | AWS C++ SDK 1.11.267 |
 
 ---
 
-## 第四部分：IMDSv1 vs IMDSv2 的行为分析
+## 第五部分：tcpdump 抓包证据
 
-### 为什么会产生 IMDSv1 调用？
+### 问题 BE 节点的抓包（IMDSv1）
 
-| SDK | IMDS 默认行为 | IMDSv1 何时触发 |
-|-----|-------------|---------------|
-| AWS Java SDK v2 (2.29.52) | 先 IMDSv2，失败回退 IMDSv1 | IMDSv2 token 请求失败时（如 hop limit 不足） |
-| AWS C++ SDK (1.11.267) | 先 IMDSv2，失败回退 IMDSv1 | 同上 |
+```
+# 完全没有 PUT /latest/api/token 请求
+# 直接发送不带 token 的 GET — IMDSv1
 
-**关键洞察：** 两个 SDK 都**优先使用 IMDSv2**，但在 IMDSv2 不可用时会**回退到 IMDSv1**。
+GET /latest/meta-data/iam/security-credentials HTTP/1.1
+host: 169.254.169.254
+user-agent: aws-sdk-cpp/1.11.267 ...
+（无 x-aws-ec2-metadata-token header）
 
-**可能导致 IMDSv2 失败的原因：**
-1. EC2 实例的 `HttpPutResponseHopLimit` 设置为 1（默认值），如果 StarRocks 运行在容器中，IMDSv2 的 PUT 请求到达不了 IMDS endpoint
-2. EC2 实例未启用 IMDSv2（`HttpTokens` 设置为 `optional` 而非 `required`），两种版本都可用时，部分日志/监控可能将任何 IMDS 调用都记录为 "v1"
-3. 极少数情况：网络策略阻断了 IMDSv2 的 PUT 请求
+→ 200 OK, 返回 role 名称
+
+GET /latest/meta-data/iam/security-credentials/xxxxxx-role HTTP/1.1
+host: 169.254.169.254
+user-agent: aws-sdk-cpp/1.11.267 ...
+（无 x-aws-ec2-metadata-token header）
+
+→ 200 OK, 返回临时凭证 JSON
+```
+
+同一台机器上的 Go 程序正常使用 IMDSv2：
+```
+GET /latest/meta-data/iam/security-credentials/ HTTP/1.1
+User-Agent: aws-sdk-go/1.55.5 ...
+X-Aws-Ec2-Metadata-Token: xxxxxxx        ← 带 token，IMDSv2
+```
+
+### 正常 BE 节点的抓包（IMDSv2）
+
+```
+# 先 PUT 获取 token
+PUT /latest/api/token HTTP/1.1
+host: 169.254.169.254
+user-agent: aws-sdk-cpp/1.11.267 ...
+x-aws-ec2-metadata-token-ttl-seconds: 21600
+
+→ 200 OK, 返回 token
+
+# 再用 token 发 GET — IMDSv2
+GET /latest/meta-data/iam/security-credentials HTTP/1.1
+host: 169.254.169.254
+user-agent: aws-sdk-cpp/1.11.267 ...
+x-aws-ec2-metadata-token: xxxxxxxxx      ← 带 token，IMDSv2
+
+→ 200 OK, 返回 role 名称
+
+GET /latest/meta-data/iam/security-credentials/xxxx-role HTTP/1.1
+host: 169.254.169.254
+user-agent: aws-sdk-cpp/1.11.267 ...
+x-aws-ec2-metadata-token: xxxxxxx        ← 带 token，IMDSv2
+
+→ 200 OK, 返回临时凭证 JSON
+```
 
 ---
 
-## 第五部分：解决方案
+## 第六部分：解决方案
 
-### 方案 1：EC2 实例级别强制 IMDSv2（推荐，无需改代码）
+### 方案 1：环境变量（推荐，立即可用，需重启）
+
+在所有 BE 和 FE 的启动脚本中添加：
+
+```bash
+export AWS_EC2_METADATA_V1_DISABLED=true
+```
+
+效果：SDK 内部 `m_disableIMDSV1 = true`，即使 PUT 失败也不会回退到 v1，后续会重新尝试 IMDSv2。
+
+无法不重启生效——`m_tokenRequired` 缓存在 BE 进程内存中的 `EC2MetadataClient` 实例里，没有外部接口可以重置。
+
+### 方案 2：EC2 实例强制 IMDSv2（基础设施层面）
 
 ```bash
 aws ec2 modify-instance-metadata-options \
-    --instance-id i-008e27e68cc111117 \
+    --instance-id <instance-id> \
     --http-tokens required \
     --http-put-response-hop-limit 2
 ```
 
-- `--http-tokens required`：完全禁用 IMDSv1，所有 IMDS 请求必须走 IMDSv2
-- `--http-put-response-hop-limit 2`：如果 StarRocks 运行在容器中，需要增加 hop limit 使 IMDSv2 PUT 请求能到达
+### 方案 3：StarRocks 代码修复（长期）
 
-**前提**：两个 SDK 版本（Java v2 2.29.52 和 C++ 1.11.267）**都支持 IMDSv2**，所以强制后不会导致凭证获取失败。
+在 `be/src/fs/fs_s3.cpp` 的 `_get_aws_credentials_provider()` 中，构建 `InstanceProfileCredentialsProvider` 时传入禁用 IMDSv1 回退的配置。当前代码使用默认构造函数：
 
-### 方案 2：通过环境变量禁用 IMDSv1 回退
-
-**BE 侧（C++ SDK）：**
-
-在 BE 启动脚本中设置：
-```bash
-export AWS_EC2_METADATA_V1_DISABLED=true
+```cpp
+credential_provider = std::make_shared<Aws::Auth::InstanceProfileCredentialsProvider>();
 ```
 
-**FE 侧（Java SDK v2）：**
-
-在 FE 启动脚本中设置：
-```bash
-# Java SDK v2 环境变量
-export AWS_EC2_METADATA_V1_DISABLED=true
-```
-
-或通过 Java 系统属性：
-```bash
-# 在 fe.conf 中添加
-JAVA_OPTS="... -Daws.disableEc2MetadataV1"
-```
-
-这样即使 IMDSv2 请求失败，SDK 也不会回退到 IMDSv1，而是直接报错。
-
-### 方案 3：代码层面增加 IMDS 版本控制（需改代码）
-
-**BE 侧：** 在构建 `InstanceProfileCredentialsProvider` 时显式禁用 IMDSv1。
-
-C++ SDK 1.11.267 暂不支持在 provider 构造时指定 IMDS 版本，但可以通过设置 `Aws::Auth::EC2MetadataClient` 的配置实现。更实际的做法是通过环境变量。
-
-**FE 侧：** Hadoop S3A 的 `IAMInstanceCredentialsProvider` 底层使用 AWS Java SDK v2，可以通过 SDK v2 的 builder 配置。但由于 FE 不直接构造 SDK 的 provider（而是通过 Hadoop 间接使用），修改需要在 Hadoop 配置层面进行。
-
-### 方案对比
-
-| 方案 | 修改范围 | 风险 | 覆盖 FE | 覆盖 BE |
-|------|---------|------|---------|---------|
-| EC2 强制 IMDSv2 | 基础设施 | 低（SDK 支持 v2） | 是 | 是 |
-| 环境变量 | FE/BE 启动脚本 | 低 | 是 | 是 |
-| 代码修改 | StarRocks 代码 | 中 | 需改 Hadoop 配置 | 需改 C++ 代码 |
+需要改为通过 `ClientConfiguration` 设置 `disableImdsV1 = true`。
 
 ---
 
@@ -397,77 +368,68 @@ FE: BrokerLoadPendingTask.executeTask()
   │     │
   │     ▼
   │     HdfsUtil.parseFile() → HdfsFsManager.listPath()
-  │     │
-  │     ▼
-  │     HdfsFsManager.getFileSystem() → getS3FileSystem() / getS3AFileSystem()
-  │     │
-  │     ▼
-  │     CloudConfigurationFactory.buildCloudConfigurationForStorage(properties)
-  │     → AwsCloudConfiguration(AwsCloudCredential{useInstanceProfile=true, ...})
-  │     │
-  │     ▼
-  │     getFileSystemByCloudConfiguration()
-  │     │
-  │     ├── cloudConfiguration.applyToConfiguration(conf)
-  │     │   → conf.set("fs.s3a.aws.credentials.provider", "IAMInstanceCredentialsProvider")
-  │     │
-  │     ├── FileSystem.get(uri, conf)   ←── Hadoop S3A 初始化
-  │     │   └── S3AFileSystem.initialize()
-  │     │       └── IAMInstanceCredentialsProvider.resolveCredentials()
-  │     │           └── AWS Java SDK v2: InstanceProfileCredentialsProvider
-  │     │               └── ★ IMDS 调用 (先 v2, 失败回退 v1)
-  │     │
-  │     ├── S3AFileSystem.globStatus()  ←── S3 ListObjects
-  │     │
-  │     └── cloudConfiguration.toThrift(tCloudConfiguration)
-  │         → AwsCloudCredential.toThrift(properties)
-  │           → properties = {"aws.s3.use_instance_profile":"true", ...}
-  │         → tProperties.setCloud_configuration(tCloudConfiguration)
-  │
+  │     → HdfsFsManager.getFileSystem() → getS3FileSystem() / getS3AFileSystem()
+  │     → CloudConfigurationFactory.buildCloudConfigurationForStorage(properties)
+  │       → AwsCloudConfiguration(AwsCloudCredential{useInstanceProfile=true, ...})
+  │     → getFileSystemByCloudConfiguration()
+  │       ├── cloudConfiguration.applyToConfiguration(conf)
+  │       │   → "fs.s3a.aws.credentials.provider" = "IAMInstanceCredentialsProvider"
+  │       ├── FileSystem.get(uri, conf) → S3AFileSystem
+  │       │   └── IAMInstanceCredentialsProvider → AWS Java SDK v2
+  │       │       └── InstanceProfileCredentialsProvider → IMDS 调用
+  │       └── cloudConfiguration.toThrift(tCloudConfiguration)
+  │           → tProperties.setCloud_configuration(tCloudConfiguration)
   │
   ▼
-FE: Pending 阶段完成 → Loading 阶段 → 构建 scan plan
+FE: Pending 完成 → Loading 阶段 → FileScanNode.initParams()
+  │   params.setHdfs_properties(hdfsProperties)  ← 含 cloud_configuration
+  │   params.setUse_broker(false)
   │
   ▼
-FE: FileScanNode.initParams()
-  │
-  ├── params.setHdfs_properties(hdfsProperties)  ←── 包含 cloud_configuration
-  ├── params.setProperties(brokerDesc.getProperties())
-  └── params.setUse_broker(false)
-  │
-  ▼
-FE → BE: 通过 Thrift 发送 TBrokerScanRangeParams
-  │
+FE → BE: Thrift 发送 TBrokerScanRangeParams
   │
   ├──── BE 读取数据（BE 与 AWS 交互） ────────────────────────────────────────────
   │     │
   │     ▼
   │     file_scanner.cpp: use_broker=false
   │     → FileSystem::CreateUniqueFromString(path, FSOptions(&params))
-  │     │
-  │     ▼
-  │     fs.cpp: is_s3_uri() → new_fs_s3(options)
-  │     │
-  │     ▼
-  │     S3FileSystem → new_s3client(uri, _options)
-  │     │
-  │     ├── S3ClientFactory::getClientConfig()
-  │     │   └── static ClientConfiguration 初始化
-  │     │       └── ★ IMDS 调用查询 region（仅首次）
-  │     │
-  │     ├── 检测到 hdfs_properties->cloud_configuration
-  │     │   → S3ClientFactory::new_client(tCloudConfiguration)
-  │     │
-  │     ├── CloudConfigurationFactory::create_aws(tCloudConfiguration)
-  │     │   → AWSCloudCredential{use_instance_profile=true, ...}
-  │     │
-  │     ├── _get_aws_credentials_provider(aws_cloud_credential)
-  │     │   → Aws::Auth::InstanceProfileCredentialsProvider
-  │     │
-  │     └── S3Client 发起 GetObject 请求时获取凭证
-  │         └── InstanceProfileCredentialsProvider.GetAWSCredentials()
-  │             └── ★ IMDS 调用 (先 v2, 失败回退 v1)
+  │     → new_fs_s3(options) → S3FileSystem
+  │     → new_s3client(uri, _options)
+  │       ├── S3ClientFactory::getClientConfig() [static, 首次触发 IMDS 查 region]
+  │       ├── S3ClientFactory::new_client(tCloudConfiguration)
+  │       │   → CloudConfigurationFactory::create_aws() → AWSCloudCredential
+  │       │   → _get_aws_credentials_provider()
+  │       │     → InstanceProfileCredentialsProvider（默认构造）
+  │       │       → EC2MetadataClient（1 秒超时，1 次重试）
+  │       │         ├── PUT /latest/api/token（IMDSv2）
+  │       │         │   ├── 成功 → 用 token GET → IMDSv2 ✅
+  │       │         │   └── 失败 → m_tokenRequired=false → GET 无 token → IMDSv1 ❌
+  │       │         │              （此后永久 IMDSv1，直到进程重启）
+  │       │         └── 后续调用：
+  │       │             └── m_tokenRequired==false → 直接 IMDSv1，不再尝试 PUT
+  │       └── S3Client 发起 GetObject 读取数据
   │
   ▼
 Load 完成
 ```
+
+---
+
+## 附录：关键源码文件索引
+
+| 文件 | 内容 |
+|------|------|
+| `be/src/fs/fs_s3.cpp:80-112` | BE 凭证提供者选择（`_get_aws_credentials_provider`） |
+| `be/src/fs/fs_s3.h:67-75` | `getClientConfig()` 静态初始化（触发 IMDS region 查询） |
+| `be/src/fs/credential/cloud_configuration_factory.cpp:23-55` | 解析 `TCloudConfiguration` → `AWSCloudCredential` |
+| `be/src/fs/credential/cloud_configuration.h` | `AWSCloudCredential` 结构体定义 |
+| `fe/fe-core/.../credential/aws/AwsCloudCredential.java:233-268` | FE `applyToConfiguration()`（设置 Hadoop 凭证提供者） |
+| `fe/fe-core/.../credential/aws/AwsCloudConfigurationProvider.java:74-104` | FE 解析 `aws.s3.*` 属性 |
+| `fe/fe-core/.../credential/aws/AwsCloudConfiguration.java:70-94` | FE `applyToConfiguration()`（设置 Hadoop S3A 配置） |
+| `fe/fe-core/.../planner/FileScanNode.java:295-333` | FE `initParams()`（区分 broker/非 broker 路径） |
+| `fe/fe-core/.../analysis/BrokerDesc.java:80-81` | `hasBroker()` 判断逻辑 |
+| `fe/fe-core/.../fs/hdfs/HdfsFsManager.java:385-430` | FE `getFileSystem()` 路由 |
+| `fe/fe-core/.../fs/hdfs/HdfsFsManager.java:710-782` | FE `getFileSystemByCloudConfiguration()` |
+| `fe/fe-core/.../credential/provider/OverwriteAwsDefaultCredentialsProvider.java` | 自定义 `DefaultCredentialsProvider` 包装 |
+| `thirdparty/vars.sh:325` | AWS C++ SDK 版本（1.11.267） |
+| `fe/pom.xml:50,66` | Hadoop 版本（3.4.1）和 AWS Java SDK v2 版本（2.29.52） |
