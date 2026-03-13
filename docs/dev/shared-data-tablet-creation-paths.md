@@ -5,132 +5,267 @@
 In shared-data mode, tablet creation follows this core flow:
 
 1. **FE side**: Calls `StarOSAgent` → StarManager's `createShardGroup` + `createShards` to allocate shard IDs (shard ID = tablet ID)
-2. **BE/CN side**: FE sends `CREATE` agent task → `lake::TabletManager::create_tablet()` writes tablet metadata to object storage
+2. **FE side**: Sends `CREATE` agent task (via `TabletTaskExecutor` → `CreateReplicaTask`) to BE/CN
+3. **BE/CN side**: `lake::TabletManager::create_tablet()` writes tablet metadata (`TabletMetadataPB`) to object storage
 
 ### Core Classes
 
 | Class | Location | Role |
 |-------|----------|------|
 | `StarOSAgent` | `fe/fe-core/.../lake/StarOSAgent.java` | Wraps StarManager shard creation APIs |
-| `LocalMetastore` | `fe/fe-core/.../catalog/LocalMetastore.java` | Central partition/tablet creation logic |
+| `LocalMetastore` | `fe/fe-core/.../server/LocalMetastore.java` | Central partition/tablet creation logic |
 | `LakeTablet` | `fe/fe-core/.../lake/LakeTablet.java` | Shared-data tablet (ID = shard ID) |
 | `LakeTableHelper` | `fe/fe-core/.../lake/LakeTableHelper.java` | Routes alter/rollup for lake tables |
+| `TabletTaskExecutor` | `fe/fe-core/.../task/TabletTaskExecutor.java` | Sends `CreateReplicaTask` agent tasks to BE/CN |
 | `lake::TabletManager` | `be/src/storage/lake/tablet_manager.cpp` | Creates tablet metadata on object storage |
+
+### StarOSAgent Shard Creation API Summary
+
+| Method | Purpose | Callers (production code only) |
+|--------|---------|------|
+| `createShardGroup(dbId, tableId, partitionId, indexId)` | Create shard group for partition+index | `LocalMetastore.createPartition()`, `LakeTableRollupBuilder.build()` |
+| `createShards(numShards, pathInfo, cacheInfo, groupId, matchShardIds, properties, computeResource)` | Create shards (tablets) | `LocalMetastore.createLakeTablets()`, `LakeTableRollupBuilder.build()`, `LakeTableAlterJobV2Builder.build()` |
+| `createShardsForSplit(oldToNewShardIds, ...)` | Create shards for tablet split | `SplitTabletJobFactory.createNewShards()` |
+| `createShardsForMerge(newToOldShardIds, ...)` | Create shards for tablet merge | `MergeTabletJobFactory.createNewShards()` |
+| `createShardGroupForVirtualTablet()` | Shard group for storage volume | `SharedDataStorageVolumeMgr.getOrCreateVirtualTabletId()` |
+| `createShardWithVirtualTabletId(...)` | Single shard with explicit ID | `SharedDataStorageVolumeMgr.getOrCreateVirtualTabletId()` |
+
+### `new LakeTablet(...)` Construction Sites (production code)
+
+| File | Method | Context |
+|------|--------|---------|
+| `LocalMetastore.java:2248` | `createLakeTablets()` | Standard partition/tablet creation |
+| `LakeTableAlterJobV2Builder.java:102` | `build()` | Schema change shadow tablets |
+| `LakeTableRollupBuilder.java:111` | `build()` | Rollup/sync MV shadow tablets |
+| `SplitTabletJobFactory.java:288` | `createMaterializedIndex()` | Tablet split new tablets |
+| `MergeTabletJobFactory.java:372` | `createMaterializedIndex()` | Tablet merge new tablets |
 
 ---
 
-## All Tablet Creation Paths
+## Complete Tablet Creation Paths (17 features)
 
-### 1. CREATE TABLE
+### Category 1: Via `LocalMetastore.createPartition()` → `createLakeTablets()`
+
+These all share the same bottom-level call chain:
+
+```
+LocalMetastore.createPartition()
+  → StarOSAgent.createShardGroup()           // per index
+  → createLakeTablets()
+    → StarOSAgent.createShards(bucketNum)     // allocate shard IDs
+    → new LakeTablet(shardId)                 // build FE metadata
+  (then)
+  buildPartitions()
+    → TabletTaskExecutor.buildCreateReplicaTasks()
+      → CreateReplicaTask (sent to BE/CN via Agent RPC)
+        → lake::TabletManager::create_tablet()  // write metadata to object storage
+```
+
+#### 1. CREATE TABLE (non-partitioned)
 
 ```
 OlapTableFactory.createTable()
-  → LocalMetastore.createPartition()
-    → StarOSAgent.createShardGroup()
-    → LocalMetastore.createLakeTablets()
-      → StarOSAgent.createShards(bucketNum)
-      → new LakeTablet(shardId)
+  → LocalMetastore.createPartition() → createLakeTablets()
+  → buildPartitions()
 ```
 
-### 2. ADD PARTITION (manual)
+Entry: `OlapTableFactory.java:818`
+
+#### 2. CREATE TABLE (partitioned)
 
 ```
-AddPartitionClause → LocalMetastore.addPartitions()
-  → createPartitionMap() → createPartition()
-    → createShardGroup() + createLakeTablets()
+OlapTableFactory.createTable()
+  → for each partition: LocalMetastore.createPartition() → createLakeTablets()
+  → buildPartitions()
 ```
 
-### 3. Automatic Partition (INSERT/LOAD triggered)
+Entry: `OlapTableFactory.java:856`
+
+#### 3. ADD PARTITION (ALTER TABLE ... ADD PARTITION)
+
+```
+AlterJobExecutor → LocalMetastore.addPartitions()
+  → addPartitions() → createPartitionMap() → createPartition() → createLakeTablets()
+  → buildPartitions()
+```
+
+Entry: `AlterJobExecutor.java:736` → `LocalMetastore.java:987`
+
+#### 4. Automatic Partition Creation (INSERT/LOAD triggered)
 
 ```
 FrontendServiceImpl.createPartitionProcess()
   → LocalMetastore.addPartitions()
     → createPartitionMap() → createPartition() → createLakeTablets()
+    → buildPartitions()
 ```
 
-### 4. Dynamic Partition
+Entry: `FrontendServiceImpl.java:2322`
+
+#### 5. Dynamic Partition
 
 ```
 DynamicPartitionScheduler.runOneCycle()
   → LocalMetastore.addPartitions()
     → createPartitionMap() → createPartition() → createLakeTablets()
+    → buildPartitions()
 ```
 
-### 5. TRUNCATE TABLE
+Entry: `DynamicPartitionScheduler.java:452`
+
+#### 6. TRUNCATE TABLE
 
 ```
 LocalMetastore.truncateTable()
-  → createPartition()
-    → createShardGroup() + createLakeTablets()
-  → truncateTableInternal()
+  → for each partition: createPartition() → createShardGroup() + createLakeTablets()
+  → buildPartitions()
+  → truncateTableInternal() (replace old partitions with new ones)
 ```
 
-### 6. INSERT OVERWRITE
+Entry: `LocalMetastore.java:4776`
+
+#### 7. INSERT OVERWRITE (create new partitions by value)
 
 ```
-InsertOverwriteJobRunner.run()
-  → createPartitionByValue()
-    → LocalMetastore.addPartitions()
-      → createPartitionMap() → createPartition() → createLakeTablets()
+InsertOverwriteJobRunner.createPartitionByValue()
+  → LocalMetastore.addPartitions()
+    → createPartitionMap() → createPartition() → createLakeTablets()
+    → buildPartitions()
 ```
 
-### 7. CREATE MATERIALIZED VIEW
+Entry: `InsertOverwriteJobRunner.java:348`
+
+#### 8. INSERT OVERWRITE (create temp partitions to replace)
+
+```
+InsertOverwriteJobRunner.prepareOverwrite()
+  → PartitionUtils.createAndAddTempPartitionsForTable()
+    → LocalMetastore.createTempPartitionsFromPartitions()
+      → getNewPartitionsFromPartitions() → createPartition() → createLakeTablets()
+      → buildPartitions()
+```
+
+Entry: `InsertOverwriteJobRunner.java:416`
+
+#### 9. CREATE MATERIALIZED VIEW (non-partitioned)
 
 ```
 LocalMetastore.createMaterializedView()
-  → OlapTableFactory → createPartition() → createLakeTablets()
+  → buildNonPartitionOlapTable()
+    → createPartition() → createLakeTablets()
+    → buildPartitions()
 ```
 
-### 8. ADD ROLLUP / Sync Materialized View
+Entry: `LocalMetastore.java:3287`
+
+#### 10. MV PCT Refresh (add new partitions to MV)
 
 ```
-LakeTableRollupBuilder.build()
-  → StarOSAgent.createShardGroup()
-  → StarOSAgent.createShards(matchShardIds)
-  → new LakeTablet(shardId)
+MVPCTRefreshListPartitioner / MVPCTRefreshRangePartitioner
+  → LocalMetastore.addPartitions()
+    → createPartitionMap() → createPartition() → createLakeTablets()
+    → buildPartitions()
 ```
 
-### 9. Schema Change (ALTER TABLE)
+Entry: `MVPCTRefreshListPartitioner.java:523`, `MVPCTRefreshRangePartitioner.java:559`
+
+#### 11. ADD Sub-Partition (physical partition for random distribution)
 
 ```
-LakeTableAlterJobV2Builder.build()
-  → StarOSAgent.createShards(matchShardIds)
-  → new LakeTablet(shadowTabletId)
+LocalMetastore.addSubPartitions()
+  → createPhysicalPartition() → createLakeTablets() (reuses existing ShardGroup)
+  → buildPartitions()
 ```
 
-### 10. Tablet Split (Resharding)
+Entry: `LocalMetastore.java:1706`
+
+#### 12. ALTER TABLE MERGE PARTITION
+
+```
+MergePartitionJob.runPendingJob()
+  → LocalMetastore.addPartitions() (creates temp partitions)
+    → createPartitionMap() → createPartition() → createLakeTablets()
+    → buildPartitions()
+```
+
+Entry: `MergePartitionJob.java:348`
+
+#### 13. ALTER TABLE OPTIMIZE (OptimizeJobV2 / OnlineOptimizeJobV2)
+
+```
+OptimizeJobV2.runPendingJob() / OnlineOptimizeJobV2.runPendingJob()
+  → PartitionUtils.createAndAddTempPartitionsForTable()
+    → LocalMetastore.createTempPartitionsFromPartitions()
+      → getNewPartitionsFromPartitions() → createPartition() → createLakeTablets()
+      → buildPartitions()
+```
+
+Entry: `OptimizeJobV2.java:198`, `OnlineOptimizeJobV2.java:210`
+
+---
+
+### Category 2: Schema Change / Rollup (via dedicated builders)
+
+#### 14. Schema Change (ALTER TABLE MODIFY COLUMN / ADD COLUMN / etc.)
+
+```
+LakeTableHelper.alterTable()
+  → LakeTableAlterJobV2Builder.build()
+    → StarOSAgent.createShards(matchShardIds)  // shadow tablets, co-located with origin
+    → new LakeTablet(shadowTabletId)
+    → shadowIndex.addTablet(shadowTablet)
+  (then schema change job sends ALTER agent tasks to BE)
+```
+
+Entry: `LakeTableAlterJobV2Builder.java:89`
+
+#### 15. ADD ROLLUP / CREATE MATERIALIZED VIEW (sync)
+
+```
+LakeTableHelper.rollUp()
+  → LakeTableRollupBuilder.build()
+    → StarOSAgent.createShardGroup()            // per partition + rollup index
+    → StarOSAgent.createShards(matchShardIds)    // co-located with origin tablets
+    → new LakeTablet(shadowTabletId)
+    → mvIndex.addTablet(shadowTablet)
+  (then rollup job sends ALTER agent tasks to BE)
+```
+
+Entry: `LakeTableRollupBuilder.java:76-111`
+
+---
+
+### Category 3: Tablet Resharding (via StarOSAgent split/merge APIs)
+
+#### 16. Tablet Split
 
 ```
 SplitTabletJobFactory.createNewShards()
   → StarOSAgent.createShardsForSplit(oldToNewTabletIds)
-  → new LakeTablet(tabletId)
+SplitTabletJobFactory.createMaterializedIndex()
+  → new LakeTablet(tabletId, oldTablet.getRange())
+  (then publish_version on BE triggers publish_resharding_tablet → handle_splitting_tablet)
 ```
 
-### 11. Tablet Merge (Resharding)
+Entry: `SplitTabletJobFactory.java:313`, BE: `tablet_reshard.cpp`
+
+#### 17. Tablet Merge
 
 ```
 MergeTabletJobFactory.createNewShards()
   → StarOSAgent.createShardsForMerge(newToOldTabletIds)
-  → new LakeTablet(tabletId)
+MergeTabletJobFactory.createMaterializedIndex()
+  → new LakeTablet(tabletId, oldTablet.getRange())
+  (then publish_version on BE triggers publish_resharding_tablet → handle_merging_tablet)
 ```
 
-### 12. ADD Sub-Partition
+Entry: `MergeTabletJobFactory.java:400`, BE: `tablet_reshard.cpp`
 
-```
-LocalMetastore.addSubPartitions()
-  → createPhysicalPartition()
-    → createShardGroup() + createLakeTablets()
-```
+---
 
-### 13. MV PCT Refresh (new partitions)
+### Category 4: Special Paths
 
-```
-MVPCTRefresh*Partitioner
-  → LocalMetastore.addPartitions()
-    → createPartitionMap() → createPartition() → createLakeTablets()
-```
-
-### 14. Storage Volume Virtual Tablet
+#### 18. Storage Volume Virtual Tablet
 
 ```
 SharedDataStorageVolumeMgr.getOrCreateVirtualTabletId()
@@ -138,66 +273,92 @@ SharedDataStorageVolumeMgr.getOrCreateVirtualTabletId()
   → StarOSAgent.createShardWithVirtualTabletId(vTabletId)
 ```
 
-### 15. Restore
+Entry: `SharedDataStorageVolumeMgr.java:724-729`
 
+Used for cross-cluster replication and storage volume mapping. Does NOT create a standard data tablet.
+
+#### 19. Restore (Backup/Restore)
+
+FE side:
 ```
 LakeRestoreJob.resetTableForRestore()
-  → RestoreJob.resetIdsForRestore() → createTabletsForRestore()
+  → RestoreJob.resetIdsForRestore()
+    → RestoreJob.createTabletsForRestore()
+      → new LocalTablet(newTabletId)  // NOTE: creates LocalTablet, not LakeTablet
 ```
+
+BE side:
+```
+LakeSnapshotLoader::restore()
+  → lake_tablet_manager()->put_tablet_metadata(meta)  // writes restored metadata directly
+```
+
+Entry FE: `LakeRestoreJob.java:302`, BE: `lake_snapshot_loader.cpp:309`
+
+Note: Lake restore uses `LocalTablet` in FE metadata initialization (inherited from `RestoreJob`), but actual tablet metadata on object storage is handled by `LakeSnapshotLoader` on BE.
 
 ---
 
-## BE Side Tablet Creation
+## BE Side Tablet Creation Summary
 
-### Path 1: CREATE Agent Task (primary)
-
-```
-AgentServer::submit_tasks()
-  → run_create_tablet_task()
-    → lake_tablet_manager()->create_tablet()    // writes metadata to object storage
-```
-
-Files: `be/src/agent/agent_task.cpp`, `be/src/storage/lake/tablet_manager.cpp`
-
-### Path 2: Publish Resharding
-
-```
-LakeServiceImpl::publish_version()
-  → publish_resharding_tablet()
-    → handle_splitting_tablet()   // 1 → N
-    → handle_merging_tablet()     // N → 1
-    → handle_identical_tablet()   // 1 → 1
-  → put_tablet_metadata()
-```
-
-Files: `be/src/service/service_be/lake_service.cpp`, `be/src/storage/lake/tablet_reshard.cpp`
+| Path | Handler | File | When Used |
+|------|---------|------|-----------|
+| CREATE agent task | `run_create_tablet_task()` → `lake_tablet_manager()->create_tablet()` | `agent_task.cpp:248-251`, `tablet_manager.cpp:209` | All Category 1 & 2 features above |
+| Publish resharding (split) | `publish_resharding_tablet()` → `handle_splitting_tablet()` → `put_tablet_metadata()` | `tablet_reshard.cpp` | Tablet split (#16) |
+| Publish resharding (merge) | `publish_resharding_tablet()` → `handle_merging_tablet()` → `put_tablet_metadata()` | `tablet_reshard.cpp` | Tablet merge (#17) |
+| Publish resharding (identical) | `publish_resharding_tablet()` → `handle_identical_tablet()` → `put_tablet_metadata()` | `tablet_reshard.cpp` | Resharding with same bucket count |
+| Lake restore | `LakeSnapshotLoader::restore()` → `put_tablet_metadata()` | `lake_snapshot_loader.cpp:309` | Restore (#19) |
+| Repair metadata | `LakeServiceImpl::repair_tablet_metadata()` → `put_tablet_metadata()` | `lake_service.cpp:1917` | Admin repair (not new tablet creation) |
 
 ---
 
-## Summary Table
+## Complete Summary Table
 
-| Feature | FE Key Class | StarOSAgent Method | BE Path |
-|---------|-------------|-------------------|---------|
-| CREATE TABLE | `OlapTableFactory`, `LocalMetastore` | `createShardGroup` + `createShards` | CREATE task |
-| ADD PARTITION | `LocalMetastore.addPartitions` | `createShardGroup` + `createShards` | CREATE task |
-| Auto Partition | `FrontendServiceImpl` | `createShardGroup` + `createShards` | CREATE task |
-| Dynamic Partition | `DynamicPartitionScheduler` | `createShardGroup` + `createShards` | CREATE task |
-| TRUNCATE TABLE | `LocalMetastore.truncateTable` | `createShardGroup` + `createShards` | CREATE task |
-| INSERT OVERWRITE | `InsertOverwriteJobRunner` | `createShardGroup` + `createShards` | CREATE task |
-| CREATE MV | `LocalMetastore.createMaterializedView` | `createShardGroup` + `createShards` | CREATE task |
-| ADD ROLLUP | `LakeTableRollupBuilder` | `createShardGroup` + `createShards` | CREATE task |
-| Schema Change | `LakeTableAlterJobV2Builder` | `createShards` | CREATE task |
-| Tablet Split | `SplitTabletJobFactory` | `createShardsForSplit` | Publish resharding |
-| Tablet Merge | `MergeTabletJobFactory` | `createShardsForMerge` | Publish resharding |
-| Sub-Partition | `LocalMetastore.addSubPartitions` | `createShardGroup` + `createShards` | CREATE task |
-| MV PCT Refresh | `MVPCTRefresh*Partitioner` | `createShardGroup` + `createShards` | CREATE task |
-| Storage Volume vTablet | `SharedDataStorageVolumeMgr` | `createShardGroupForVirtualTablet` + `createShardWithVirtualTabletId` | CREATE task |
-| Restore | `LakeRestoreJob` | via `createPartition` | CREATE task |
+| # | Feature | FE Entry Point | StarOSAgent Method | BE Path |
+|---|---------|---------------|-------------------|---------|
+| 1 | CREATE TABLE (non-partitioned) | `OlapTableFactory:818` | `createShardGroup` + `createShards` | CREATE task |
+| 2 | CREATE TABLE (partitioned) | `OlapTableFactory:856` | `createShardGroup` + `createShards` | CREATE task |
+| 3 | ADD PARTITION | `AlterJobExecutor:736` → `LocalMetastore.addPartitions` | `createShardGroup` + `createShards` | CREATE task |
+| 4 | Automatic partition (load) | `FrontendServiceImpl:2322` | `createShardGroup` + `createShards` | CREATE task |
+| 5 | Dynamic partition | `DynamicPartitionScheduler:452` | `createShardGroup` + `createShards` | CREATE task |
+| 6 | TRUNCATE TABLE | `LocalMetastore:4776` | `createShardGroup` + `createShards` | CREATE task |
+| 7 | INSERT OVERWRITE (new partitions) | `InsertOverwriteJobRunner:348` | `createShardGroup` + `createShards` | CREATE task |
+| 8 | INSERT OVERWRITE (temp partitions) | `InsertOverwriteJobRunner:416` | `createShardGroup` + `createShards` | CREATE task |
+| 9 | CREATE MV (non-partitioned) | `LocalMetastore:3287` | `createShardGroup` + `createShards` | CREATE task |
+| 10 | MV PCT refresh | `MVPCTRefresh*Partitioner` | `createShardGroup` + `createShards` | CREATE task |
+| 11 | ADD sub-partition | `LocalMetastore:1706` | `createShards` (reuse group) | CREATE task |
+| 12 | MERGE PARTITION | `MergePartitionJob:348` | `createShardGroup` + `createShards` | CREATE task |
+| 13 | ALTER TABLE OPTIMIZE | `OptimizeJobV2:198` / `OnlineOptimizeJobV2:210` | `createShardGroup` + `createShards` | CREATE task |
+| 14 | Schema change | `LakeTableAlterJobV2Builder:89` | `createShards` (with placement) | CREATE task |
+| 15 | ADD ROLLUP / sync MV | `LakeTableRollupBuilder:76-111` | `createShardGroup` + `createShards` | CREATE task |
+| 16 | Tablet split | `SplitTabletJobFactory:313` | `createShardsForSplit` | Publish resharding |
+| 17 | Tablet merge | `MergeTabletJobFactory:400` | `createShardsForMerge` | Publish resharding |
+| 18 | Storage volume virtual tablet | `SharedDataStorageVolumeMgr:724` | `createShardGroupForVirtualTablet` + `createShardWithVirtualTabletId` | N/A (metadata only) |
+| 19 | Restore | `LakeRestoreJob:302` | N/A (uses resetIdsForRestore) | `LakeSnapshotLoader` → `put_tablet_metadata` |
 
 ---
 
-## Not Applicable in Shared-Data Mode
+## Operations That Do NOT Create Tablets in Shared-Data Mode
 
-- **Clone task** — replaced by replication (remote_snapshot + replicate_snapshot)
-- **Storage medium migration** — not applicable to lake tablets
-- **Compaction** — only updates metadata/rowsets, does not create new tablets
+| Operation | Reason |
+|-----------|--------|
+| **Clone** | Shared-data uses replication (`remote_snapshot` + `replicate_snapshot`) instead of clone; target tablets already exist |
+| **Storage medium migration** | Not applicable to lake tablets (data is on object storage) |
+| **Compaction** | Only updates metadata and rowsets within existing tablets |
+| **REPLACE PARTITION** (`replaceTempPartition`) | Only swaps partition metadata; temp partitions were already created earlier |
+| **Publish version (normal)** | Updates version metadata on existing tablets, does not create new ones |
+| **Repair tablet metadata** | Rewrites metadata for existing tablets, does not create new tablets |
+
+---
+
+## Verification Methodology
+
+This document was verified by exhaustively searching:
+1. All production callers of `StarOSAgent.createShards*()`, `createShardGroup*()`, `createShardWithVirtualTabletId()`
+2. All production sites of `new LakeTablet(...)` construction
+3. All callers of `LocalMetastore.createPartition()`, `createLakeTablets()`, `createPhysicalPartition()`
+4. All callers of `LocalMetastore.addPartitions()`, `addSubPartitions()`, `truncateTable()`
+5. All callers of `createTempPartitionsFromPartitions()`, `PartitionUtils.createAndAddTempPartitionsForTable()`
+6. All callers of `buildNonPartitionOlapTable()`
+7. BE-side: all callers of `lake::TabletManager::create_tablet()` and `put_tablet_metadata()`
+8. BE-side: all `TABLET_TYPE_LAKE` references in `agent_task.cpp`
