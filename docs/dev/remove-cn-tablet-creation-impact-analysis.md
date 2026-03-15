@@ -583,7 +583,19 @@ Cluster Snapshot 恢复后，FE 元数据中记录的 tablet `visibleVersion=1`�
 - Vacuum 会尝试保留 version 1 metadata → 但文件本来就不存在 → vacuum 行为不受影响
   （`vacuum.cpp` 中 `ignore_not_found` 处理了这个情况）
 
-**结论：Cluster Snapshot 的创建和同版本恢复不受影响。跨版本恢复（新→老）对空 tablet 有风险。**
+**注意：当前 Cluster Snapshot 不支持只恢复单个表。** 恢复是整个集群级别的操作——
+下载 FE image + StarMgr image，替换整个集群的元数据和 shard 信息。
+`RestoreClusterSnapshotMgr` 的配置文件（`cluster_snapshot.yaml`）只包含
+`cluster_snapshot_path`、`frontends`、`compute_nodes`、`storage_volumes`，没有表级过滤选项。
+恢复时 FE 直接加载完整 image，没有部分加载的逻辑。
+
+如果未来支持表级恢复（从 Cluster Snapshot 中只恢复一张表到已有集群），则需要注意：
+- 恢复的表可能包含新版本创建的 tablet（无 version 1 metadata）
+- 如果目标集群的 CN 是老版本，操作这些 tablet 会失败
+- 即使目标集群的 CN 是新版本，也需要确保新 CN 能处理没有初始 metadata 的 tablet
+
+**结论：当前 Cluster Snapshot 的创建和整集群恢复不受影响。跨版本恢复（新→老）对空 tablet 有风险。
+未来如果支持表级恢复，需要额外注意兼容性。**
 
 #### Cross-Cluster Replication across versions
 
