@@ -9,9 +9,7 @@
 | [01-current-tablet-creation-paths.md](01-current-tablet-creation-paths.md) | 当前所有 tablet 创建路径 | 19 条创建路径，涵盖 FE + BE 两侧 |
 | [02-cn-interaction-details.md](02-cn-interaction-details.md) | CN 在 tablet 创建时做了什么 | TabletMetadataPB 构建、schema file 创建、对象存储写入、缓存 |
 | [03-benefit-analysis.md](03-benefit-analysis.md) | 去掉 CN 交互的收益分析 | 性能、稳定性、可用性、易用性、资源效率、可扩展性 |
-| [04-affected-code-paths.md](04-affected-code-paths.md) | 受影响的所有代码路径 | FE 发送方(3条)、BE 执行方(1条)、BE 下游消费者(13条)、FE 完成依赖(6类)、配置/监控 |
-| [05-upgrade-downgrade-compatibility.md](05-upgrade-downgrade-compatibility.md) | 升降级兼容性分析 | 升级规范(先CN后FE)、降级规范(先FE后CN)、风险矩阵 |
-| [06-cross-cluster-and-snapshot.md](06-cross-cluster-and-snapshot.md) | 跨集群同步与 Cluster Snapshot 分析 | 跨集群复制受影响、Cluster Snapshot 基本不受影响 |
+| [04-affected-code-paths.md](04-affected-code-paths.md) | 受影响的所有代码路径 | FE 发送方(3条)、BE 执行方(1条)、BE 下游消费者(13条)、FE 完成依赖(6类)、配置/监控、升降级兼容性、跨集群同步、Cluster Snapshot |
 
 ## 背景
 

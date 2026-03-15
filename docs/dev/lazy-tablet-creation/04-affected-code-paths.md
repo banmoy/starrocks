@@ -2,13 +2,15 @@
 
 ## 概述
 
-去掉 CN 交互影响 6 大类别：
+去掉 CN 交互影响 8 大类别：
 1. FE 侧发送 CreateReplicaTask 的代码（3 条路径）
 2. BE 侧执行创建任务的代码（1 条主路径 + 4 件事）
 3. BE 侧读取初始 tablet metadata 的下游消费者（13 条路径）← **最关键**
 4. FE 侧依赖任务完成的代码（6 个方面）
 5. 配置参数、监控指标、运维路径
-6. 升降级兼容性（详见 [05-upgrade-downgrade-compatibility.md](05-upgrade-downgrade-compatibility.md)）
+6. 升降级兼容性
+7. 跨集群同步
+8. Cluster Snapshot
 
 ---
 
@@ -197,3 +199,85 @@
 ### 其他相关代码
 
 - `LakeTableAsyncFastSchemaChangeJob`（line 124-126）：使用 `TabletMetadataUpdateAgentTaskFactory` 更新已有 tablet metadata，**不是** CreateReplicaTask 路径，但 schema file 创建模式需 review
+
+---
+
+## Category 6: 升降级兼容性
+
+升级规范：**先升 CN，再升 FE**。降级规范：**先降 FE，再降 CN**。
+
+核心不变量变化：老版本假定 DDL 完成后 version 1 metadata 存在于对象存储；新版本打破了这个假定。
+
+### 升级场景
+
+| 阶段 | 状态 | 风险 |
+|------|------|------|
+| Phase 1：CN 新 + FE 老 | 老 FE 仍发 `CreateReplicaTask`，新 CN 保留 handler 正常处理 | **低** |
+| Phase 2：CN 新 + FE 新 | 新 FE 跳过 CN 交互，新 CN 必须处理缺失 metadata | **无**（目标态） |
+| 混合 FE Leader/Follower | CN 已全部是新版本，edit log 回放不发 CN task | **低** |
+
+关键洞察：CN 总是先于 FE 升级，所以当 FE（新或老）运行时，所有 CN 已是新版本。
+
+### 降级场景
+
+| 阶段 | 状态 | 风险 |
+|------|------|------|
+| Phase 1：FE 老 + CN 新 | 新 CN 同时支持有/无 metadata 的 tablet | **低**（修复窗口） |
+| Phase 2：FE 老 + CN 老 | 老 CN 无法处理缺失 metadata 的 tablet | **高** |
+
+Phase 2 中**只有新版本期间创建的 tablet 受影响**，老 FE 创建的 tablet 不受影响。
+
+缓解：降级 Phase 1 期间（新 CN 还在运行）运行修复工具，为缺失 metadata 的 tablet 补写。
+
+### 兼容性要素
+
+| 方面 | 影响 |
+|------|------|
+| Edit log 格式（`CreateTableInfo`、`AddPartitionsInfoV2` 等） | **不变** — 不含 CN 交互信息 |
+| FE image / checkpoint | **不变** |
+| `TabletMetadataPB` protobuf | **必须向后兼容** — 新字段须 optional + 有默认值 |
+| 对象存储产物（`{tablet_id}_1.meta`、`SCHEMA_{id}`） | **Breaking** — 可能不存在 |
+
+### 必须保证
+
+1. 新 CN **保留 `create_tablet` handler** — 升级/降级 Phase 1 使用
+2. 新 CN **处理所有 13 条下游消费者的缺失 metadata 情况**
+3. 降级需要修复工具或接受新 tablet 损坏
+
+---
+
+## Category 7: 跨集群同步
+
+**会受影响。** 跨集群同步（`LakeReplicationJob`）要求目标 tablet 已存在且有 metadata。
+
+BE 侧 `replicate_lake_remote_storage()` 有 3 处读取目标 tablet metadata：
+
+| 位置 | 代码 | 首次同步时版本 |
+|------|------|-------------|
+| `lake_replication_txn_manager.cpp:110` | `target_tablet.get_metadata(target_visible_version)` | 1 |
+| `lake_replication_txn_manager.cpp:333` | `get_tablet_metadata(target_tablet_id, data_version)` | 1 |
+| `transactions.cpp:253` | publish 时读 `base_version` | 1 |
+
+如果目标 tablet 由新 FE 创建（无 version 1 metadata），这 3 处全部失败。
+新 CN 必须在 `replicate_lake_remote_storage()` 和 `publish_version()` 中适配缺失 metadata。
+
+注：`SharedDataStorageVolumeMgr.getOrCreateVirtualTabletId()` 创建的虚拟 tablet 用于访问**源**集群存储，不受影响。
+
+---
+
+## Category 8: Cluster Snapshot
+
+存算分离不支持传统 BACKUP/RESTORE，使用 Cluster Snapshot。
+
+**Cluster Snapshot 只保存 FE image + StarMgr image，不涉及对象存储上的 tablet metadata。**
+
+| 场景 | 影响 |
+|------|------|
+| 创建 Cluster Snapshot | **不受影响** |
+| 同版本恢复 | **不受影响** |
+| 老版本 Snapshot → 新版本集群 | **不受影响** |
+| 新版本 Snapshot → 老版本集群 | **有风险** — 新 FE 创建的空 tablet（version=1）无 metadata，老 CN 无法操作 |
+| Vacuum 交互 | **不受影响** — `vacuum.cpp` 中 `ignore_not_found` 处理缺失文件 |
+
+注意：当前 Cluster Snapshot **不支持表级恢复**（整集群操作）。
+如果未来支持，恢复的表中可能包含无 metadata 的 tablet，目标集群 CN 须为新版本。
