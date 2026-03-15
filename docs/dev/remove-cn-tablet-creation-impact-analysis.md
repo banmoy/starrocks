@@ -529,56 +529,61 @@ created by new FE.
 
 **Impact:** Tablet split/merge is blocked for new tablets during mixed-version window.
 
-#### Backup/Restore across versions
+#### Cluster Snapshot (存算分离不支持传统 BACKUP/RESTORE，使用 Cluster Snapshot)
 
-**BACKUP 侧（读取 tablet metadata）会受影响。**
+Cluster Snapshot 机制与传统 BACKUP/RESTORE 完全不同：
 
-BACKUP 流程 (`LakeBackupJob` → `LakeSnapshotLoader::upload()`):
-1. FE: `prepareSnapshotTask()` 中取 `visibleVersion` — 新建空表时为 **1**
-2. FE: `lockTabletMetadata(tablet_id, version)` 锁定 metadata
-3. BE: `LakeSnapshotLoader::upload()`:
-   - `tablet->get_metadata(snapshot.version())` — **读取对象存储上的 metadata 文件**
-   - 遍历 metadata 中的 rowset 获取 segment 文件列表
-   - 将 metadata 文件 + segment 文件都上传到 backup 仓库
+**创建 Cluster Snapshot (`ClusterSnapshotJob`):**
+1. 捕获 FE journal ID 和 StarMgr journal ID 的一致性快照点
+2. 触发 FE checkpoint 生成 image（包含所有表/分区/tablet 的 FE 元数据）
+3. 触发 StarMgr checkpoint 生成 image（包含所有 shard/shard group 信息）
+4. 将 FE image + StarMgr image 上传到远端存储
 
-```191:199:be/src/runtime/lake_snapshot_loader.cpp
-        auto tablet = _env->lake_tablet_manager()->get_tablet(tablet_id);
-        auto tablet_metadata = tablet->get_metadata(snapshot.version());  // version=1 for empty table
-        for (const auto& rowset : (*tablet_metadata)->rowsets()) {
-            for (const std::string& segment : rowset.segments()) {
-                file_locations[segment] = tablet->segment_location(segment);
-            }
-        }
-        file_locations[starrocks::lake::tablet_metadata_filename(tablet_id, snapshot.version())] =
-                tablet->metadata_location(snapshot.version());
-```
+**Cluster Snapshot 不涉及对象存储上的 tablet metadata 或数据文件。**
+它只保存 FE 和 StarMgr 的元数据快照。数据文件和 tablet metadata 保持在原来的
+对象存储位置不动。
 
-**如果 version=1 的 metadata 不存在（新版本跳过了 CN 交互），`get_metadata(1)` 会失败，
-BACKUP 整个任务失败。**
+**恢复 Cluster Snapshot (`RestoreClusterSnapshotMgr`):**
+1. 从远端下载 FE image + StarMgr image 到本地
+2. FE 加载 image，恢复所有表/分区/tablet 的 FE 元数据
+3. StarMgr 加载 image，恢复所有 shard 信息
+4. 更新 frontend/compute node/storage volume 配置
+5. 数据文件和 tablet metadata 不需要移动或复制——它们还在原来的对象存储上
 
-**RESTORE 侧（写入 tablet metadata）不受影响。**
+**Vacuum 与 Cluster Snapshot 的交互：**
+- Vacuum 会查询 `ClusterSnapshotMgr.getVacuumRetainVersions()` 获取需要保留的版本
+- Cluster Snapshot 记录了每个 partition 的 `visibleVersion`，vacuum 不会删除这些版本的 metadata
+- 这确保恢复到某个 snapshot 点时，对应版本的 tablet metadata 仍然存在
 
-RESTORE 流程 (`LakeRestoreJob` → `LakeSnapshotLoader::restore()`):
-1. FE: `resetTableForRestore()` → `allocateFilePath()` (不调用 `createShards`)
-2. FE: `createTabletsForRestore()` → 创建 `LocalTablet` (FE 生成 ID)
-3. FE: `createReplicas()` → no-op for lake (只更新 inverted index)
-4. FE: `sendCreateReplicaTasks()` → no-op for lake
-5. BE: `LakeSnapshotLoader::restore()` 从 backup 读取 metadata，设置新 tablet ID，
-   直接通过 `put_tablet_metadata()` 写入对象存储，再拷贝 segment 文件
-
-Restore 完全绕过 `CreateReplicaTask` 路径，由 `LakeSnapshotLoader` 自己写 metadata。
-
-**场景分析：**
+**去掉 CN 交互对 Cluster Snapshot 的影响分析：**
 
 | 场景 | 影响 |
 |------|------|
-| **老版本 BACKUP → 新版本 RESTORE** | **OK** — backup 中包含 version 1 metadata 文件，restore 直接写入对象存储 |
-| **新版本 BACKUP 有数据的表 (version>1) → 老版本 RESTORE** | **OK** — backup 读 version>1 的 metadata（存在），restore 写入正常 |
-| **新版本 BACKUP 空表 (version=1，metadata 不存在) → 任何版本 RESTORE** | **FAILURE** — BACKUP 就失败了，无法读取 version 1 metadata |
-| **新版本 BACKUP 有数据的表 → 老版本 RESTORE** | **OK** — backup 包含实际的 metadata + segment，老版本 restore 正常写入 |
+| **创建 Cluster Snapshot** | **不受影响** — 只保存 FE + StarMgr image，不读取对象存储上的 tablet metadata |
+| **恢复 Cluster Snapshot（同版本）** | **不受影响** — 恢复 FE 元数据后，新 CN 知道如何处理有/无初始 metadata 的 tablet |
+| **恢复老版本 Snapshot 到新版本集群** | **不受影响** — FE 元数据中的 tablet 都是老版本创建的（有初始 metadata），新 CN 正常处理 |
+| **恢复新版本 Snapshot 到老版本集群** | **有风险** — FE 元数据中包含新版本创建的 tablet（无初始 metadata），老 CN 操作这些 tablet 会失败 |
 
-**结论：BACKUP 空表（刚创建未写入数据）在新版本上会失败，这是一个需要处理的问题。
-RESTORE 侧不受影响。**
+**恢复新版本 Snapshot 到老版本集群的具体问题：**
+
+Cluster Snapshot 恢复后，FE 元数据中记录的 tablet `visibleVersion=1`（空表/空分区）。
+当老 CN 尝试：
+- INSERT：`publish_version` 读 `base_version=1` → 对象存储上没有 version 1 metadata → **失败**
+- SELECT 空表：`get_tablet_metadata(tablet_id, 1)` → **失败**
+- Schema Change：`get_tablet(new_tablet_id, 1)` → **失败**
+
+但对于有数据的 tablet（version>1），publish_version 会使用更高版本的 metadata 作为 base，
+这些 metadata 是在数据写入时由 publish 创建的，与初始 metadata 无关。
+**所以只有 `visibleVersion=1` 的空 tablet 会有问题。**
+
+**与 Vacuum 的交互风险：**
+
+如果新版本跳过了 CN 交互（version 1 metadata 不存在），但 Cluster Snapshot 的
+`retainVersions` 包含 version 1（因为 FE 元数据中 partition `visibleVersion=1`）：
+- Vacuum 会尝试保留 version 1 metadata → 但文件本来就不存在 → vacuum 行为不受影响
+  （`vacuum.cpp` 中 `ignore_not_found` 处理了这个情况）
+
+**结论：Cluster Snapshot 的创建和同版本恢复不受影响。跨版本恢复（新→老）对空 tablet 有风险。**
 
 #### Cross-Cluster Replication across versions
 
