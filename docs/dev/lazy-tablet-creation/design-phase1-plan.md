@@ -132,11 +132,11 @@ BE 已有从 FE 获取 schema 的成熟机制：`TableSchemaService`（`table_sc
 
 ### Step 1：确定核心机制（第二阶段产出）
 
-**目标**：在延迟物化（Lazy Materialization）的方向下，确定具体的核心机制。
+**目标**：对比延迟物化（Lazy Materialization）和消除对 version 1 的需求两个方向，选定最终方向并确定具体的核心机制。
 
 关键决策点：
-- 配置信息获取渠道（扩展 FE RPC vs 首次写入传入配置 vs 其他）
-- lazy materialization 在 `get_tablet_metadata` 中的具体触发条件和构建流程
+- 两个方向在关键场景下的行为对比和优劣
+- 配置信息获取渠道（开放探索）
 - 如何保证未来新代码路径和新 metadata 字段的自然兼容
 
 验收标准：用核心机制走通 4 个关键场景（首次写入、首次查询、schema change、跨集群复制），并验证升降级每个阶段的行为。
@@ -159,30 +159,39 @@ BE 已有从 FE 获取 schema 的成熟机制：`TableSchemaService`（`table_sc
 
 ---
 
-## 四、方向确认：延迟物化（Lazy Materialization）
+## 四、方向思考
 
-### 4.1 确定方向
+### 4.1 首选方向：延迟物化（Lazy Materialization）
 
 核心思路：不在 DDL 时写入 version 1 metadata，而是在 CN 首次需要某个 tablet 的 metadata 时，在 `get_tablet_metadata` 的统一入口处构建它。
 
-选择这个方向的理由：
+倾向这个方向的理由：
 - **统一性**：所有下游消费者都通过 `get_tablet_metadata` 访问 metadata，在此处加入 lazy materialization 逻辑可以一次覆盖全部消费者。符合设计标准"用一个统一机制处理所有受影响的路径"。
 - **自然兼容性**：老 tablet 有 metadata → 正常读取；新 tablet 无 metadata → 触发 lazy materialization。CN 不需要区分老/新 tablet，行为自动适配。
 - **系统变简单**：FE 侧删除 CreateReplicaTask 的构建和发送逻辑、latch 等待、AgentTaskQueue 管理、超时/重试；CN 侧减少一个 agent task handler。
 - **面向未来**：新增的 metadata 读取代码自然走 `get_tablet_metadata`，不需要额外适配。
 
-### 4.2 第二阶段需解决的关键问题
+### 4.2 需对比的备选方向：消除对 version 1 的需求
 
-- 构建完整 TabletMetadataPB 需要哪些信息、这些信息从哪里获取（详见 5.1）
-- 物化结果的生命周期管理（详见 5.1）
-- 首次操作的额外延迟评估
+核心思路：修改所有下游消费者，使其不再假设 version 1 metadata 存在。例如 publish 时直接创建 version 2（无需 base version），查询空表时不读取 metadata 等。
+
+这个方向值得在第二阶段探索对比的原因：
+- **最彻底**：从根本上消除"初始 metadata"的概念，系统中不再有"version 1 是特殊的"这一假设
+- **无运行时开销**：不需要在首次操作时执行额外的 RPC 或构建逻辑
+- **无降级问题**：如果消费者本身不依赖 version 1，降级后也不会因缺失 metadata 而出问题
+
+当前的顾虑（需在第二阶段验证是否成立）：
+- 涉及 16 条消费者路径的修改，可能本质上是逐条打补丁
+- 每个新功能开发者需记住"不能假设 version 1 存在"的约束
+- 部分路径（如 publish version 读 base_version）的语义改动可能较复杂
+
+**第二阶段的任务**：将两个方向各走通关键场景（首次写入、首次查询、schema change、跨集群复制），比较优劣后选定。
 
 ### 4.3 排除的备选方向
 
 | 方向 | 简述 | 排除理由 |
 |------|------|---------|
 | **FE 直接写对象存储** | FE 在 DDL 时构建 TabletMetadataPB 并写入 | 设计标准明确排除"转移依赖"；FE 需要 schema 转换逻辑和对象存储写入能力 |
-| **消除对 version 1 的需求** | 修改所有消费者不假设 version 1 存在 | 涉及 16+ 条路径逐个修改，本质上是逐条打补丁，且每个新功能都需记住这个约束 |
 | **StarManager 存储初始信息** | CN 从 StarManager 获取 schema 和配置 | 增加 StarManager 职责和复杂度，shard 元数据格式需要大改 |
 
 ---
@@ -199,15 +208,17 @@ BE 已有从 FE 获取 schema 的成熟机制：`TableSchemaService`（`table_sc
 
 ### 5.2 待解问题
 
-1. **Tablet-level 配置信息的获取渠道**
+1. **Tablet-level 配置信息的获取渠道**（开放问题）
 
    构建完整的 `TabletMetadataPB` 除了 schema 外，还需要 `enable_persistent_index`、`persistent_index_type`、`compaction_strategy`、`flat_json_config`、`range`、`gtid` 等字段。现有的 `TableSchemaService` 只返回 schema。
 
-   两个备选方案需要在第二阶段对比：
-   - **方案 A：扩展 FE RPC**——扩展 `TableSchemaService`（或新增 RPC）以返回完整的 tablet 初始化信息（schema + 配置），CN 在 lazy materialization 时调用
-   - **方案 B：首次写入路径传入配置**——FE 在发起首次写入（如 publish version）时，将配置信息作为请求参数传入，CN 用这些信息构建 metadata
+   需要在第二阶段探索的可能方案：
+   - **扩展 FE RPC**：扩展 `TableSchemaService`（或新增 RPC）以返回完整的 tablet 初始化信息（schema + 配置），CN 在 lazy materialization 时调用
+   - **首次写入路径传入配置**：FE 在发起首次写入（如 publish version）时，将配置信息作为请求参数传入，CN 用这些信息构建 metadata
+   - **利用已有信息推导**：部分字段可能有确定性的默认值或可从其他已有信息源（如 schema 本身、shard properties）推导
+   - 其他可能的渠道
 
-   对比维度：对已有代码路径的侵入性、是否所有消费者（不仅是写入）都能覆盖、扩展性（新字段加入时的改动量）。
+   对比维度：对已有代码路径的侵入性、是否所有消费者（不仅是写入）都能覆盖、扩展性（新字段加入时的改动量）。这个问题的答案也可能因最终选定的方向（延迟物化 vs 消除对 version 1 的需求）而不同。
 
 2. **首次操作延迟评估**
 
