@@ -531,17 +531,51 @@ created by new FE.
 
 #### Backup/Restore across versions
 
+Lake RESTORE has its own independent metadata writing path, does NOT depend on tablet creation's
+CN interaction:
+
+1. `LakeRestoreJob.resetTableForRestore()` → `allocateFilePath()` only (no `createShards`)
+2. `RestoreJob.createTabletsForRestore()` creates `LocalTablet` with FE-generated IDs
+3. `LakeRestoreJob.createReplicas()` → overridden as no-op (just updates inverted index)
+4. `LakeRestoreJob.sendCreateReplicaTasks()` → no-op for lake
+5. `LakeSnapshotLoader::restore()` on BE reads metadata from backup and writes it directly
+   via `put_tablet_metadata()`, then copies segment files from backup to object storage
+
+**Key point:** Lake restore bypasses the normal `CreateReplicaTask → create_tablet()` path entirely.
+The metadata on object storage is written by `LakeSnapshotLoader`, not by `create_tablet()`.
+
 | Scenario | Impact |
 |----------|--------|
-| Backup on old version, restore on new version | Old backup contains tables with metadata on object storage. New restore flow must handle this. Generally **OK** since `LakeRestoreJob` has its own metadata writing path via `LakeSnapshotLoader`. |
-| Backup on new version, restore on old version | If new version's backup relies on metadata not being on object storage, old restore may fail. Depends on backup format — backup snapshots usually contain actual data files, not just metadata pointers. |
+| Backup on old version, restore on new version | **OK** — `LakeSnapshotLoader` writes metadata from backup regardless of how tablets were originally created |
+| Backup on new version, restore on old version | **OK** — backup contains actual metadata files and segments; old `LakeSnapshotLoader` writes them the same way |
+| Restore on new version where tablet creation skips CN | **OK** — restore has its own metadata writing path, never uses `CreateReplicaTask` |
+
+**No impact from removing CN interaction during tablet creation.**
 
 #### Cross-Cluster Replication across versions
 
+Lake replication (`LakeReplicationJob`) requires the target table to already exist with tablets.
+The replication flow reads target tablet metadata during execution:
+
+1. `LakeReplicationJob.run()` → `sendReplicateLakeRemoteStorageTasks()`
+2. BE: `replicate_lake_remote_storage()` reads target tablet metadata:
+   - `target_tablet.get_metadata(target_visible_version)` — version 1 for first replication
+   - `get_tablet_metadata(target_tablet_id, data_version)` — version 1 for first replication
+3. Copies data from source to target storage, writes txn log
+4. `publish_version` reads `base_version=1` metadata to apply txn logs
+
+**All three reads require version 1 metadata to exist on object storage.**
+
 | Scenario | Impact |
 |----------|--------|
-| Old source → New target | Target tablets created by new FE without metadata. Replication writes to target tablet — `lake_replication_txn_manager.cpp` reads target metadata → **fails** if target version 1 missing |
-| New source → Old target | Target tablets created by old FE with metadata. Should **work** |
+| Target tablets created by old FE (with metadata) | **OK** — metadata exists, replication works |
+| Target tablets created by new FE (without metadata) + new CN | **Depends** — new CN must handle missing version 1 metadata in `replicate_lake_remote_storage()` and `publish_version()` |
+| Target tablets created by new FE (without metadata) + old CN after downgrade | **FAILURE** — old CN cannot handle missing metadata |
+
+**This is an affected path.** Cross-cluster replication is one of the 13 downstream consumers
+(Category 3, item #6) that reads initial tablet metadata. The new CN must be updated to handle
+this case — either by lazily creating metadata on first replication, or by having FE supply the
+necessary schema information in the replication request itself.
 
 ### 6.5 StarManager / StarOS Compatibility
 
