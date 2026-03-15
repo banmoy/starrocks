@@ -531,26 +531,54 @@ created by new FE.
 
 #### Backup/Restore across versions
 
-Lake RESTORE has its own independent metadata writing path, does NOT depend on tablet creation's
-CN interaction:
+**BACKUP 侧（读取 tablet metadata）会受影响。**
 
-1. `LakeRestoreJob.resetTableForRestore()` → `allocateFilePath()` only (no `createShards`)
-2. `RestoreJob.createTabletsForRestore()` creates `LocalTablet` with FE-generated IDs
-3. `LakeRestoreJob.createReplicas()` → overridden as no-op (just updates inverted index)
-4. `LakeRestoreJob.sendCreateReplicaTasks()` → no-op for lake
-5. `LakeSnapshotLoader::restore()` on BE reads metadata from backup and writes it directly
-   via `put_tablet_metadata()`, then copies segment files from backup to object storage
+BACKUP 流程 (`LakeBackupJob` → `LakeSnapshotLoader::upload()`):
+1. FE: `prepareSnapshotTask()` 中取 `visibleVersion` — 新建空表时为 **1**
+2. FE: `lockTabletMetadata(tablet_id, version)` 锁定 metadata
+3. BE: `LakeSnapshotLoader::upload()`:
+   - `tablet->get_metadata(snapshot.version())` — **读取对象存储上的 metadata 文件**
+   - 遍历 metadata 中的 rowset 获取 segment 文件列表
+   - 将 metadata 文件 + segment 文件都上传到 backup 仓库
 
-**Key point:** Lake restore bypasses the normal `CreateReplicaTask → create_tablet()` path entirely.
-The metadata on object storage is written by `LakeSnapshotLoader`, not by `create_tablet()`.
+```191:199:be/src/runtime/lake_snapshot_loader.cpp
+        auto tablet = _env->lake_tablet_manager()->get_tablet(tablet_id);
+        auto tablet_metadata = tablet->get_metadata(snapshot.version());  // version=1 for empty table
+        for (const auto& rowset : (*tablet_metadata)->rowsets()) {
+            for (const std::string& segment : rowset.segments()) {
+                file_locations[segment] = tablet->segment_location(segment);
+            }
+        }
+        file_locations[starrocks::lake::tablet_metadata_filename(tablet_id, snapshot.version())] =
+                tablet->metadata_location(snapshot.version());
+```
 
-| Scenario | Impact |
-|----------|--------|
-| Backup on old version, restore on new version | **OK** — `LakeSnapshotLoader` writes metadata from backup regardless of how tablets were originally created |
-| Backup on new version, restore on old version | **OK** — backup contains actual metadata files and segments; old `LakeSnapshotLoader` writes them the same way |
-| Restore on new version where tablet creation skips CN | **OK** — restore has its own metadata writing path, never uses `CreateReplicaTask` |
+**如果 version=1 的 metadata 不存在（新版本跳过了 CN 交互），`get_metadata(1)` 会失败，
+BACKUP 整个任务失败。**
 
-**No impact from removing CN interaction during tablet creation.**
+**RESTORE 侧（写入 tablet metadata）不受影响。**
+
+RESTORE 流程 (`LakeRestoreJob` → `LakeSnapshotLoader::restore()`):
+1. FE: `resetTableForRestore()` → `allocateFilePath()` (不调用 `createShards`)
+2. FE: `createTabletsForRestore()` → 创建 `LocalTablet` (FE 生成 ID)
+3. FE: `createReplicas()` → no-op for lake (只更新 inverted index)
+4. FE: `sendCreateReplicaTasks()` → no-op for lake
+5. BE: `LakeSnapshotLoader::restore()` 从 backup 读取 metadata，设置新 tablet ID，
+   直接通过 `put_tablet_metadata()` 写入对象存储，再拷贝 segment 文件
+
+Restore 完全绕过 `CreateReplicaTask` 路径，由 `LakeSnapshotLoader` 自己写 metadata。
+
+**场景分析：**
+
+| 场景 | 影响 |
+|------|------|
+| **老版本 BACKUP → 新版本 RESTORE** | **OK** — backup 中包含 version 1 metadata 文件，restore 直接写入对象存储 |
+| **新版本 BACKUP 有数据的表 (version>1) → 老版本 RESTORE** | **OK** — backup 读 version>1 的 metadata（存在），restore 写入正常 |
+| **新版本 BACKUP 空表 (version=1，metadata 不存在) → 任何版本 RESTORE** | **FAILURE** — BACKUP 就失败了，无法读取 version 1 metadata |
+| **新版本 BACKUP 有数据的表 → 老版本 RESTORE** | **OK** — backup 包含实际的 metadata + segment，老版本 restore 正常写入 |
+
+**结论：BACKUP 空表（刚创建未写入数据）在新版本上会失败，这是一个需要处理的问题。
+RESTORE 侧不受影响。**
 
 #### Cross-Cluster Replication across versions
 
