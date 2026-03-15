@@ -386,3 +386,188 @@ After tablet creation succeeds, different features proceed differently:
 | Config | `lake_enable_tablet_creation_optimization` | Concept changes entirely |
 | Metric | `create_tablet_requests_total` | Not incremented for lake |
 | Metric | `create_tablet_requests_failed` | Not incremented for lake |
+
+---
+
+## Category 6: Upgrade/Downgrade Compatibility
+
+Removing CN interaction during tablet creation introduces a **behavioral change in the contract between
+FE, CN, and object storage**. The key invariant that changes is:
+
+> **Old invariant:** After DDL completes, the initial tablet metadata file (version 1) exists on object storage.
+>
+> **New invariant:** After DDL completes, the initial tablet metadata file may NOT exist on object storage;
+> it may be created lazily or through a different mechanism.
+
+This affects every rolling upgrade, mixed-version, and downgrade scenario.
+
+### 6.1 Rolling Upgrade Scenarios
+
+#### Scenario A: FE upgraded first, CN not yet upgraded
+
+| Phase | State | Risk |
+|-------|-------|------|
+| New FE creates table | New FE skips CN interaction, does NOT write initial metadata to object storage | **None yet** — metadata not written, but no one reads it yet |
+| Old CN receives data write (INSERT) | Old CN tries `publish_version` → reads `base_version=1` metadata | **FAILURE** — `transactions.cpp:253` reads version 1, file not found |
+| Old CN receives query (SELECT on empty table) | Old CN tries `get_tablet_metadata(tablet_id, 1)` | **FAILURE** — `lake_connector.cpp:192` reads visible version 1, file not found |
+| Old CN receives schema change task | `schema_change.cpp:373` reads `get_tablet(new_tablet_id, 1)` | **FAILURE** — version 1 metadata not found |
+
+**Conclusion:** If FE is upgraded first and no longer writes initial metadata via CN, all old CNs
+will fail on the first operation against newly created tablets. **This is a hard incompatibility.**
+
+#### Scenario B: CN upgraded first, FE not yet upgraded
+
+| Phase | State | Risk |
+|-------|-------|------|
+| Old FE creates table | Old FE sends `CreateReplicaTask` to new CN | New CN must still support `run_create_tablet_task` → `lake::TabletManager::create_tablet()` |
+| New CN handles CREATE task | CN writes metadata normally | **OK** — as long as new CN preserves backward compatibility in the handler |
+
+**Conclusion:** Safe, as long as new CN does **not remove** the `create_tablet` handler.
+New CN must keep handling `TTaskType::CREATE` for `TABLET_TYPE_LAKE`.
+
+#### Scenario C: Mixed FE cluster during rolling upgrade (Leader vs Follower)
+
+| Phase | State | Risk |
+|-------|-------|------|
+| New FE Leader, old FE Followers | New Leader creates table without CN interaction, writes edit log | Old Followers replay edit log — `replayCreateTable()`, `replayAddPartition()` only apply FE metadata, do NOT send CN tasks |
+| Old FE Leader, new FE Followers | Old Leader creates table via CN interaction normally | New Followers replay edit log normally |
+
+**Conclusion:** Edit log replay is **NOT affected** because FE followers never send `CreateReplicaTask`
+during replay — they only apply metadata changes. The edit log format (`CreateTableInfo`,
+`AddPartitionsInfoV2`, `TruncateTableInfo`) does not need to change.
+
+**However:** If new FE Leader creates a table and then leadership transfers to old FE:
+- Old FE does not know whether initial metadata was written to object storage
+- Old FE may attempt operations that assume metadata exists
+- For example: if old FE triggers `buildPartitions()` for ADD PARTITION on the same table,
+  it sends `CreateReplicaTask` to CN, which succeeds independently
+- But subsequent data operations on the original partitions (created by new FE without metadata)
+  may fail on CN
+
+### 6.2 Downgrade Scenarios
+
+#### Scenario D: Downgrade FE from new version to old version
+
+| Phase | State | Risk |
+|-------|-------|------|
+| New FE created tables without initial metadata | Tablets exist in FE metadata, shards exist in StarManager, but NO metadata files on object storage | — |
+| Downgraded old FE tries to operate on these tables | Old FE assumes metadata was written during creation | — |
+| Data write to these tables | CN `publish_version` fails — `base_version=1` metadata not found | **FAILURE** |
+| Query on empty tables | CN scan fails — version 1 metadata not found | **FAILURE** |
+| Schema change on these tables | CN `get_tablet(new_id, 1)` fails | **FAILURE** |
+| DROP TABLE | FE deletes shards via StarManager, GC tries to delete metadata files | **OK** — vacuum handles missing files gracefully (`ignore_not_found`) |
+
+**Conclusion:** After downgrade, all tables/partitions created by the new FE version are
+**permanently broken** — they cannot accept data writes, queries, or schema changes.
+The only way to "fix" them is to DROP and re-create.
+
+#### Scenario E: Downgrade CN from new version to old version
+
+| Phase | State | Risk |
+|-------|-------|------|
+| Old CN receives `CreateReplicaTask` from FE | If old CN has `create_tablet` handler | **OK** — old CN handles it normally |
+| Old CN reads metadata written by new CN | If format is unchanged | **OK** — as long as protobuf is backward compatible |
+
+**Conclusion:** Generally safe, as long as new CN did not change the `TabletMetadataPB` format
+in a backward-incompatible way.
+
+### 6.3 Object Storage Artifact Compatibility
+
+The implicit "contract" for object storage artifacts after tablet creation:
+
+| Artifact | Old Version Expectation | New Version Behavior | Gap |
+|----------|------------------------|---------------------|-----|
+| `{tablet_id}_{version_1}.meta` (per-tablet) | Exists after creation when `tablet_creation_optimization=false` | May not exist | **Breaking** |
+| `0000000000000000_0000000000000001.meta` (shared initial, per-partition) | Exists after creation when `tablet_creation_optimization=true` | May not exist | **Breaking** |
+| `SCHEMA_{schema_id}` (schema file) | Exists for first tablet per partition | May not exist | **Degraded** — fallback to metadata works, but adds latency; may fail if metadata also missing |
+| `TabletMetadataPB` protobuf format | Version N | Version N+1 (must be backward compatible) | **Must ensure** protobuf backward compatibility |
+
+### 6.4 Cross-Feature Compatibility During Mixed Versions
+
+#### Schema Change (ALTER TABLE) during rolling upgrade
+
+1. New FE creates shadow tablets without CN interaction (no metadata written)
+2. New FE sends ALTER task to old CN
+3. Old CN tries `get_tablet(new_tablet_id, 1)` → **fails**
+
+**Impact:** Schema change is blocked during mixed-version window for tables with shadow tablets
+created by new FE.
+
+#### Tablet Split/Merge during rolling upgrade
+
+1. New FE creates new shard IDs via `createShardsForSplit/Merge`
+2. New FE sends `PublishVersionRequest` with `resharding_tablet_infos` to CN
+3. CN's `publish_resharding_tablet()` reads new tablet metadata
+4. If new tablet metadata was never written, resharding **fails**
+
+**Impact:** Tablet split/merge is blocked for new tablets during mixed-version window.
+
+#### Backup/Restore across versions
+
+| Scenario | Impact |
+|----------|--------|
+| Backup on old version, restore on new version | Old backup contains tables with metadata on object storage. New restore flow must handle this. Generally **OK** since `LakeRestoreJob` has its own metadata writing path via `LakeSnapshotLoader`. |
+| Backup on new version, restore on old version | If new version's backup relies on metadata not being on object storage, old restore may fail. Depends on backup format — backup snapshots usually contain actual data files, not just metadata pointers. |
+
+#### Cross-Cluster Replication across versions
+
+| Scenario | Impact |
+|----------|--------|
+| Old source → New target | Target tablets created by new FE without metadata. Replication writes to target tablet — `lake_replication_txn_manager.cpp` reads target metadata → **fails** if target version 1 missing |
+| New source → Old target | Target tablets created by old FE with metadata. Should **work** |
+
+### 6.5 StarManager / StarOS Compatibility
+
+| Aspect | Impact |
+|--------|--------|
+| Shard creation via `StarOSAgent.createShards()` | **Unchanged** — shard IDs are still allocated from StarManager regardless of whether CN interaction happens |
+| Shard deletion / GC | **Unchanged** — shard deletion is driven by FE, not by whether metadata file exists |
+| Shard info queries | **Unchanged** — StarManager tracks shards independently |
+| Worker (CN) shard registration | **May be affected** — if CN's `StarOSWorker::add_shard()` depends on metadata existence for health checks |
+
+### 6.6 Edit Log / Journal Compatibility
+
+| Aspect | Impact |
+|--------|--------|
+| `logCreateTable(CreateTableInfo)` | **Format unchanged** — `CreateTableInfo` contains table schema, partition info, etc. No reference to whether CN was involved |
+| `logAddPartition(PartitionPersistInfoV2)` | **Format unchanged** — contains partition metadata |
+| `logTruncateTable(TruncateTableInfo)` | **Format unchanged** — contains partition replacement info |
+| FE image (checkpoint) | **Format unchanged** — contains table/partition/tablet metadata |
+| Follower replay | **Not affected** — followers never send `CreateReplicaTask`; they only apply metadata |
+| Log replay after restart | **Not affected** — same as follower replay |
+
+**Conclusion:** Edit log format does NOT need to change. The compatibility issue is purely at the
+**object storage artifact level**, not at the FE metadata level.
+
+### 6.7 FE Metadata Consistency
+
+| Aspect | Old Behavior | New Behavior | Risk |
+|--------|-------------|-------------|------|
+| `PhysicalPartition.visibleVersion` | Set to `PARTITION_INIT_VERSION = 1` during creation | Same — FE metadata unchanged | **None** |
+| `Tablet` in `MaterializedIndex` | `LakeTablet(shardId)` added to index | Same — FE metadata unchanged | **None** |
+| `OlapTable.partitions` | Partition registered after `buildPartitions` succeeds | Partition registered after metadata/shard creation succeeds (no CN wait) | **Timing change** — partition may be visible to queries sooner, before CN has any metadata |
+
+### 6.8 Summary: Compatibility Risk Matrix
+
+| Scenario | Risk Level | Failure Mode |
+|----------|-----------|--------------|
+| FE upgraded first, CN old | **Critical** | All operations on new tablets fail |
+| CN upgraded first, FE old | **Low** | Safe if CN keeps old handler |
+| Mixed FE leader/follower | **Medium** | Leadership transfer can expose gaps |
+| Downgrade FE | **Critical** | Tables created by new FE are permanently broken |
+| Downgrade CN | **Low** | Safe if protobuf is backward compatible |
+| Backup old → Restore new | **Low** | Restore has own write path |
+| Backup new → Restore old | **Medium** | Old restore may not handle missing metadata |
+| Replication old → new target | **High** | Target tablet metadata missing |
+| Edit log replay | **None** | Format unchanged, replay doesn't send CN tasks |
+| StarManager state | **None** | Shard allocation independent of metadata |
+
+### 6.9 Required Compatibility Guarantees
+
+For a safe rollout, the following must hold:
+
+1. **New CN MUST still handle `TTaskType::CREATE` for `TABLET_TYPE_LAKE`** — old FE may still send these tasks during rolling upgrade
+2. **New FE MUST still create initial metadata** when cluster has mixed CN versions — need a version negotiation or feature flag mechanism
+3. **Protobuf `TabletMetadataPB` MUST remain backward compatible** — new fields must be optional with defaults
+4. **A migration/repair mechanism** is needed for tablets created by new FE when downgrading — or accept that downgrade is a destructive operation for new tablets
+5. **Feature flag** to control the new behavior, defaulting to OFF, allowing gradual rollout after all CNs are upgraded
