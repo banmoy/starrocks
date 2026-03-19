@@ -14,7 +14,10 @@
 
 #include "storage/task/engine_storage_migration_task.h"
 
+#include <chrono>
+#include <filesystem>
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include "butil/file_util.h"
 #include "common/config.h"
@@ -35,9 +38,11 @@
 #include "storage/rowset/rowset_writer.h"
 #include "storage/rowset/rowset_writer_context.h"
 #include "storage/storage_engine.h"
+#include "storage/tablet_meta_manager.h"
 #include "storage/update_manager.h"
 #include "testutil/assert.h"
 #include "util/cpu_info.h"
+#include "util/failpoint/fail_point.h"
 #include "util/disk_info.h"
 #include "util/logging.h"
 #include "util/mem_info.h"
@@ -606,6 +611,114 @@ TEST_F(EngineStorageMigrationTaskTest, test_migrate_empty_pk_tablet) {
     ASSERT_OK(migration_task.execute());
 }
 
+// Reproduces a bug where rapid PK tablet re-migration (disk A→B→A) causes rowset meta loss.
+//
+// Root cause: _add_shutdown_tablet_unlocked calls _remove_tablet_meta(V1) which does
+// clear_meta() by tablet_id, wiping ALL metadata for that tablet_id on V1's disk —
+// including metadata that now belongs to a newer tablet instance (V3) on the same disk.
+//
+// This test reproduces the full bug scenario using a fail point to simulate the GC race condition:
+//   1. Migration A→B: V1 enters _shutdown_tablets, V2 active on disk_b
+//   2. GC sweep: sweep_shutdown_tablet deletes V1's RocksDB meta from disk_a,
+//      but fail point makes start_trash_sweep return before removing V1 from _shutdown_tablets
+//   3. Migration B→A: stale check on disk_a returns NotFound (GC already cleared it),
+//      create_tablet_from_meta_snapshot writes V3's metadata to disk_a,
+//      _add_tablet_unlocked → _drop_tablet_unlocked → _add_shutdown_tablet_unlocked
+//      finds V1 → _remove_tablet_meta(V1) → clear_meta() wipes V3's metadata
+TEST_F(EngineStorageMigrationTaskTest, test_pk_migration_gc_race_clears_new_tablet_meta) {
+    int64_t tablet_id = 77777;
+    int32_t schema_hash = 7777;
+    TabletManager* tablet_manager = StorageEngine::instance()->tablet_manager();
+
+    // Create PK tablet with one committed rowset so we can verify metadata loss
+    TabletSharedPtr tablet = create_pk_tablet(tablet_id, schema_hash);
+    tablet->set_enable_persistent_index(false);
+    ASSERT_TRUE(tablet != nullptr);
+    tablet->set_tablet_state(TABLET_RUNNING);
+    tablet->save_meta();
+
+    // Commit a rowset to give the tablet verifiable metadata
+    std::vector<int64_t> keys = {1, 2, 3, 4, 5};
+    auto rowset = create_pk_rowset(tablet, keys);
+    ASSERT_OK(tablet->rowset_commit(2, rowset));
+
+    DataDir* disk_a = tablet->data_dir();
+    DataDir* disk_b = nullptr;
+    for (auto* store : StorageEngine::instance()->get_stores()) {
+        if (store != disk_a) {
+            disk_b = store;
+            break;
+        }
+    }
+    ASSERT_TRUE(disk_b != nullptr);
+    tablet.reset(); // Release reference so sweep's use_count check passes
+
+    // Step 1: Migrate A→B. V1 → _shutdown_tablets, V2 active on disk_b
+    EngineStorageMigrationTask migration1(tablet_id, schema_hash, disk_b, false);
+    ASSERT_OK(migration1.execute());
+    tablet = tablet_manager->get_tablet(tablet_id);
+    ASSERT_EQ(tablet->data_dir(), disk_b);
+    tablet.reset();
+
+    // Step 2: Enable fail point — start_trash_sweep will return after sweep phase,
+    // skipping removal of V1 from _shutdown_tablets
+    PFailPointTriggerMode trigger_mode;
+    trigger_mode.set_mode(FailPointTriggerModeType::ENABLE);
+    auto fp = starrocks::failpoint::FailPointRegistry::GetInstance()->get(
+            "start_trash_sweep_skip_shutdown_tablets_cleanup");
+    ASSERT_TRUE(fp != nullptr);
+    fp->setMode(trigger_mode);
+
+    // Step 3: Run GC — sweeps V1 (deletes meta from disk_a RocksDB, moves files to trash),
+    // returns early without removing V1 from _shutdown_tablets
+    ASSERT_OK(tablet_manager->start_trash_sweep());
+
+    // Disable fail point
+    trigger_mode.set_mode(FailPointTriggerModeType::DISABLE);
+    fp->setMode(trigger_mode);
+
+    // Verify race condition state: V1's TabletMetaPB gone from disk_a
+    TabletMeta tmp_meta;
+    ASSERT_TRUE(TabletMetaManager::get_tablet_meta(disk_a, tablet_id, schema_hash, &tmp_meta).is_not_found());
+
+    // Step 4: Migrate B→A — triggers the bug
+    EngineStorageMigrationTask migration2(tablet_id, schema_hash, disk_a, false);
+    ASSERT_OK(migration2.execute());
+
+    // Step 5: Verify bug — V3's rowset metas wiped by clear_meta()
+    tablet = tablet_manager->get_tablet(tablet_id);
+    ASSERT_TRUE(tablet != nullptr);
+    ASSERT_EQ(tablet->data_dir(), disk_a);
+
+    int rowset_count = 0;
+    ASSERT_OK(TabletMetaManager::rowset_iterate(disk_a, tablet_id,
+                                                [&](RowsetMetaSharedPtr meta) -> bool {
+                                                    rowset_count++;
+                                                    return true;
+                                                }));
+    // BUG: rowset metas wiped — clear_meta() uses tablet_id without checking tablet_uid
+    ASSERT_EQ(0, rowset_count);
+
+    // Step 6: Simulate BE restart — reuse load_tablet_from_meta to verify
+    // "tablet init missing rowset". Full load path:
+    //   load_tablet_from_meta → Tablet::create_tablet_from_meta → tablet->init()
+    //     → TabletUpdates::init() → _load_from_pb() → _load_rowsets_and_check_consistency()
+    // In debug builds, DCHECK(false) triggers abort on detecting missing rowsets.
+    {
+        TabletMeta v3_meta;
+        ASSERT_OK(TabletMetaManager::get_tablet_meta(disk_a, tablet_id, schema_hash, &v3_meta));
+        std::string meta_binary;
+        ASSERT_OK(v3_meta.serialize(&meta_binary));
+
+        ASSERT_DEATH(
+                tablet_manager->load_tablet_from_meta(disk_a, tablet_id, schema_hash, meta_binary, false),
+                "tablet init missing rowset");
+    }
+
+    // Cleanup: run GC again to remove stale V1 from _shutdown_tablets
+    tablet_manager->start_trash_sweep();
+}
+
 } // namespace starrocks
 
 int main(int argc, char** argv) {
@@ -623,7 +736,19 @@ int main(int argc, char** argv) {
 
     starrocks::config::sys_log_level = "INFO";
     butil::FilePath storage_root;
-    CHECK(butil::CreateNewTempDirectory("tmp_ut_", &storage_root));
+    if (!butil::CreateNewTempDirectory("tmp_ut_", &storage_root)) {
+        namespace sfs = std::filesystem;
+        sfs::path base = sfs::temp_directory_path();
+        sfs::path fallback =
+                base / ("tmp_ut_" + std::to_string(getpid()) + "_" +
+                        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        if (!sfs::create_directories(fallback)) {
+            fprintf(stderr,
+                    "Failed to create temp directory. Try export TMPDIR=/tmp or ensure system temp dir is writable.\n");
+            exit(-1);
+        }
+        storage_root = butil::FilePath(fallback.string());
+    }
     std::string root_path_1 = storage_root.value() + "/migration_test_path_1";
     std::string root_path_2 = storage_root.value() + "/migration_test_path_2";
     std::string root_path_3 = storage_root.value() + "/migration_test_path_3";

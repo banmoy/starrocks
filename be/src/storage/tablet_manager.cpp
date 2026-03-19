@@ -62,6 +62,7 @@
 #include "storage/txn_manager.h"
 #include "storage/update_manager.h"
 #include "storage/utils.h"
+#include "util/failpoint/fail_point.h"
 #include "util/path_util.h"
 #include "util/starrocks_metrics.h"
 
@@ -1160,6 +1161,8 @@ Status TabletManager::start_trash_sweep() {
         sweep_shutdown_tablet(info, finished_tablets_redundant);
     }
 
+    FAIL_POINT_TRIGGER_RETURN(start_trash_sweep_skip_shutdown_tablets_cleanup, Status::OK());
+
     if (!finished_tablets.empty() || !finished_tablets_redundant.empty()) {
         std::unique_lock l(_shutdown_tablets_lock);
         for (const auto& tablet_info_finished : finished_tablets) {
@@ -1895,5 +1898,7 @@ void TabletManager::_add_shutdown_tablet_unlocked(int64_t tablet_id, DroppedTabl
     }
     _shutdown_tablets.emplace(tablet_id, drop_info);
 }
+
+DEFINE_FAIL_POINT(start_trash_sweep_skip_shutdown_tablets_cleanup);
 
 } // end namespace starrocks
