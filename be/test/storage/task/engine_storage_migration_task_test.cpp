@@ -685,6 +685,11 @@ TEST_F(EngineStorageMigrationTaskTest, test_pk_migration_gc_race_clears_new_tabl
     TabletMeta tmp_meta;
     ASSERT_TRUE(TabletMetaManager::get_tablet_meta(disk_a, tablet_id, schema_hash, &tmp_meta).is_not_found());
 
+    // Wait so that the second migration's assign_new_rowset_id gets a strictly newer creation_time
+    // than V2's rowsets. Without this, both migrations may run in the same second, causing
+    // replace_old_fn to return false (same version + same creation_time).
+    sleep(1);
+
     // Step 4: Migrate B→A — triggers the bug
     EngineStorageMigrationTask migration2(tablet_id, schema_hash, disk_a, false);
     ASSERT_OK(migration2.execute());
