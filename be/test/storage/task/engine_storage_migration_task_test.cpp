@@ -642,6 +642,10 @@ TEST_F(EngineStorageMigrationTaskTest, test_pk_migration_gc_race_clears_new_tabl
     auto rowset = create_pk_rowset(tablet, keys);
     ASSERT_OK(tablet->rowset_commit(2, rowset));
 
+    // Wait so that assign_new_rowset_id (called during migration) gets a newer creation_time
+    // than V1's rowsets. replace_old_fn requires new_time > old_time for same-version replacement.
+    sleep(1);
+
     DataDir* disk_a = tablet->data_dir();
     DataDir* disk_b = nullptr;
     for (auto* store : StorageEngine::instance()->get_stores()) {
