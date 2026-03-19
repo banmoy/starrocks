@@ -708,20 +708,29 @@ TEST_F(EngineStorageMigrationTaskTest, test_pk_migration_gc_race_clears_new_tabl
     // BUG: rowset metas wiped — clear_meta() uses tablet_id without checking tablet_uid
     ASSERT_EQ(0, rowset_count);
 
-    // Step 6: Simulate BE restart — reuse load_tablet_from_meta to verify
-    // "tablet init missing rowset". Full load path:
-    //   load_tablet_from_meta → Tablet::create_tablet_from_meta → tablet->init()
-    //     → TabletUpdates::init() → _load_from_pb() → _load_rowsets_and_check_consistency()
-    // In debug builds, DCHECK(false) triggers abort on detecting missing rowsets.
+    // Step 6: Simulate BE restart — call load_tablet_from_meta to trigger "tablet init missing rowset".
+    // Enable fail point to bypass DCHECK(false) at tablet_updates.cpp:219 so we can see
+    // the full log output in the main process without aborting.
     {
+        auto fp2 = starrocks::failpoint::FailPointRegistry::GetInstance()->get(
+                "tablet_init_missing_rowset_skip_dcheck");
+        ASSERT_TRUE(fp2 != nullptr);
+        trigger_mode.set_mode(FailPointTriggerModeType::ENABLE);
+        fp2->setMode(trigger_mode);
+
         TabletMeta v3_meta;
         ASSERT_OK(TabletMetaManager::get_tablet_meta(disk_a, tablet_id, schema_hash, &v3_meta));
         std::string meta_binary;
         ASSERT_OK(v3_meta.serialize(&meta_binary));
 
-        ASSERT_DEATH(
-                tablet_manager->load_tablet_from_meta(disk_a, tablet_id, schema_hash, meta_binary, false),
-                "tablet init missing rowset");
+        auto load_st = tablet_manager->load_tablet_from_meta(disk_a, tablet_id, schema_hash, meta_binary, false);
+        LOG(WARNING) << "load_tablet_from_meta result: " << load_st;
+        ASSERT_FALSE(load_st.ok());
+        ASSERT_TRUE(load_st.to_string().find("tablet init missing rowset") != std::string::npos)
+                << "Expected 'tablet init missing rowset' in: " << load_st;
+
+        trigger_mode.set_mode(FailPointTriggerModeType::DISABLE);
+        fp2->setMode(trigger_mode);
     }
 
     // Cleanup: run GC again to remove stale V1 from _shutdown_tablets

@@ -216,6 +216,7 @@ Status TabletUpdates::_load_rowsets_and_check_consistency(std::set<uint32_t>& un
         std::string msg = strings::Substitute("tablet init missing rowset, $0 all:$1 active:$2 missing:$3",
                                               _debug_version_info(false), JoinInts(all_rowsets, ","),
                                               JoinInts(active_rowsets, ","), JoinInts(missing_rowsets, ","));
+        FAIL_POINT_TRIGGER_RETURN(tablet_init_missing_rowset_skip_dcheck, Status::Corruption(msg));
         DCHECK(false) << msg; // exit on curruption in debug mode, try to fix in release mode
         return Status::Corruption(msg);
     }
@@ -980,6 +981,7 @@ DEFINE_FAIL_POINT(tablet_delvec_inconsistent);
 DEFINE_FAIL_POINT(tablet_internal_error_code_but_memory_limit);
 DEFINE_FAIL_POINT(inconsistent_rowset_stats_not_found);
 DEFINE_FAIL_POINT(inconsistent_rowset_stats_out_bound);
+DEFINE_FAIL_POINT(tablet_init_missing_rowset_skip_dcheck);
 
 void TabletUpdates::do_apply() {
     SCOPED_THREAD_LOCAL_CHECK_MEM_LIMIT_SETTER(true);
