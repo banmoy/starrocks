@@ -1569,3 +1569,817 @@ Section 3.2 增加标注"此处 `splitted_scan_rows` 取 500,000 便于演示，
 12 轮 review、46 个 issue，全部处理完毕。
 
 ---
+
+## Round 13
+
+**[Review]** Date: 2026-04-12
+
+### Summary
+
+本轮 review 不校验代码事实，只从**文档结构、叙事逻辑和新手可读性**出发重新审视当前版本。整体上，文档已经具备较好的导读、术语表、贯穿示例和主路径数据流图，主链路也基本完整；但仍有几处结构性问题会影响第一次接触该机制的读者建立稳定心智模型。最主要的问题不是“信息不够”，而是**实现细节进入过早、主线与旁支权重不均、以及 DynamicMorselQueue 与 PhysicalSplitMorselQueue / LogicalSplitMorselQueue 的职责关系没有先讲透**。
+
+以下问题按优先级排序。
+
+### Issue 47: Section 1 仍然过早进入实现细节，读者在建立概念前就被类名和路径细节打断
+
+**Severity: P1（新手阅读阻塞）**
+
+Section 1 在刚说明“tablet 数少会导致并行度退化”之后，就立即进入 `ConnectorScanNode`、`LakeDataSourceProvider`、`IO task`、`TabletReader`、Driver 队列注入等实现细节。此时读者虽然知道“为什么要做 tablet 内并行”，但还没有充分掌握 `Morsel`、`MorselQueueFactory`、`DynamicMorselQueue`、`Split Morsel` 等基本词汇，容易在开头就失去跟进能力。
+
+问题不在于这些信息不重要，而在于**出现时机太早**。对于新人，Section 1 更适合只做三件事：
+
+1. 问题是什么
+2. 解决思路是什么
+3. 这篇文档会按什么层次展开
+
+建议将实现类名和 Connector/Olap 路径差异延后到 Section 2 或 Section 5 中再展开。开头更适合放一张极简图：`一个 tablet -> 切成多个 split morsel -> 分给多个 Driver`。
+
+### Issue 48: DynamicMorselQueue 与 PhysicalSplitMorselQueue / LogicalSplitMorselQueue 的关系仍未被“一句话讲透”
+
+**Severity: P1（核心概念不清）**
+
+这是当前版本中最影响新手理解的点之一。文档已经单独列出了三种 queue 的定义和协作图，但仍没有在最前面给出一个对读者最关键的总括：**谁负责切、谁负责分、谁负责给 Driver 消费**。
+
+当前写法会让读者产生几个典型疑问：
+
+- `PhysicalSplitMorselQueue / LogicalSplitMorselQueue` 既然也叫 queue，Driver 会不会直接从这里取任务？
+- `DynamicMorselQueue` 被称为“容器/分发器”，那跨 Driver 的“分给谁”到底是它做的，还是外部逻辑做的？
+- `split task` 和 `split morsel` 是同一层对象，还是前后转换的两个阶段？
+
+文档真正想表达的是一条接力链，但这条链现在分散在多个小节中，读者需要自己拼：
+
+- `PhysicalSplitMorselQueue / LogicalSplitMorselQueue`：临时切分器，只负责**计算** split
+- 外部分发逻辑：负责把计算结果**分配**到目标 Driver
+- `DynamicMorselQueue`：每个 Driver 的运行时队列，只负责**存和取**
+
+建议在 Section 2.2 开头先加一段非常短的总纲，例如：
+
+> 三者不是并列的消费队列，而是前后接力的三个角色：  
+> `PhysicalSplitMorselQueue / LogicalSplitMorselQueue` 负责算出 split；  
+> 外部分发逻辑负责把 split 分给目标 Driver；  
+> `DynamicMorselQueue` 负责保存这些 morsel，并供各 Driver 消费。
+
+然后再接现在的术语细节和协作图。这样读者先抓住“职责边界”，后面再看实现会顺很多。
+
+### Issue 49: `Physical` vs `Logical` 的介绍仍偏实现条件导向，概念模型没有先立住
+
+**Severity: P1（认知层次顺序不佳）**
+
+Section 3 已经比早期版本清晰很多，但对第一次阅读的人来说，`Physical` 和 `Logical` 仍然更像“代码分支条件”，而不是两种不同的切分思想。
+
+当前阅读体验是：先看到 keys type、`is_preaggregation` 等条件，再逐渐明白为什么要有两种切法。  
+对新手更友好的顺序应该是：
+
+1. 先用一句话定义两种切法的思想差异  
+   - `Physical`：按精确 rowid 切，目标是把数据精确拆开给多人读  
+   - `Logical`：按 short-key 近似切，在不能精确独立读取时尽量获得并行
+2. 再解释为什么某些表可以用 `Physical`，某些只能用 `Logical`
+3. 最后给实现条件
+
+建议把“为什么有两种切分算法”提到条件表之前，让读者先有抽象模型，再接受实现细节。
+
+### Issue 50: 主线在 Section 5 已经闭环，但 Section 6 和后续参考信息仍然略显抢戏
+
+**Severity: P1（主次权重不均）**
+
+对于“让新手理解存算分离内表的 tablet 内并行切分”这个目标，真正的主路径在：
+
+`Section 1 -> Section 2 -> Section 3 -> Section 4 -> Section 5`
+
+到这里其实已经完成了“问题 -> 概念 -> 算法 -> 判定 -> 调度”的完整闭环。  
+但 Section 6 以及后续配置、对比、不变量等内容虽然有价值，却会让一部分新手在读完主路径后又重新掉进运行时细节和边界条件，注意力开始发散。
+
+这类内容不需要删除，但建议在结构上再做一次“主线已结束”的显式提示。例如在 Section 5 末尾加一句：
+
+> 到这里已经覆盖了存算分离表切分调度的主路径。后文主要补充完成判定、调度细节、配置和与 OlapScan 路径的差异。
+
+这样读者能明确知道“后面是扩展阅读，不是继续理解主链路所必须的前置知识”。
+
+### Issue 51: 术语已经有定义，但正文中仍存在局部漂移，尤其是 `split task` / `split morsel`
+
+**Severity: P2（可读性）**
+
+当前版本的术语表是有效的，但在 Section 5 的叙事中，以下几组词仍然切换较快：
+
+- 原始 morsel / split morsel
+- split task / split morsel
+- 切分器 / 分发器 / 运行时队列
+- 预计算所有 split / 外部注入 / 立即返回 EOF
+
+其中最容易让读者停顿的是 `split task` 与 `split morsel` 的关系。现在文档暗含的是：
+
+1. `TabletReader` 预计算出内部的 split task 描述
+2. `ChunkSource` 收到 EOF 后，把这些描述包装成可调度的 split morsel
+3. split morsel 再被注入各 Driver 的 `DynamicMorselQueue`
+
+建议在 Section 5.2 和 Section 5.3 之间加一段桥接说明，把这层对象转换明确说出来，减少读者回跳术语表的次数。
+
+### Issue 52: 开头关于旁路机制和路径差异的说明虽然已经收敛，但仍建议继续弱化
+
+**Severity: P2（节奏优化）**
+
+当前版本已经比旧版克制很多，但在文档前部仍然较早出现“另一条路径”“差异”“禁用的机制”等旁路说明。对于第一次阅读的用户，这类信息会让人过早意识到“还有很多例外和岔路”，削弱主线推进感。
+
+建议原则：
+
+- 开头只讲主路径必须知道的事实
+- 路径差异、不可触发路径、历史兼容信息尽量放在正文讲完之后
+
+即便保留，也建议以一两句注释带过，而不要在前几屏里占据过多注意力。
+
+### Issue 53: 某些小节的信息密度仍偏高，适合先加一句“本节只需要记住什么”
+
+**Severity: P2（阅读负担）**
+
+`Section 2.2`、`Section 3.2/3.3`、`Section 6` 中个别小节，仍然是读者刚进入就看到状态字段、流程步骤、细节分支。对于维护者这很好，但新手更需要先得到一句结论，再进入细节。
+
+建议在这类小节前补一句非常短的总结句，例如：
+
+- “这一节只需要记住：Physical/LogicalSplitMorselQueue 负责切，DynamicMorselQueue 负责存和发。”
+- “这一节只需要记住：TicketChecker 解决的是‘一个 tablet 被拆成多个 split 后，什么时候才能真正 EOS’。”
+
+这种一句话结论能明显降低首次阅读的阻塞感。
+
+### Closing Assessment
+
+当前版本已经**可读、可交付**，比前几个版本有明显提升；本轮问题主要集中在“如何进一步让新人第一次读就读顺”。其中最值得优先处理的是：
+
+1. Section 1 继续去实现细节化（Issue 47）
+2. 用一句总纲彻底讲清三类 queue 的职责接力关系（Issue 48）
+3. 先建立 `Physical / Logical` 的概念模型，再讲选择条件（Issue 49）
+4. 在主路径结束处显式告诉读者“后文为扩展阅读”（Issue 50）
+
+如果这几项处理到位，文档对新手的友好度还会再上一个台阶。
+
+---
+
+**[Response]** Date: 2026-04-12
+
+Round 13 的 7 个 issue 全部同意，已直接重写相关段落落实到文档。以下为各 issue 对应的修改：
+
+### Issue 47: Fixed — Section 1 收敛为纯问题+思路
+
+Section 1 拆为 1.1（问题）、1.2（核心思路）、1.3（架构背景）。1.2 提出"切—分—读"三步作为全文叙事骨架，不出现任何 MorselQueue/Factory 类名。`ConnectorScanNode`、`LakeDataSourceProvider` 等实现路径延后到 1.3 架构背景（一句话）和 Section 5 正文。Shared Scan 注释从 Section 1 正文移至 1.3 末尾脚注。
+
+### Issue 48: Fixed — Section 2.2 重写为"切—分—存"接力模型
+
+Section 2.2 开头新增总纲段落，明确三者是接力关系而非并列的消费队列：切分器负责"切"、外部分发逻辑负责"分"、DynamicMorselQueue 负责"存和给 Driver 消费"。然后再接角色详解和协作流程图。协作图也改用"[切]→[分]→[读]"标签，与 Section 1.2 的三步叙事对应。
+
+### Issue 49: Fixed — Section 3 先讲思想差异再讲选择条件
+
+Section 3 开头重写为两段话：先解释 Physical（按 rowid 精确划分，子区间独立读取）和 Logical（按 short-key 近似划分，仍需 merge-on-read）的思想差异和适用直觉，然后才给出 `keys_type` / `is_preaggregation` 选择条件。
+
+### Issue 50: Fixed — 主线结束后显式提示
+
+Section 5.5 端到端数据流图之后、Section 6 之前增加一行分隔提示："以下为辅助机制、配置参数和扩展参考，不影响对主线流程的理解，按需阅读。"
+
+### Issue 51: Fixed — split task 与 split morsel 的桥接说明
+
+Section 5.3 开头新增桥接段落：TabletReader 产出的 `_split_tasks[]` 是内部子区间描述（split task），ChunkSource 收到 EOF 后将它们包装为可调度的 split morsel（赋予 `_split_context`），然后注入 DynamicMorselQueue。明确了从 split task 到 split morsel 的转换时机和语义。
+
+### Issue 52: Fixed — 旁路信息弱化
+
+Section 1 中 Shared Scan 和 OlapScan 路径差异的说明进一步收敛。Shared Scan 降为 1.3 末尾的一句脚注。OlapScan 差异降为 1.3 中"存算一体内表走 OlapScanNode，差异见 Section 8"一句带过。
+
+### Issue 53: Fixed — 关键小节增加一句话结论
+
+Section 2.2 开头、Section 3 开头、Section 6.1 开头各增加一句总结性引导句（如"三者不是并列的消费队列，而是前后接力"、"两种切分算法的核心区别在于切分依据不同"、"TicketChecker 解决的是：一个 tablet 被拆成多个 split 后，什么时候才能对外发出 EOS"），降低首次阅读的阻塞感。
+
+---
+
+## Round 14
+
+**[Review]** Date: 2026-04-12
+
+### Summary
+
+本轮继续只看**结构、术语和新手可读性**，不做代码事实校验。Round 13 提出的主要问题已经基本落实：Section 1 明显收敛，Section 5 主线更完整，`split task -> split morsel` 的桥接也已经出现。当前版本已经可交付，但再读一遍后，仍有几处“读者会短暂停下来重新想一遍”的点，主要集中在 **Section 2.1/2.2 的概念表达** 和 **`split task` / `split morsel` 的概念边界**。
+
+### Issue 54: Section 2.2 仍然混用了“类型”和“角色”，会让读者重新困惑一次
+
+**Severity: P1（概念边界仍不够稳）**
+
+Section 2.2 的标题和开头写的是：
+
+> `切—分—存：三种 MorselQueue 的接力`
+
+> `Section 1.2 提到的"切、分、读"三步，在实现中由三种 MorselQueue 子类型接力完成`
+
+但正文列出的其实是三类**角色**，不是三种 `MorselQueue` 子类型：
+
+1. `PhysicalSplitMorselQueue / LogicalSplitMorselQueue`（queue 子类型）
+2. `ConnectorChunkSource + IndividualMorselQueueFactory`（分发逻辑，不是 queue）
+3. `DynamicMorselQueue`（queue 子类型）
+
+这会让第一次阅读的人又回到一个熟悉的疑问：  
+“你到底是在按**类层次**讲，还是在按**职责分工**讲？”
+
+这类困惑在这个位置代价比较高，因为 Section 2 本来就是用来“钉牢概念模型”的。如果这里再次混淆“类型”和“角色”，读者后面读 Section 5 时会反复在脑中纠正。
+
+**建议**：
+
+- 把标题从“**三种 MorselQueue 的接力**”改成“**三类角色的接力**”或“**切分、分发、消费三类角色**”
+- 第一段也改成“由三类角色接力完成”，不要再说“三种 MorselQueue 子类型”
+- 如果希望保留类型信息，建议单独加一个 3 列小表：
+
+| 角色 | 具体对象 | Driver 是否直接消费 |
+|---|---|---|
+| 切分器 | `PhysicalSplitMorselQueue` / `LogicalSplitMorselQueue` | 否 |
+| 分发逻辑 | `ConnectorChunkSource` + `IndividualMorselQueueFactory` | 否 |
+| 运行时队列 | `DynamicMorselQueue` | 是 |
+
+这样“按职责理解”和“按代码对象落位”就不会打架。
+
+### Issue 55: `split task` 与 `split morsel` 的关系比之前清楚了，但仍然没有完全统一
+
+**Severity: P1（对象生命周期仍有轻微摇摆）**
+
+Round 13 后，Section 5.3 已经明确写出：
+
+1. `TabletReader` 先产出 `_split_tasks[]`
+2. EOF 后再包装成 split morsel
+3. 注入 `DynamicMorselQueue`
+
+这一段是明显改进。  
+但 Section 3 的算法描述仍然会让读者感觉“切分器是不是直接返回 split morsel”：
+
+- Section 2.2 写的是：切分器 `try_get()` 现场计算一个子区间，封装为 **split task** 返回
+- Section 3.1 / 3.2 写的是：`try_get()` 封装为 `PhysicalSplitScanMorsel` / `LogicalSplitScanMorsel` 返回
+
+对已经熟悉代码的人，这可能只是两个视角；但对新手来说，这会造成对象层级轻微摇摆：
+
+- 算法层到底产出的是“子区间描述”
+- 还是已经产出“可调度的 morsel”
+
+**建议**二选一，保持全文统一：
+
+1. 要么在 Section 3 明确说：  
+   “这里从算法层视角描述 `try_get()` 的产出，重点是子区间描述本身；在存算分离主路径中，这些描述随后会在 Section 5.3 被包装成可调度的 split morsel。”
+
+2. 要么在 Section 3 避免过早使用 `PhysicalSplitScanMorsel` / `LogicalSplitScanMorsel` 这类看起来已经是“最终调度对象”的名字，统一先叫“子区间描述”。
+
+现在文档已经接近讲清，但还差这最后一步“术语完全收口”。
+
+### Issue 56: Section 1.3 仍然稍早把读者注意力拉向“另一条路径”和“不可触发机制”
+
+**Severity: P2（节奏问题）**
+
+Section 1.3 现在已经比旧版克制很多，但对一个完全不懂机制的新读者来说，下面这两类信息仍然偏早出现：
+
+- “存算一体走 OlapScanNode，差异见 Section 8”
+- “Shared Scan 机制当前不可触发，本文不做展开”
+
+这些内容都不是错，但它们会在读者刚进入文档主线时，提前制造两个分叉：
+
+1. 还有另一条我暂时不懂的路径
+2. 还有一个我不需要学但需要先知道不存在的机制
+
+这会轻微削弱 Section 1 应有的线性推进感。
+
+**建议**：
+
+- Section 1.3 只保留一句最必要的架构背景：为什么存算分离表走 `ConnectorScanNode`
+- `OlapScan` 的差异和 `Shared Scan` 的禁用说明，尽量后移到 Section 8 附近，或作为文末注释出现
+
+这不是必须修改的 blocker，但会让开头更干净。
+
+### Issue 57: Section 2.1 中 `MorselQueue` / `MorselQueueFactory` 出现多次，但层次关系还不够清晰
+
+**Severity: P1（概念模型入口仍有卡点）**
+
+Section 2.1 的组件图和术语表已经比旧版清楚很多，但对新手来说，这里仍然存在一个小的“第一眼卡顿”：`MorselQueue` 和 `MorselQueueFactory` 都在图里出现，也都在术语表里再次出现，但两者的**层次关系**还没有被一句话说透。
+
+当前读者很容易出现这样的阅读感受：
+
+1. 看到 `MorselQueue`：知道它是“持有 morsel 的队列”
+2. 紧接着看到 `MorselQueueFactory`：知道它“决定如何将队列分配给各 Driver”
+3. 但脑中仍然会停一下想：  
+   - `Factory` 是在创建 queue，还是在分配 queue？  
+   - `DynamicMorselQueue` 和 `MorselQueue` 是实例关系、子类型关系，还是两个不同层级？  
+   - 我到底应该把 `MorselQueueFactory` 理解成“队列管理器”还是“Driver 分发策略”？
+
+也就是说，当前 2.1 已经有定义，但还缺一句把关系串起来的人话，例如：
+
+> 可以把 `MorselQueue` 理解为“装任务的盒子”，把 `MorselQueueFactory` 理解为“决定这些盒子如何分给各 Driver 的规则/工厂”。  
+> 在存算分离路径中，最终每个 Driver 会拿到一个 `DynamicMorselQueue`，它是 `MorselQueue` 的一种具体实现。
+
+**建议**：
+
+- 在组件图下方、术语表之前加一两句“关系说明”，专门讲清 `MorselQueue`、`MorselQueueFactory`、`DynamicMorselQueue` 的上下层关系
+- 术语表中的 `MorselQueueFactory` 定义也可以再收窄一点，突出它是“分配/组织 queue 给 Driver 的策略层”，而不是普通意义上的“创建对象工厂”
+- 如果想更直观，可以在图中把这三者排成“抽象层 -> 策略层 -> 具体实现层”的视觉关系，避免读者只看到三个名字但看不出层次
+
+### Closing Assessment
+
+这一版已经进入“可以交付，只剩最后几处概念收口”的阶段。相比 Round 13，这次剩下的问题更集中，也更容易改：
+
+1. 把 Section 2.2 从“类型描述”彻底改成“角色描述”（Issue 54）
+2. 把 `split task` / `split morsel` 的对象边界彻底统一（Issue 55）
+3. 再轻微弱化 Section 1 的旁路信息（Issue 56）
+4. 在 Section 2.1 用一句关系说明彻底讲清 `MorselQueue` / `MorselQueueFactory` / `DynamicMorselQueue` 的层次（Issue 57）
+
+如果这几项处理掉，整篇文档对第一次阅读的工程师会更”顺”，不太需要中途停下来重新翻前文确认概念。
+
+---
+
+**[Response]** Date: 2026-04-12
+
+### Issue 54: Fixed — Section 2.2 从”类型描述”改为”角色描述”
+
+标题改为”切分、分发、消费：三类角色的接力”。开头总纲明确”三者不是并列的消费队列，而是前后衔接的职责分工”。新增角色-对象-消费关系三列表格，让”按职责理解”和”按代码对象落位”互不打架。
+
+### Issue 55: Fixed — split task / split morsel 术语收口
+
+Section 3 开头新增一段：”本节描述切分器如何将 tablet 划分为子区间。切分器的 `try_get()` 每次产出一个子区间描述（split task）；这些 split task 随后会在 Section 5.3 被包装为可调度的 split morsel。” Section 3.1 的示例图中 “split morsel 1/2/3/4” 改为 “split task 1/2/3/4”，并在图后标注”经过 Section 5.3 包装后成为 split morsel”。术语表中新增 split task 条目。
+
+### Issue 56: Fixed — Section 1.3 旁路信息后移
+
+Section 1.3 只保留一句：存算分离架构下 FE 将 lake 表映射到 ConnectorScanNode。OlapScan 差异和 Shared Scan 禁用说明从 Section 1 移除（OlapScan 差异仍在 Section 8，Shared Scan 注释已在前几轮降级为文末参考）。
+
+### Issue 57: Fixed — Section 2.1 增加层次关系说明
+
+组件图下方、术语表之前新增一段：”MorselQueue 是'装任务的盒子'，MorselQueueFactory 是'决定这些盒子如何分给各 Driver 的策略'。在存算分离路径中，Factory 为每个 Driver 创建一个 DynamicMorselQueue。” 术语表中 MorselQueueFactory 的定义收窄为”将队列分配给各 Driver 的策略层”。
+
+---
+
+## Round 15
+
+**[Review]** Date: 2026-04-12
+
+### Summary
+
+Round 14 的主要修改已经落实，Section 2 的概念入口现在顺很多，`MorselQueue` / `MorselQueueFactory` / `DynamicMorselQueue` 的关系也基本讲清了。本轮继续只看**表达一致性和新手认知连续性**，不做代码事实校验。当前剩下的问题已经不多，主要是：**“split task / split morsel”虽然大体统一了，但 Section 3 和 Section 4 里还有几处残留表述，会让读者觉得对象边界又轻微滑回去了。**
+
+### Issue 58: Section 3 已经把算法层产物改成 `split task`，但产出流程最后一步仍写成返回 `PhysicalSplitScanMorsel` / `LogicalSplitScanMorsel`
+
+**Severity: P1（术语收口未完成）**
+
+Round 14 已经把 Section 3 的总纲、示例和术语表改成了“算法层产出的是 split task，随后在 Section 5.3 包装为 split morsel”。这个方向是对的。  
+但 Section 3.1 / 3.2 的“产出流程”最后一步仍然写成：
+
+- `封装为 PhysicalSplitScanMorsel(RowidRangeOptionPtr) 返回`
+- `封装为 LogicalSplitScanMorsel(ShortKeyRangesOptionPtr) 返回`
+
+这会把读者重新拉回到一个刚刚才被解决的问题上：  
+“所以切分器到底直接返回的是 split task，还是已经是一个 morsel？”
+
+也就是说，文档的**段落级叙事**已经统一了，但**步骤级措辞**还没有一起更新，导致对象边界又轻微滑回去了。
+
+**建议**：
+
+- 把这两处最后一步改成与前文一致的说法，例如：
+  - `封装为一个 rowid 子区间描述（split task）返回`
+  - `封装为一个 short-key 子区间描述（split task）返回`
+- 如果你仍然想保留代码里的具体类型名，建议在括号中降级注明：
+  - `（代码中对应 PhysicalSplitScanMorsel，随后在 Section 5.3 的主路径中视作 split task 被继续包装/分发）`
+
+当前的问题不是“术语错”，而是**文档内部在两个视角之间来回切换**，新手会再次停顿。
+
+### Issue 59: Section 4 的示例已经站在“判定逻辑”层，但结尾直接跳到“产出约 8 个 split morsel 分配给 4 个 Driver”，略微抢跑了 Section 5
+
+**Severity: P2（认知层次轻微前跳）**
+
+Section 4 本质上是在回答两个问题：
+
+1. 会不会切分
+2. 大概切多细
+
+但现在示例的收尾是：
+
+> 启用切分，产出约 8 个 split morsel 分配给 4 个 Driver。
+
+这句话本身不难懂，但它已经提前跳到了 Section 5 的“包装与分发”视角。对已经熟悉全文结构的人没问题；对第一次阅读的人，会有一个小小的层次前跳：
+
+- Section 4 本来刚算出 `scan_dop` 和 `splitted_scan_rows`
+- 结果一句话直接说到了“split morsel 分配给 Driver”
+- 可真正“什么时候从 split task 变成 split morsel、怎么分到 Driver”是 Section 5 才讲的
+
+**建议**：
+
+- 把 Section 4 结尾收敛为算法/判定视角，例如：
+  - `启用切分，预计会产生约 8 个子区间描述；这些描述随后会在 Section 5 中被包装并分配给 4 个 Driver。`
+
+这样既保留数量感，又不会抢跑主线后半段。
+
+### Issue 60: Section 2.1 的组件图本身信息量不足，没承担起解释 `MorselQueue -> MorselQueueFactory` 关系的职责
+
+**Severity: P1（概念模型图仍不够直观）**
+
+Round 14 已经在组件图下方加了“层次关系”文字说明，这对文字读者有帮助；但这里的核心问题其实不只是“缺一句解释”，而是**图本身没有把层次关系画出来**。当前图里：
+
+```text
+MorselQueue
+   ↓
+MorselQueueFactory
+   ↓
+每个 Driver 一个 DynamicMorselQueue
+```
+
+这三行对于熟悉代码的人可以脑补出含义，但对新手来说，箭头语义并不清楚：
+
+- `MorselQueue -> MorselQueueFactory` 是“包含关系”、“创建关系”、“配置关系”还是“处理流程”？
+- `MorselQueueFactory` 为什么会出现在 `MorselQueue` 的下游？它看起来像是在“消费 queue”，而不是“决定 queue 如何分给 Driver”
+- `DynamicMorselQueue` 是从 `MorselQueueFactory` 里“创建出来”的，还是只是被 `Factory` 选择/分配的一种具体队列？
+
+也就是说，**现在的图形结构仍然在误导读者把这三者理解成一条线性数据流**，但它们其实更接近：
+
+- `MorselQueue`：抽象的任务容器
+- `MorselQueueFactory`：决定这些容器如何组织/分配给 Driver 的策略层
+- `DynamicMorselQueue`：在当前路径下采用的一种具体 per-driver 队列实现
+
+这类关系更适合画成“抽象层 -> 策略层 -> 具体实现/分配结果”，而不是单纯一条竖线。
+
+**建议**：
+
+1. 不要只靠图下文字补救，直接重画 Section 2.1 组件图。
+2. 把图改成能表达“层次”和“作用”的结构，例如：
+
+```text
+FE 下发 scan range
+        │
+        ▼
+原始 morsel
+        │
+        ▼
+MorselQueue（抽象：装 morsel 的队列）
+
+MorselQueueFactory（策略：决定队列如何分给 Driver）
+        │
+        └── 在存算分离路径中：
+            每个 Driver 一个 DynamicMorselQueue
+                    │
+                    ▼
+            Driver 从自己的 queue 取 morsel
+                    │
+                    ▼
+            ChunkSource → IO task → ChunkBuffer
+```
+
+3. 如果希望更清楚，还可以在图里显式标注箭头含义，比如：
+   - `抽象概念`
+   - `分配策略`
+   - `当前路径采用的具体实现`
+4. 图画清楚之后，图下那段“盒子/策略”文字说明反而可以缩短，因为图本身就已经承担了解释职责。
+
+当前 2.1 的问题已经不再是“术语没定义”，而是**图没有把最重要的关系直观表达出来，导致读者必须靠读图下文字来补理解**。对于概念入口图来说，这说明图本身还不够强。
+
+### Issue 61: 从第一性原理看，Section 2.1 不该先摆类名，而应先回答“系统在调度什么、谁在分配什么”
+
+**Severity: P1（2.1 的呈现顺序仍未命中最核心问题）**
+
+Issue 60 说的是“图不够直观”，但再往前追一层，Section 2.1 的真正问题其实是：**它现在仍然是从类名出发组织内容，而不是从调度问题本身出发。**
+
+对一个第一次读这篇文档的人来说，Section 2.1 最应该先回答的不是：
+
+- 什么叫 `MorselQueue`
+- 什么叫 `MorselQueueFactory`
+- 什么叫 `DynamicMorselQueue`
+
+而是这 4 个更基础的问题：
+
+1. **系统真正调度的对象是什么？**  
+   是 `morsel`，也就是一个可被 Driver 执行的扫描任务。本文场景下，初始状态通常是“每个 tablet 一个原始 morsel”。
+
+2. **这些任务放在哪里，Driver 从哪里拿？**  
+   放在 queue 里，所以 `MorselQueue` 的本质是“装 morsel 的容器”。
+
+3. **多个 Driver 各该用哪个 queue，原始 morsel 怎么分进去，后续 split morsel 又怎么再塞进去？**  
+   这是 `MorselQueueFactory` 负责的。所以它的本质不是普通意义上的“对象工厂”，而是“组织 queue 拓扑并决定 morsel 分配规则的策略层”。
+
+4. **当前这条存算分离路径具体采用什么策略？**  
+   使用 `IndividualMorselQueueFactory`，给每个 Driver 一个 `DynamicMorselQueue`；原始 morsel 先被分配进去，运行时切出来的 split morsel 也继续被注入进去。
+
+也就是说，`原始 morsels` 和 `MorselQueueFactory` 的关系不是“上下游对象”，而是：
+
+- `原始 morsels` 是 **被分配的输入工作项**
+- `MorselQueueFactory` 是 **决定这些工作项如何落到各 Driver queue 中的策略层**
+
+这也是为什么当前图里把
+
+```text
+MorselQueue
+   ↓
+MorselQueueFactory
+   ↓
+DynamicMorselQueue
+```
+
+画成一条线，会天然让读者误解为“前后处理链”。
+
+**建议不要继续修补现有图，而是重写 2.1 的呈现顺序**：
+
+#### 建议结构
+
+1. **先讲调度骨架，不急着抛具体类名**
+
+```text
+scan range
+   ↓
+原始 morsels（初始扫描任务，每个 tablet 一个）
+   ↓
+MorselQueueFactory（决定这些任务如何分给 Driver）
+   ↓
+各 Driver 自己的 MorselQueue
+   ↓
+Driver 取出 morsel 执行
+```
+
+这张图先让读者明白：
+
+- `morsel` 是被调度的对象
+- `queue` 是存放这些对象的地方
+- `factory` 是决定怎么分配这些对象和这些 queue 的策略层
+
+2. **再讲本文这条路径的具体实例化**
+
+```text
+FE 下发 scan ranges
+        │
+        ▼
+原始 morsels（每个 tablet 一个）
+        │
+        ▼
+IndividualMorselQueueFactory
+  - 初始分配原始 morsels
+  - 后续注入 split morsels
+        │
+        ├── Driver 0 -> DynamicMorselQueue
+        ├── Driver 1 -> DynamicMorselQueue
+        ├── Driver 2 -> DynamicMorselQueue
+        └── Driver 3 -> DynamicMorselQueue
+```
+
+这样 `DynamicMorselQueue` 的位置就自然了：  
+它不是“Factory 的下一个节点”，而是“当前策略下每个 Driver 实际拿到的具体 queue 实现”。
+
+3. **最后再给术语表**
+
+术语表应该是“已有图景后的查词工具”，而不是让读者靠词表反推系统关系。
+
+#### 一句话结论
+
+Section 2.1 最该改的不是某一句定义，而是**整节的建模顺序**：
+
+- 先讲“被调度的对象是什么”
+- 再讲“对象放哪”
+- 再讲“谁决定怎么分”
+- 最后讲“当前路径里具体是哪种 factory、哪种 queue”
+
+如果按这个顺序重做，`原始 morsels` 和 `MorselQueueFactory` 的关系就会自然显现，不需要读者自己猜箭头是什么意思。
+
+---
+
+**[Response]** Date: 2026-04-12
+
+### Issue 58: Fixed
+
+Section 3.1 产出流程最后一步改为"封装为一个 rowid 子区间描述（split task）返回"，Section 3.2 改为"封装为一个 short-key 子区间描述（split task）返回"。与 Section 3 开头的总纲和术语表一致。
+
+### Issue 59: Fixed
+
+Section 4 示例结尾改为"预计产生约 8 个子区间描述（split task）；这些描述随后会在 Section 5 中被包装并分配给 4 个 Driver"。收敛到判定层视角，不再抢跑分发层。
+
+### Issue 60 + 61: Fixed — Section 2.1 重写
+
+按 Round 15 建议的建模顺序重写 Section 2.1：
+
+1. 先用 4 个问答建立调度骨架（被调度的对象是什么 → 放哪 → 谁决定怎么分 → 本路径具体用什么），不急着抛类名
+2. 给出两层组件图：通用结构（morsel → Factory → per-Driver queue → 执行）+ 存算分离路径的具体实例化（IndividualMorselQueueFactory → per-Driver DynamicMorselQueue），Factory 不再画成 MorselQueue 的"下游节点"，而是作为策略层决定 queue 拓扑
+3. 术语表放在图之后，作为"已有图景后的查词工具"
+
+### Closing Assessment
+
+---
+
+这一版文档已经非常接近“术语完全闭环”的状态了。现在剩下的问题都不是结构性大问题，而是**最后几句跨层表述没有完全同步更新**：
+
+1. Section 3 的流程步骤还残留“直接返回 morsel”的表述（Issue 58）
+2. Section 4 的示例结尾略微提前跳到了 Section 5 的分发层（Issue 59）
+3. Section 2.1 的图还没有真正把 `MorselQueue` / `MorselQueueFactory` / `DynamicMorselQueue` 的关系画清楚（Issue 60）
+4. Section 2.1 的呈现顺序仍应从“调度骨架”而不是“类名定义”出发（Issue 61）
+
+如果这几处一起收掉，文档的概念入口和对象链路都会更稳定：前面先从调度骨架看懂“系统在调度什么、谁在分配什么”，再落到 `queue / factory / DynamicMorselQueue` 的具体实现；后面则能顺着 `split task -> split morsel -> Driver 消费` 一路读下去。
+
+---
+
+## Round 16
+
+**[Review]** Date: 2026-04-12
+
+### Summary
+
+Round 15 的方向是对的，而且这次 `Section 2.1` 的重写已经明显好于之前版本：它终于先回答“系统在调度什么、谁在分配什么”，再落到类名和当前路径实例化。`split task -> split morsel` 的主链也基本稳定了。  
+本轮继续只看**表达一致性与图示是否真正承担解释职责**，不做代码事实校验。当前还剩两处比较小但真实的残留问题：**算法层术语还有几句没完全收口**，以及 **`2.1` 的通用图里，Factory 如何把原始 morsels 落到 per-driver queues 这一步仍然有点隐。**
+
+### Issue 62: Section 3 已经切到“算法层视角”，但仍残留几处 `morsel` 表述，会轻微打破 `split task -> split morsel` 的分层
+
+**Severity: P2（术语一致性残留）**
+
+Round 15 已经把 Section 3 的主叙事改成：
+
+- 算法层产出的是 `split task`
+- Section 5.3 才把它们包装成 `split morsel`
+
+这个主线已经正确。  
+但 Section 3 里还有几处零散表述仍沿用“morsel”视角，例如：
+
+- `实际 morsel 大小可达 ...`
+- `将 block 级别的 short-key 区间分配给不同的 morsel`
+- `当前和下一个 morsel 平分`
+- `可能导致 morsel 大小不均匀`
+
+这些句子单独看没问题，但放在现在已经明确分层的文档里，会让读者有一点点“刚刚不是说这里还在 split task 层吗？”的迟滞感。
+
+**建议**：
+
+- 在 Section 3 中，凡是还处在算法层、尚未进入 Section 5.3 包装/分发语境的地方，尽量统一改成：
+  - `子区间描述`
+  - `split task`
+  - 或中性表达如 `子区间大小`
+
+例如：
+
+- `实际 morsel 大小可达 ...` → `单个子区间描述覆盖的行数可达 ...`
+- `分配给不同的 morsel` → `划分为不同的子区间描述`
+- `当前和下一个 morsel 平分` → `当前和下一个子区间描述平分`
+
+这是一个纯表达层的小收口，但会让“算法层 vs 调度层”的边界更稳定。
+
+### Issue 63: Section 2.1 的“通用结构图”已经比之前清楚，但 `Factory` 如何把原始 morsels 放进 per-driver queues 仍然有点隐
+
+**Severity: P2（图示仍可更强）**
+
+当前 2.1 的通用图是：
+
+```text
+scan ranges → 原始 morsels（每个 tablet 一个）
+                    │
+                    ▼
+            MorselQueueFactory（策略：决定 morsel 如何分给各 Driver）
+                    │
+                    ▼
+            各 Driver 的 MorselQueue → Driver 取 morsel 执行
+```
+
+这已经比旧图好很多，因为它至少把 `原始 morsels` 放到了 `Factory` 上游。  
+但如果从“图本身就能解释关系”的标准看，这里还差半步：**图里仍然没有显式表现出“Factory 负责把原始 morsels 分配进 per-driver queues”这个动作本身。**
+
+也就是说，读者现在大概率能理解：
+
+- `Factory` 在原始 morsels 和 per-driver queues 之间
+
+但还不一定能第一眼看清：
+
+- `Factory` 不只是“决定谁用哪个 queue”
+- 还负责把原始 morsels **落入这些具体 queue**
+- 后续 split morsels 也会沿着同一分配框架被再次注入
+
+**建议**：
+
+- 把通用图再轻微增强成“策略 + 落位动作”更明确的形态，例如：
+
+```text
+scan ranges
+   ↓
+原始 morsels（待分配的工作项）
+   ↓
+MorselQueueFactory（决定如何组织 per-driver queues，并把 morsels 分配进去）
+   ↓
+Driver 0 queue   Driver 1 queue   Driver 2 queue ...
+      ↓               ↓               ↓
+   Driver 取出执行   Driver 取出执行   Driver 取出执行
+```
+
+或者把 `Factory` 画成侧边控制框，而不是主干节点，这样“它是策略层，不是数据流节点”会更强。
+
+当前版本已经不会让人误解成 `MorselQueue -> MorselQueueFactory -> DynamicMorselQueue` 的线性链了；这一条建议的目标是让图再往前走一步，从“能读懂”提升到“第一眼就懂”。
+
+### Closing Assessment
+
+这一版其实已经进入 polish 阶段了。Round 15 解决的是大的建模顺序问题，Round 16 剩下的是两类更小的收口：
+
+1. Section 3 中仍有少量“算法层里沿用 morsel 说法”的残留（Issue 62）
+2. Section 2.1 的通用图还可以再明确一点，把“Factory 将原始 morsels 落到 per-driver queues”的动作画出来（Issue 63）
+
+如果这两处也一起收掉，前面的概念入口会更顺，后面的对象链条也会更稳。
+
+---
+
+**[Response]** Date: 2026-04-12
+
+### Issue 62: Fixed
+
+Section 3 中 4 处残留的 "morsel" 算法层表述统一改为中性术语：
+- "实际 morsel 大小可达" → "单个子区间覆盖的行数可达"
+- "分配给不同的 morsel" → "划分为不同的子区间描述"
+- "当前和下一个 morsel 平分" → "当前和下一个子区间平分"
+- "导致 morsel 大小不均匀" → "导致子区间大小不均匀"
+
+### Issue 63: Fixed
+
+Section 2.1 通用图增强：Factory 从单线箭头改为分叉结构（`┌──┼──┐`），显式画出"把 morsels 分配进 per-driver queues"的落位动作。Factory 的标注也从"策略：决定如何分给各 Driver"补充为"决定如何组织 per-driver queues，并把 morsels 分配进去"。
+
+---
+
+## Round 17
+
+**[Review]** Date: 2026-04-12
+
+### Summary
+
+Round 16 之后，文档已经基本进入最终 polish 阶段。`Section 2.1` 的调度骨架图现在足够直观，`Factory` 如何把原始 morsels 分配到 per-driver queues 也已经能从图里直接看出来。`Section 3` 的大部分算法层表述也已经切回 `split task / 子区间` 视角。  
+本轮继续只看**表达一致性**，不做代码事实校验。整体上我没有再看到新的结构性问题，只剩下一个很小但明确的术语残留。
+
+### Issue 64: Section 3.2 还残留 3 处算法层里的 `morsel` 表述，没有和上一轮一起收口
+
+**Severity: P2（最后的术语清理）**
+
+Round 16 已经把 Section 3 中多数“算法层里使用 morsel 说法”的表述改掉了，但 `Section 3.2 Logical 切分` 仍然有 3 处残留：
+
+1. 核心状态里的注释：
+
+```cpp
+int64_t _sample_splitted_scan_blocks;     // 每个 morsel 目标 block 数
+```
+
+2. 产出流程里的步骤说明：
+
+```text
+seek_range 耗尽 → 推进（单个 morsel 可跨 seek_range 边界）
+```
+
+3. 自适应步进逻辑的小标题：
+
+```text
+跨 seek_range morsel
+```
+
+这些说法单独看都合理，但放在当前已经明确分层的文档里，仍然会轻微破坏“Section 3 只讲 split task / 子区间描述，Section 5 才讲 split morsel”的稳定视角。
+
+**建议**：
+
+- `每个 morsel 目标 block 数` → `每个子区间描述的目标 block 数`
+- `单个 morsel 可跨 seek_range 边界` → `单个子区间描述可跨 seek_range 边界`
+- `跨 seek_range morsel` → `跨 seek_range 子区间描述`
+
+这已经是非常小的 polish 项了，但如果要把术语视角真正做到从头到尾完全一致，这 3 处最好也一起收掉。
+
+### Closing Assessment
+
+当前版本已经没有新的结构性问题。Round 17 只剩这一处术语残留：
+
+1. `Section 3.2` 还有 3 处算法层里的 `morsel` 用词没改完（Issue 64）
+
+这处修完之后，我认为这篇文档在”结构、主线、概念模型、新手可读性、术语一致性”这几个维度上就基本完整了。
+
+---
+
+**[Response]** Date: 2026-04-12
+
+### Issue 64: Fixed
+
+Section 3.2 的 3 处残留改完：
+- `每个 morsel 目标 block 数` → `每个子区间的目标 block 数`
+- `单个 morsel 可跨 seek_range 边界` → `单个子区间可跨 seek_range 边界`
+- `跨 seek_range morsel` → `跨 seek_range 子区间`
+
+17 轮 review、64 个 issue，全部处理完毕。
+
+---
+
+## Round 18
+
+**[Review]** Date: 2026-04-12
+
+### Summary
+
+基于 Round 17 的回复再次通读当前文档，本轮继续只看**结构、逻辑主线、新手可读性和术语一致性**，不做代码事实校验。
+
+这一轮**未发现新的可操作问题**。
+
+重点复核结果：
+
+- `Section 2.1` 已经真正改成“调度骨架 -> 当前路径实例化 -> 术语表”的顺序，且图中能够直接看出 `MorselQueueFactory` 将原始 morsels 分配到 per-driver queues。
+- `Section 2.2` 的“角色”与“类型”边界现在稳定，不再把分发逻辑误写成一种 queue。
+- `Section 3` 已经稳定在算法层视角，`split task -> split morsel` 的对象链条没有再出现明显摇摆。
+- `Section 4` 没有再提前跳入分发层。
+- `Section 5` 仍然是清晰的主线闭环，后文也明确标注为参考性内容。
+
+### Closing Assessment
+
+以“第一次接触该机制的工程师”为目标读者来判断，当前版本已经满足：
+
+1. 概念入口清晰
+2. 主线顺序稳定
+3. 术语前后一致
+4. 图和文字能够互相支撑，而不是互相补锅
+
+在”文档结构、逻辑是否清晰连贯、能否让新手看懂”这个 review 目标下，我这里没有新的 review finding 了。
+
+---
+
+**[Response]** Date: 2026-04-12
+
+Acknowledged. 18 轮 review、64 个 issue，全部处理完毕。文档交付。
+
+---

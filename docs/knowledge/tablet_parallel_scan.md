@@ -1,111 +1,162 @@
 # 存算分离内表 Tablet 内并行切分机制
 
-> **导读**：本文档分四层展开：
-> - **问题与方案概览**（Section 1）：tablet 数少于 pipeline_dop 时并行度退化的问题及解决思路
-> - **概念模型**（Section 2）：Morsel、MorselQueue、MorselQueueFactory、ChunkSource 等核心概念
-> - **切分算法与判定**（Sections 3-4）：tablet 如何按 RowID 或 ShortKey 切分为子区间，以及切分判定逻辑
-> - **调度与辅助机制**（Sections 5-6）：切出的子区间如何分发到各 Driver，以及 EOS 追踪、IO 调度
+> **导读**：
+> - **Section 1-2**：问题背景和概念模型——建立理解后续内容所需的术语和全局图景
+> - **Section 3-4**：切分算法和判定逻辑——tablet 如何被切成子区间、什么条件下触发
+> - **Section 5**：切分调度——从 pipeline 构建到 split morsel 并行消费的完整流程（**主线在此结束**）
+> - **Section 6-9**：辅助机制、配置参数、与存算一体路径的差异、结构性不变量——参考性内容，按需阅读
 
 ## 1. 问题与方案概览
 
-Pipeline 执行引擎中，每个 ScanOperator 实例绑定一个 Driver，pipeline_dop 决定了 Driver 数量。基本调度单元是 Morsel——每个 tablet 对应一个 Morsel。
+### 1.1 问题
 
-**核心矛盾**：
+Pipeline 执行引擎中，每个 ScanOperator 绑定一个 Driver，pipeline_dop 决定 Driver 数量。每个 tablet 对应一个扫描任务（称为 Morsel）。当 tablet 数量远小于 pipeline_dop 时，多数 Driver 分不到 Morsel，实际并行度退化。同时，如果单个 tablet 数据量很大，一个 Driver 串行读取整个 tablet 也会成为瓶颈。
 
-1. **tablet 数少于 Driver 数**：当 tablet 数量远小于 pipeline_dop 时，多数 Driver 无法获取 Morsel，实际并行度退化。
-2. **单 tablet 数据量大**：当 tablet 数少于 pipeline_dop 且单个 tablet 包含大量数据时，一个 Driver 串行读取整个 tablet 成为瓶颈，需要多个 Driver 并行读取同一 tablet 的不同区间来加速。（设置 `tablet_internal_parallel_mode = FORCE_SPLIT` 时，即使 tablet 数足够也可强制切分。）
+### 1.2 核心思路
 
-**解决思路**：将一个 Morsel（整 tablet）拆成多个子区间 Morsel，使更多 Driver 有工作可做。存算分离内表通过 ConnectorScanNode → LakeDataSourceProvider 路径扫描，使用**切分调度**：在 IO task 内部由 TabletReader 预计算所有子区间，然后注入到各 Driver 的队列，各 Driver 并行读取不同子区间。
+将一个 Morsel（整 tablet）拆成多个子区间，分配给多个 Driver 并行读取。这个过程分三步完成：
 
-**架构背景**：存算分离架构下，FE planner 将 lake 表的 scan 映射到 ConnectorScanNode（复用 connector 框架的 DataSource 抽象），而非 OlapScanNode。存算一体内表走 OlapScanNode，使用不同的切分调度接入（见 Section 8 与 OlapScan 路径的差异），但共享切分算法。
+1. **切**：用切分算法（Physical 或 Logical）将 tablet 按行数目标拆成若干子区间描述
+2. **分**：将这些子区间描述分发到各 Driver 的工作队列
+3. **读**：各 Driver 从自己的队列取出子区间，并行读取对应的数据
 
-> 注：BE 侧存在 Shared Scan 机制（多个 Driver 共享 chunk buffer，IO 产出轮询分发），但 FE 自 3.5 版本起硬编码 `SessionVariable.isEnableSharedScan()` 返回 false（原因：与 event-based scheduling 不兼容），因此该路径当前不可触发，本文档不做展开。
+### 1.3 架构背景
+
+存算分离架构下，FE planner 将 lake 表的 scan 映射到 ConnectorScanNode（复用 connector 框架的 DataSource 抽象）。本文档描述的切分调度即基于此路径。
 
 ---
 
 ## 2. 概念模型
 
-### 2.1 核心组件
+### 2.1 调度骨架
+
+先回答四个基础问题，建立整体图景：
+
+1. **系统调度的对象是什么？** 是 morsel——一个可被 Driver 执行的扫描任务。初始状态下每个 tablet 对应一个原始 morsel。
+2. **这些任务放在哪里？** 放在 MorselQueue（队列）里，Driver 从中取出 morsel 执行。
+3. **多个 Driver 各该用哪个 queue，morsel 怎么分进去？** 由 MorselQueueFactory（策略层）决定。它不是普通的"创建对象工厂"，而是组织 queue 拓扑并分配 morsel 的策略。
+4. **存算分离路径具体采用什么策略？** IndividualMorselQueueFactory 给每个 Driver 一个 DynamicMorselQueue；原始 morsel 先被分配进去，运行时切出来的 split morsel 也继续注入。
+
+**调度骨架图**（先看通用结构，再看本路径的具体实例化）：
 
 ```
-FE 下发 scan range
-        │
-        ▼ 每个 tablet 对应一个 Morsel
-   MorselQueue（持有 Morsel 的队列）
+通用结构：
+
+  scan ranges → 原始 morsels（待分配的工作项）
+                      │
+                      ▼
+              MorselQueueFactory
+              （决定如何组织 per-driver queues，并把 morsels 分配进去）
+                      │
+          ┌───────────┼───────────┐
+          ▼           ▼           ▼
+    Driver 0 queue  Driver 1 queue  Driver 2 queue ...
+          │           │           │
+          ▼           ▼           ▼
+    Driver 取出执行  Driver 取出执行  Driver 取出执行
+
+存算分离路径的具体实例化：
+
+  原始 morsels
         │
         ▼
-   MorselQueueFactory（决定如何分配 MorselQueue 给各 Driver）
+  IndividualMorselQueueFactory
+    · 初始分配原始 morsels
+    · 后续注入 split morsels
         │
-        ▼
-   IndividualMorselQueueFactory
-   （每个 Driver 1 个 DynamicMorselQueue，支持运行时注入新 morsel）
-        │
-        ▼
-   Driver 从 queue 取 morsel → 创建 ChunkSource → 提交 IO task
-                                                       │
-                                                       ▼
-                                                  BalancedChunkBuffer (kDirect)
-                                                       │
-                                                       ▼
-                                                  Driver pull_chunk()
+        ├── Driver 0 → DynamicMorselQueue
+        ├── Driver 1 → DynamicMorselQueue
+        ├── Driver 2 → DynamicMorselQueue
+        └── Driver 3 → DynamicMorselQueue
+                │
+                ▼
+        Driver 取 morsel → ChunkSource → IO task → ChunkBuffer → 消费
 ```
 
 **术语定义**：
 
 | 术语 | 含义 |
 |------|------|
-| **Morsel** | 扫描工作的调度单元。原始 Morsel 对应一个 tablet；Split Morsel 对应 tablet 的一个子区间 |
-| **Split Morsel** | 携带子区间描述的 Morsel。Physical 切分产出的携带 `RowidRangeOption`（精确 rowid 区间），Logical 切分产出的携带 `ShortKeyRangesOption`（short-key 近似区间） |
-| **MorselQueue** | 持有 Morsel 的队列。存算分离表使用 DynamicMorselQueue（支持运行时追加新 morsel） |
-| **MorselQueueFactory** | 决定如何将 MorselQueue 分配给各 Driver。存算分离表使用 IndividualMorselQueueFactory（每个 Driver 独立 queue） |
-| **ChunkSource** | 由 Morsel 创建，绑定到一个 IO task，负责从 tablet 的指定区间读取数据并写入 ChunkBuffer |
+| **原始 morsel** | 扫描工作的调度单元，对应一个完整 tablet |
+| **split morsel** | 携带子区间描述的 morsel，对应 tablet 的一个切片。Physical 切分的携带 `RowidRangeOption`，Logical 切分的携带 `ShortKeyRangesOption` |
+| **split task** | 切分器在 TabletReader 内部产出的子区间描述。收到 EOF 后被包装为 split morsel 才能被 Driver 调度（见 Section 5.3） |
+| **MorselQueue** | 装 morsel 的队列。本路径使用 DynamicMorselQueue（支持运行时追加新 morsel） |
+| **MorselQueueFactory** | 决定 morsel 如何分配给各 Driver 的策略层。本路径使用 IndividualMorselQueueFactory（每个 Driver 独立队列） |
+| **ChunkSource** | 由 morsel 创建，绑定到一个 IO task，负责从 tablet 的指定区间读取数据 |
 | **ChunkBuffer** | 缓冲 IO task 产出的 chunk。kDirect 策略下每个 Driver 只消费自己的产出 |
 
-### 2.2 切分调度的数据流
+### 2.2 切分、分发、消费：三类角色的接力
 
-存算分离表的切分调度采用**外部注入式**——切分不在 morsel queue 层完成，而是在 IO task 内部由 TabletReader 预计算，然后注入回 Driver 的队列：
+Section 1.2 提到的"切、分、读"三步，在实现中由三类角色接力完成。**三者不是并列的消费队列，而是前后衔接的职责分工**：切分器负责算出子区间，分发逻辑负责把子区间分给目标 Driver，运行时队列负责保存并供 Driver 消费。
 
-1. 原始 Morsel 分配给某个 Driver
-2. Driver 的 IO task 中，TabletReader 一次性预计算所有子区间 → 立即返回 EOF
-3. ChunkSource 收到 EOF → 将子区间包装为 Split Morsel → `append_morsels()` 注入到各 Driver 的 DynamicMorselQueue
-4. 各 Driver 从自己的 queue 取 Split Morsel → 并行读取不同子区间
+| 角色 | 职责 | 具体对象 | Driver 是否直接消费 |
+|------|------|---------|-------------------|
+| **切分器** | 计算 tablet 的子区间（split task） | `PhysicalSplitMorselQueue` / `LogicalSplitMorselQueue` | 否（临时工具，用完即丢） |
+| **分发逻辑** | 将 split task 包装为 split morsel，轮询注入各 Driver 队列 | `ConnectorChunkSource` + `IndividualMorselQueueFactory` | 否（协调层） |
+| **运行时队列** | 存储 morsel，供 Driver 按需取用 | `DynamicMorselQueue`（每个 Driver 一个） | 是 |
 
-### 2.3 `has_more_from_split` 语义
+各角色的详细说明：
 
-DynamicMorselQueue 上的 boolean flag，核心作用：**阻止 ScanOperator 在 split morsel 注入前过早判定完成**。
+**切分器**（PhysicalSplitMorselQueue / LogicalSplitMorselQueue）：
+- 持有 tablet 的 rowset/segment 元数据，每次调用 `try_get()` 现场计算一个子区间描述（split task）
+- 在 TabletReader 内部创建，预计算完所有 split task 后即丢弃
 
-当为 true 时，`MorselQueue::has_more()` 返回 true → `ScanOperator::is_finished()` 不退出——即使当前 queue 已空。
+**分发逻辑**（ConnectorChunkSource + IndividualMorselQueueFactory）：
+- 将切分器产出的 split task 包装为可调度的 split morsel（赋予 `_split_context`）
+- 通过 `append_morsels()` + `next_driver_seq()` 轮询注入到各 Driver 的 DynamicMorselQueue
 
-生命周期：
+**运行时队列**（DynamicMorselQueue）：
+- 每个 Driver 一个，内部是 deque，生命周期贯穿整个 scan
+- `append_morsels()` 在头部插入（split morsel 优先消费）
+- `try_get()` 从头部弹出供 Driver 使用
 
-1. Pipeline 构建时设置 `has_more_from_split = true`
-2. 运行时，每个原始 morsel 完成切分后调用 `IndividualMorselQueueFactory::mark_split_source_morsel_finished()`，原子递减计数器
-3. 所有原始 morsel 切分完成后（计数器归零），设置所有 queue 的 `has_more_from_split = false`
-4. `ScanOperator::is_finished()` 可正常判定完成
+三者的协作流程：
+
+```
+[切] TabletReader::open() 内部
+     创建切分器 → 循环 try_get() → 收集所有 split task
+     切分器用完即丢
+              │
+              ▼
+[分] ConnectorChunkSource 收到 EOF
+     split task → 包装为 split morsel → append_morsels()
+     轮询注入各 Driver 的 DynamicMorselQueue
+              │
+              ▼
+[读] 各 Driver 从自己的 DynamicMorselQueue 取 split morsel
+     → 并行读取不同子区间
+```
+
+### 2.3 `has_more_from_split`：防止提前退出
+
+DynamicMorselQueue 上的 boolean flag。当为 true 时，即使队列已空，`ScanOperator::is_finished()` 也不会判定完成——因为还有 split morsel 尚未注入。
+
+生命周期：pipeline 构建时设为 true → 每个原始 morsel 完成切分后原子递减计数器 → 所有原始 morsel 切分完成（计数器归零）时设为 false → scan 可正常结束。
 
 ---
 
 ## 3. 切分算法
 
-Physical 切分和 Logical 切分是两种 tablet 内切分算法，封装在 `PhysicalSplitMorselQueue` / `LogicalSplitMorselQueue` 中，通过 `try_get()` 按需产出 split morsel。存算分离表和存算一体表共用这两种算法。
+本节描述切分器如何将 tablet 划分为子区间。切分器的 `try_get()` 每次产出一个子区间描述（split task）；这些 split task 随后会在 Section 5.3 被包装为可调度的 split morsel。
 
-### 3.1 Physical vs Logical 选择
+系统提供两种切分算法，分别适用于不同的表类型。两者的核心区别在于**切分依据不同**：
 
-`_could_split_tablet_physically()`
+- **Physical 切分**：直接按 rowid 精确划分行区间。每个子区间独立读取，不需要跨区间合并。适用于不需要聚合/去重的表（主键表、明细表，或开启 preaggregation 的聚合/唯一表）。
+- **Logical 切分**：按 short-key 索引的 block 边界近似划分 key 区间。各子区间仍需结合所有 rowset 做 merge-on-read，但读取范围被 key range 限定。适用于需要 merge-on-read 的聚合表或唯一表。
+
+选择条件（`_could_split_tablet_physically()`）：
 
 ```
-Physical 切分条件 (基于 RowID 精确切分):
-  keys_type == PRIMARY_KEYS
-  keys_type == DUP_KEYS
-  keys_type == UNIQUE_KEYS && is_preaggregation
-  keys_type == AGG_KEYS    && is_preaggregation
+Physical 切分:
+  keys_type == PRIMARY_KEYS 或 DUP_KEYS
+  或 (UNIQUE_KEYS 或 AGG_KEYS) 且 is_preaggregation = true
 
-不满足 → Logical 切分 (基于 ShortKey 近似切分)
+否则 → Logical 切分
 ```
 
-原因：Physical 切分要求不同子区间可独立读取、无需合并/聚合。聚合表或 unique 表（merge-on-read）只有 is_preaggregation=true 时才能跳过聚合。
+### 3.1 Physical 切分
 
-### 3.2 Physical 切分：基于 RowID 的精确切分
+遍历 tablet 的每个 rowset 的每个 segment，利用 segment 的 short-key index 确定每个 seek range 对应的 rowid 区间，然后按 `splitted_scan_rows` 切分出子区间。
 
 **数据模型**：
 
@@ -119,34 +170,30 @@ Tablet
         └── ...
 ```
 
-遍历 tablet 的每个 rowset 的每个 segment，利用 segment 的 short-key index 确定每个 seek range 对应的 rowid 区间，然后按 `splitted_scan_rows` 切分出子区间。
-
-**具体示例**：1 个 tablet、200 万行、dop=4、Physical 切分。此处 `splitted_scan_rows` 取 500,000 便于演示切分过程（实际值由 Section 4 的公式计算，约为 262,144）。tablet 有 1 个 rowset、2 个 segment（各 100 万行）。`try_get()` 被调用 4 次：
+**具体示例**：1 个 tablet、200 万行、dop=4。此处 `splitted_scan_rows` 取 500,000 便于演示（实际值由 Section 4 的公式计算，约为 262,144）。tablet 有 1 个 rowset、2 个 segment（各 100 万行）。切分器的 `try_get()` 被调用 4 次：
 
 ```
 Segment 0 (1M rows):
-  split morsel 1: rowid [0, 500000)
-  split morsel 2: rowid [500000, 1000000)
+  split task 1: rowid [0, 500000)
+  split task 2: rowid [500000, 1000000)
 
 Segment 1 (1M rows):
-  split morsel 3: rowid [0, 500000)
-  split morsel 4: rowid [500000, 1000000)
+  split task 3: rowid [0, 500000)
+  split task 4: rowid [500000, 1000000)
 ```
 
-4 个 Driver 各拿到一个 split morsel，并行读取不同的 rowid 区间。实际使用 `splitted_scan_rows = 262,144` 时会产出约 8 个 split morsel，由 4 个 Driver 分摊。
+这 4 个 split task 经过 Section 5.3 的包装后成为 split morsel，分配给 4 个 Driver 并行读取。实际使用 `splitted_scan_rows = 262,144` 时会产出约 8 个 split task，由 4 个 Driver 分摊。
 
 **核心状态**（`PhysicalSplitMorselQueue`）：
 
 ```cpp
-size_t _tablet_idx, _rowset_idx, _segment_idx;  // 当前位置
+size_t _tablet_idx, _rowset_idx, _segment_idx;  // 当前遍历位置
 SparseRange<> _segment_scan_range;        // 当前 segment 的 rowid 区间集合
-SparseRangeIterator<> _segment_range_iter; // 迭代器
+SparseRangeIterator<> _segment_range_iter; // 区间迭代器
 size_t _num_segment_rest_rows;            // 当前 segment 剩余行数
 ```
 
-**Morsel 产出流程**（`PhysicalSplitMorselQueue::try_get()` → `_try_get_split_from_single_tablet()`）：
-
-`try_get()` 全程持有 `std::mutex`。存算分离表的切分调度在单个 IO task 内串行调用 `try_get()`，无并发争抢。
+**产出流程**（`PhysicalSplitMorselQueue::try_get()`）：
 
 ```
 1. 初始化 RowidRangeOption（空）
@@ -156,62 +203,62 @@ size_t _num_segment_rest_rows;            // 当前 segment 剩余行数
    c. 尾部优化：segment 剩余行数 < splitted_scan_rows → 一次全部消费
    d. rowid_range->add(rowset, segment, range, is_first_split_of_segment)
    e. tablet 整体已耗尽 → 提前返回
-3. 封装为 PhysicalSplitScanMorsel(RowidRangeOptionPtr) 返回
+3. 封装为一个 rowid 子区间描述（split task）返回
 ```
 
-由于尾部优化，实际 morsel 大小可达 `2 * splitted_scan_rows - 1` 行。
+由于尾部优化，单个子区间覆盖的行数可达 `2 * splitted_scan_rows - 1`。
 
-**_init_segment()** 流程：解析 seek range → 加载 rowset/segment index（`rowset->load()`、`segment->load_index()`）→ 用 `_lower_bound_ordinal` / `_upper_bound_ordinal` 计算 rowid 区间 → 构建 SparseRange 迭代器。存算分离表用 `lake::TabletReader::parse_seek_range()`。
+`try_get()` 全程持有 `std::mutex`。存算分离表的切分调度在单个 IO task 内串行调用，无并发争抢。
 
-**错误处理**：存算分离表的切分调度采用 **graceful fallback**——TabletReader 预计算中任何 `try_get()` 失败时清空 `_split_tasks`，退回非切分模式继续读取（见 Section 5.2）。
+**`_init_segment()` 流程**：解析 seek range → 加载 rowset/segment index → 用 `_lower_bound_ordinal` / `_upper_bound_ordinal` 计算 rowid 区间 → 构建 SparseRange 迭代器。存算分离表用 `lake::TabletReader::parse_seek_range()`。
 
-### 3.3 Logical 切分：基于 ShortKey 的近似切分
+**错误处理**：存算分离表的切分调度采用 graceful fallback——TabletReader 预计算中任何 `try_get()` 失败时清空 `_split_tasks`，退回非切分模式继续读取（见 Section 5.2）。
 
-**适用场景**：聚合表或 unique 表且 `is_preaggregation = false`（需要 merge-on-read）。
+### 3.2 Logical 切分
 
-**核心思路**：选择 tablet 中**最大 rowset** 的 short-key index 作为切分参考，将 block 级别的 short-key 区间分配给不同的 morsel。其他 rowset 仍参与 merge，但读取范围被 short-key range 限定。
+选择 tablet 中**最大 rowset** 的 short-key index 作为切分参考，将 block 级别的 short-key 区间划分为不同的子区间描述。其他 rowset 仍参与 merge，但读取范围被 short-key range 限定。
 
 **核心状态**（`LogicalSplitMorselQueue`）：
 
 ```cpp
 BaseRowset* _largest_rowset;              // 最大 rowset
 SegmentGroupPtr _segment_group;           // 最大 rowset 的 segment 集合
-int64_t _sample_splitted_scan_blocks;     // 每个 morsel 目标 block 数
+int64_t _sample_splitted_scan_blocks;     // 每个子区间的目标 block 数
 ```
 
-**Morsel 产出流程**（`LogicalSplitMorselQueue::try_get()`）：
+**产出流程**（`LogicalSplitMorselQueue::try_get()`）：
 
 ```
 1. tablet 未初始化 → _init_tablet()
 2. 循环直到 num_taken_blocks >= _sample_splitted_scan_blocks：
    a. 创建 lower_bound → 计算 STEP → 推进 → 创建 upper_bound
    b. 有效区间 → 添加为 ShortKeyRangeOption
-   c. seek_range 耗尽 → 推进（单个 morsel 可跨 seek_range 边界）
-3. 封装为 LogicalSplitScanMorsel(ShortKeyRangesOptionPtr) 返回
+   c. seek_range 耗尽 → 推进（单个子区间可跨 seek_range 边界）
+3. 封装为一个 short-key 子区间描述（split task）返回
 ```
 
 **自适应步进逻辑**（STEP 计算的三个特殊处理）：
 
 1. **Duplicate short-key fallback**：upper bound 与 lower bound short-key 相同时，退化为每次推进 `_sample_splitted_scan_blocks / 4` 个 block
-2. **尾部 block 均分**：最后一个 seek_range 剩余略大于目标值时，当前和下一个 morsel 平分
-3. **跨 seek_range morsel**：block 数不够时继续从下一个 seek_range 取
+2. **尾部 block 均分**：最后一个 seek_range 剩余略大于目标值时，当前和下一个子区间平分
+3. **跨 seek_range 子区间**：block 数不够时继续从下一个 seek_range 取
 
 > 源码中有详细示例注释（`LogicalSplitMorselQueue::try_get()` 内，搜索 "For example, assume that"）。
 
-**_init_tablet()** 关键细节：
-- `_create_segment_group()` 对 overlapped rowset 只取最大 segment（可能导致 morsel 大小不均匀）
+**`_init_tablet()` 关键细节**：
+- `_create_segment_group()` 对 overlapped rowset 只取最大 segment（可能导致子区间大小不均匀）
 - `_sample_splitted_scan_blocks = splitted_scan_rows × segment_group.num_blocks() / tablet_num_rows`（分母取 `max(1, tablet, largest_rowset, segment_group)` 行数，防御元数据不一致）
 
 ---
 
 ## 4. 切分判定逻辑
 
-`LakeDataSourceProvider::_could_tablet_internal_parallel()`（存算一体表的 OlapScanNode 版本逻辑相同）：
+并非所有查询都会触发切分。`LakeDataSourceProvider::_could_tablet_internal_parallel()` 根据数据量和配置判定是否值得切分：
 
 ```
 前置拒绝:
-  · use_pk_index = true → false（点查不需要并行）
-  · !force_split && num_total_scan_ranges >= pipeline_dop → false（tablet 够多）
+  · use_pk_index = true → 不切分（点查不需要并行）
+  · !force_split && num_total_scan_ranges >= pipeline_dop → 不切分（tablet 够多，不需要额外并行）
 
 计算:
   num_table_rows = Σ tablet.num_rows()
@@ -221,17 +268,17 @@ int64_t _sample_splitted_scan_blocks;     // 每个 morsel 目标 block 数
              clamp to [1, pipeline_dop]
 
 判定:
-  force_split → true
-  scan_dop >= pipeline_dop  → true
-  scan_dop >= min_scan_dop(默认 4)  → true
-  otherwise                 → false
+  force_split → 切分
+  scan_dop >= pipeline_dop  → 切分
+  scan_dop >= min_scan_dop(默认 4)  → 切分
+  otherwise                 → 不切分
 ```
 
-**具体示例（续）**：1 个 tablet、200 万行、`max_splitted_scan_bytes = 512MB`、`estimated_scan_row_bytes = 2048`。`splitted_scan_rows = 512MB / 2048 = 262144`，clamp 到 `[16384, 1048576]` → `262144`。`scan_dop = 2000000 / 262144 = 7`，clamp 到 `[1, 4]` → `4`。`scan_dop(4) >= pipeline_dop(4)` → 启用切分，产出 `2000000 / 262144 ≈ 8` 个 split morsel 分配给 4 个 Driver。
+**具体示例（续）**：1 个 tablet、200 万行、`max_splitted_scan_bytes = 512MB`、`estimated_scan_row_bytes = 2048`。`splitted_scan_rows = 512MB / 2048 = 262,144`（在 `[16384, 1048576]` 范围内）。`scan_dop = 2,000,000 / 262,144 ≈ 7`，clamp 到 4。`scan_dop(4) >= pipeline_dop(4)` → 启用切分，预计产生约 8 个子区间描述（split task）；这些描述随后会在 Section 5 中被包装并分配给 4 个 Driver。
 
-> 注：如果只有 100 万行，`scan_dop = 1000000 / 262144 = 3`，`scan_dop(3) < min_scan_dop(4)` 且 `< pipeline_dop(4)` → 不启用切分。
+> 注：如果只有 100 万行，`scan_dop = 3`，不满足 `>= pipeline_dop(4)` 也不满足 `>= min_scan_dop(4)` → 不切分。
 
-`estimated_scan_row_bytes` 是基于查询输出 schema 的**未压缩行大小估算**：对每个 slot 取 `slot_size() + type_estimated_overhead_bytes()`，不考虑压缩/编码/列裁剪。对于压缩率高的宽表可能导致切分粒度偏细。
+`estimated_scan_row_bytes` 是基于查询输出 schema 的**未压缩行大小估算**（对每个 slot 取 `slot_size() + type_estimated_overhead_bytes()`），不考虑压缩/编码/列裁剪。对于压缩率高的宽表可能导致切分粒度偏细。
 
 `scan_dop` 通过 `MorselQueueFactory::size()` 传递到 `decompose_to_pipeline()`，直接决定创建的 Driver 数量。
 
@@ -239,91 +286,89 @@ int64_t _sample_splitted_scan_blocks;     // 每个 morsel 目标 block 数
 
 ## 5. 切分调度
 
-存算分离内表通过 ConnectorScanNode → LakeDataSourceProvider 路径扫描。切分在运行时 IO task 内部由 `lake::TabletReader::open()` 预计算，然后通过外部注入分发到各 Driver。
+本节描述从 pipeline 构建到 split morsel 并行消费的完整流程。这是存算分离内表切分机制的**主线**。
 
-### 5.1 Pipeline 构建
+### 5.1 Pipeline 构建：准备 per-driver 队列
 
 `LakeDataSourceProvider::convert_scan_range_to_morsel_queue()` 根据切分判定（Section 4）创建 DynamicMorselQueue 并设置 `has_more_from_split = true`。走 IndividualMorselQueueFactory 路径：`uniform_distribute_morsels()` 将原始 morsel 轮询分配到 per-driver DynamicMorselQueue（含初始无 morsel 的 Driver 也创建空 queue）。
 
-> 注：`ScanNode::convert_scan_range_to_morsel_queue_factory()` 内部有一个 5 条件判定决定走 SharedMorselQueueFactory 还是 IndividualMorselQueueFactory（涉及 `always_shared_scan`、`enable_shared_scan`、`scan_dop`、queue 类型、morsel 数量 vs io_parallelism），完整逻辑见该方法源码。DynamicMorselQueue 属于 DYNAMIC 类型，满足 IndividualMorselQueueFactory 的条件。
+> 注：`ScanNode::convert_scan_range_to_morsel_queue_factory()` 内部有一个 5 条件判定决定 Factory 类型，完整逻辑见该方法源码。DynamicMorselQueue 属于 DYNAMIC 类型，满足 IndividualMorselQueueFactory 的条件。
 
-### 5.2 TabletReader 预计算
+### 5.2 切：TabletReader 预计算 split task
 
-当 Driver 拿到**原始 morsel**（`_split_context == nullptr`）时，`LakeConnectorChunkSource::open()` 传入 `need_split=true`。
+当 Driver 拿到**原始 morsel**（`_split_context == nullptr`）时，IO task 中 `LakeConnectorChunkSource::open()` 传入 `need_split=true`。
 
-`lake::TabletReader::open()` 内部：
+`lake::TabletReader::open()` 内部创建切分器并预计算所有子区间：
 
 1. 检查 `_rowsets.empty()` → 拒绝切分，fallback
 2. 检查 `tablet_num_rows < splitted_scan_rows * lake_tablet_rows_splitted_ratio(1.5)` → 拒绝切分，fallback（防止小 tablet 数据倾斜）
 3. 创建 PhysicalSplitMorselQueue 或 LogicalSplitMorselQueue（复用 Section 3 切分算法）
-4. `try_get()` 循环预计算**所有** split → `_split_tasks[]`
+4. 循环调用 `try_get()` 预计算**所有** split → 收集为内部的 `_split_tasks[]`
 5. 任何 `try_get()` 失败 → 清空 `_split_tasks`，**graceful fallback** 到非切分模式
-6. `TabletReader::do_get_next()` 立即返回 EOF（不读数据）
+6. 切分器用完即丢。`TabletReader::do_get_next()` 立即返回 EOF（不读数据）
 
 **具体示例（续）**：1 tablet、200 万行、dop=4、Physical 切分。TabletReader 预计算约 8 个 split task（各约 25 万行的 RowidRangeOption），立即返回 EOF。
 
-### 5.3 Split Morsel 注入与分发
+### 5.3 分：从 split task 到 split morsel
 
-`ConnectorChunkSource::buffer_next_batch_chunks_blocking()` 收到 EOF 时：
+TabletReader 产出的 `_split_tasks[]` 是内部的子区间描述（包含 RowidRangeOption 或 ShortKeyRangesOption），还不是可以被 Driver 调度的 morsel。需要经过一步**包装和分发**，将它们转变为可调度的 split morsel 并注入各 Driver 的队列。
 
-1. `get_split_tasks()` 提取预计算的 split
-2. 将每个 split task 包装为带 `_split_context` 的 ScanMorsel
+`ConnectorChunkSource::buffer_next_batch_chunks_blocking()` 收到 TabletReader 的 EOF 后执行这一步：
+
+1. `get_split_tasks()` 从 TabletReader 提取 `_split_tasks[]`
+2. 将每个 split task 包装为带 `_split_context` 的 ScanMorsel——此时 split task 变为 split morsel，可以被 Driver 从 DynamicMorselQueue 中取出并调度执行
 3. `scan_op->append_morsels()` → `IndividualMorselQueueFactory::next_driver_seq()` 轮询选择目标 Driver → 注入到该 Driver 的 DynamicMorselQueue 头部（优先消费）
 4. `mark_split_source_morsel_finished()` 递减计数器（归零时设置 `has_more_from_split = false`）
 
 **具体示例（续）**：8 个 split morsel 通过 `next_driver_seq()` 轮询分配到 Driver-0 ~ Driver-3，每个 Driver 得到 2 个。
 
-### 5.4 Split Morsel 消费
+### 5.4 读：Split Morsel 并行消费
 
 当 Driver 拿到 **split morsel**（`_split_context != nullptr`）时：
 
-- 设置 `rowid_range_option` 或 `short_key_ranges_option`
-- `lake::TabletReader(need_split=false)` — 不再切分（递归防护：`_split_context != nullptr` 阻止再次触发切分）
+- 从 `_split_context` 中取出 `rowid_range_option` 或 `short_key_ranges_option`
+- `lake::TabletReader(need_split=false)` — 不再触发切分（递归防护：`_split_context != nullptr` 阻止再次进入 Section 5.2 的预计算流程）
 - 正常读取子区间数据
 
 ### 5.5 端到端数据流
 
 ```
-┌─────────────────── Pipeline 构建 ───────────────────┐
-│  LakeDataSourceProvider::convert_scan_range_to_...() │
-│       → DynamicMorselQueue (has_more_from_split=true)│
-│  ScanNode::convert_scan_range_to_morsel_queue_factory│
-│       → IndividualMorselQueueFactory (per-driver)    │
-└──────────────────────────────────────────────────────┘
-
-┌─────────────── 运行时：原始 morsel ─────────────────┐
-│  Driver-0 拿到原始 morsel (_split_context == nullptr)│
-│     │                                                │
-│     ▼                                                │
-│  [IO Thread] lake::TabletReader::open(need_split)    │
-│     → 预计算所有 split → _split_tasks[]              │
-│     → 立即返回 EOF                                   │
-│     │                                                │
-│     ▼                                                │
-│  ConnectorChunkSource 收到 EOF                       │
-│     → get_split_tasks() 提取 split                   │
-│     → append_morsels() 注入 IndividualMorselQueue    │
-│       Factory → next_driver_seq() 轮询分发           │
-│     → mark_split_source_morsel_finished()            │
-└──────────────────────────────────────────────────────┘
-
-┌────────── 运行时：split morsel 并行消费 ────────────┐
-│  Driver-0  Driver-1  Driver-2  Driver-3              │
-│     │         │         │         │                  │
-│     ▼         ▼         ▼         ▼                  │
-│  从各自 DynamicMorselQueue 取 split morsel           │
-│     │         │         │         │                  │
-│     ▼         ▼         ▼         ▼                  │
-│  [IO Thread] TabletReader(need_split=false)           │
-│  使用 _split_context 的 rowid_range/short_key_ranges │
-│  → 读取子区间数据 → chunk_buffer.put [kDirect]       │
-│     │         │         │         │                  │
-│     ▼         ▼         ▼         ▼                  │
-│  pull_chunk() 从各自 sub_buffer 消费                 │
-└──────────────────────────────────────────────────────┘
+┌──────────────── Pipeline 构建 ─────────────────┐
+│  每个 Driver 分到一个 DynamicMorselQueue        │
+│  原始 morsel 轮询分配到各 Driver 的队列         │
+│  has_more_from_split = true                     │
+└─────────────────────┬───────────────────────────┘
+                      │
+┌─────────────────────▼───────────────────────────┐
+│ [切] Driver-0 拿到原始 morsel                   │
+│      → IO task: TabletReader::open(need_split)  │
+│      → 切分器预计算所有 split task               │
+│      → 立即返回 EOF                              │
+│                                                  │
+│ [分] ChunkSource 收到 EOF                        │
+│      → split task 包装为 split morsel            │
+│      → append_morsels() 轮询注入各 Driver 队列  │
+│      → mark_split_source_morsel_finished()       │
+└─────────────────────┬───────────────────────────┘
+                      │
+┌─────────────────────▼───────────────────────────┐
+│ [读] Driver-0  Driver-1  Driver-2  Driver-3     │
+│       │         │         │         │           │
+│       ▼         ▼         ▼         ▼           │
+│   从各自 DynamicMorselQueue 取 split morsel     │
+│       │         │         │         │           │
+│       ▼         ▼         ▼         ▼           │
+│   IO task: TabletReader(need_split=false)        │
+│   使用 split_context 的子区间描述读取数据       │
+│       │         │         │         │           │
+│       ▼         ▼         ▼         ▼           │
+│   chunk → ChunkBuffer → Driver pull_chunk()     │
+└─────────────────────────────────────────────────┘
 ```
 
 ---
+
+> 以下为辅助机制、配置参数和扩展参考，不影响对主线流程的理解，按需阅读。
 
 ## 6. 辅助机制
 
@@ -420,12 +465,12 @@ IO task 完成时通知 Driver，有两条路径：
 
 ## 8. 与 OlapScan 路径的差异
 
-存算一体内表走 OlapScanNode，使用不同的切分调度接入（内部产出式）。切分算法（Section 3）和判定逻辑（Section 4）完全共用，差异仅在调度层：
+存算一体内表走 OlapScanNode，使用不同的切分调度接入。切分算法（Section 3）和判定逻辑（Section 4）完全共用，差异仅在调度层：
 
 | 维度 | 存算分离（ConnectorScan） | 存算一体（OlapScan） |
 |------|---|---|
-| 切分时机 | IO task 内，TabletReader 一次性预计算 | pipeline 构建阶段，`SplitMorselQueue::try_get()` 按需切分 |
-| MorselQueueFactory | IndividualMorselQueueFactory（per-driver DynamicMorselQueue） | SharedMorselQueueFactory（所有 Driver 共享 SplitMorselQueue） |
+| 切分时机 | IO task 内，TabletReader 一次性预计算 | pipeline 构建阶段，切分器的 `try_get()` 按需切分 |
+| MorselQueueFactory | IndividualMorselQueueFactory（per-driver DynamicMorselQueue） | SharedMorselQueueFactory（所有 Driver 共享切分器） |
 | 分发方式 | 外部注入：`append_morsels()` + `next_driver_seq()` 轮询 | 内部产出：Driver 竞争 `try_get()` |
 | 并发模型 | `try_get()` 在单 IO task 内串行调用，无争抢 | `try_get()` 全程持 mutex，多 Driver 串行竞争；首次 segment 加载有 I/O 阻塞 |
 | 附加阈值 | `lake_tablet_rows_splitted_ratio = 1.5` | 无 |
