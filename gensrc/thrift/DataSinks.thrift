@@ -242,6 +242,9 @@ struct TOlapTableSink {
     32: optional bool dynamic_overwrite
     33: optional bool enable_data_file_bundling
     34: optional bool is_multi_statements_txn
+    // If set and local exchange is needed before tablet sink, use local shuffle by these exprs
+    // instead of local passthrough exchange.
+    35: optional list<Exprs.TExpr> local_shuffle_exprs
 }
 
 struct TSchemaTableSink {

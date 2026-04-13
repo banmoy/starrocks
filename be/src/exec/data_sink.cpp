@@ -109,6 +109,23 @@ static std::unique_ptr<DataStreamSender> create_data_stream_sink(
                                               enable_exchange_perf);
 }
 
+static const std::vector<TExpr>* find_local_shuffle_exprs_for_olap_sink(const TDataSink& thrift_sink) {
+    if (thrift_sink.type == TDataSinkType::OLAP_TABLE_SINK && thrift_sink.__isset.olap_table_sink &&
+        thrift_sink.olap_table_sink.__isset.local_shuffle_exprs &&
+        !thrift_sink.olap_table_sink.local_shuffle_exprs.empty()) {
+        return &thrift_sink.olap_table_sink.local_shuffle_exprs;
+    }
+    if (thrift_sink.type == TDataSinkType::MULTI_OLAP_TABLE_SINK && thrift_sink.__isset.multi_olap_table_sinks) {
+        for (const auto& sink : thrift_sink.multi_olap_table_sinks) {
+            if (sink.__isset.olap_table_sink && sink.olap_table_sink.__isset.local_shuffle_exprs &&
+                !sink.olap_table_sink.local_shuffle_exprs.empty()) {
+                return &sink.olap_table_sink.local_shuffle_exprs;
+            }
+        }
+    }
+    return nullptr;
+}
+
 Status DataSink::create_data_sink(RuntimeState* state, const TDataSink& thrift_sink,
                                   const std::vector<TExpr>& output_exprs, const TPlanFragmentExecParams& params,
                                   int32_t sender_id, const RowDescriptor& row_desc, std::unique_ptr<DataSink>* sink) {
@@ -460,9 +477,26 @@ Status DataSink::decompose_data_sink_to_pipeline(pipeline::PipelineBuilderContex
         // the desired_tablet_sink_dop set by FE is not same as the dop, and it needs to
         // add a local passthrough exchange here
         if (desired_tablet_sink_dop != dop) {
-            auto ops = context->maybe_interpolate_local_passthrough_exchange(
-                    runtime_state, Operator::s_pseudo_plan_node_id_for_final_sink, prev_operators,
-                    desired_tablet_sink_dop);
+            OpFactories ops;
+            const auto* local_shuffle_exprs = find_local_shuffle_exprs_for_olap_sink(request.output_sink());
+            if (local_shuffle_exprs != nullptr) {
+                std::vector<ExprContext*> local_shuffle_expr_ctxs;
+                RETURN_IF_ERROR(Expr::create_expr_trees(runtime_state->obj_pool(), *local_shuffle_exprs,
+                                                        &local_shuffle_expr_ctxs, runtime_state));
+                auto pred_operators_for_shuffle = prev_operators;
+                ops = context->maybe_interpolate_local_shuffle_exchange(
+                        runtime_state, Operator::s_pseudo_plan_node_id_for_final_sink, pred_operators_for_shuffle,
+                        local_shuffle_expr_ctxs);
+                if (ops == pred_operators_for_shuffle) {
+                    ops = context->maybe_interpolate_local_passthrough_exchange(
+                            runtime_state, Operator::s_pseudo_plan_node_id_for_final_sink, prev_operators,
+                            desired_tablet_sink_dop);
+                }
+            } else {
+                ops = context->maybe_interpolate_local_passthrough_exchange(
+                        runtime_state, Operator::s_pseudo_plan_node_id_for_final_sink, prev_operators,
+                        desired_tablet_sink_dop);
+            }
             ops.emplace_back(std::move(tablet_sink_op));
             context->add_pipeline(std::move(ops));
         } else {

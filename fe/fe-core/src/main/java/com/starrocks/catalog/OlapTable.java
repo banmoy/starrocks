@@ -510,6 +510,20 @@ public class OlapTable extends Table {
         return this.tableProperty;
     }
 
+    public long getBaseVersion() {
+        if (tableProperty == null) {
+            return TableProperty.INVALID;
+        }
+        return tableProperty.getBaseVersion();
+    }
+
+    public void setBaseVersion(long baseVersion) {
+        if (tableProperty == null) {
+            tableProperty = new TableProperty(new HashMap<>());
+        }
+        tableProperty.setBaseVersion(baseVersion);
+    }
+
     public int incAndGetMaxColUniqueId() {
         return this.maxColUniqueId.incrementAndGet();
     }
@@ -1299,11 +1313,11 @@ public class OlapTable extends Table {
     }
 
     /**
-     *  Try to retain the partition for a while to avoid tablet missing errors.
-     *  This method is used in `insert overwrite`, `mv rewrite` etc. scenarios,
-     *  where we don't want to delete data immediately
-     *
-     *  This method is not thread safe. The caller should ensure that this method is called under lock.
+     * Try to retain the partition for a while to avoid tablet missing errors.
+     * This method is used in `insert overwrite`, `mv rewrite` etc. scenarios,
+     * where we don't want to delete data immediately
+     * <p>
+     * This method is not thread safe. The caller should ensure that this method is called under lock.
      */
     public void dropPartitionWithRetention(long dbId, String partitionName, long partitionRetentionPeriod) {
         Partition partition = nameToPartition.get(partitionName);

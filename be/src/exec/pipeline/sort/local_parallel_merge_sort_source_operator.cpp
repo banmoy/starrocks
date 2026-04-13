@@ -14,9 +14,6 @@
 
 #include "exec/pipeline/sort/local_parallel_merge_sort_source_operator.h"
 
-#include <algorithm>
-#include <sstream>
-
 #include "exprs/expr.h"
 #include "runtime/exec_env.h"
 #include "runtime/runtime_state.h"

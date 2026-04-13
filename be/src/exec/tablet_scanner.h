@@ -20,6 +20,7 @@
 
 #include "column/chunk.h"
 #include "column/column_access_path.h"
+#include "column/field.h"
 #include "common/status.h"
 #include "exec/olap_utils.h"
 #include "exprs/expr.h"
@@ -36,6 +37,7 @@ class OlapScanNode;
 
 struct TabletScannerParams {
     const TInternalScanRange* scan_range = nullptr;
+    const std::vector<RowsetSharedPtr>* rowsets = nullptr;
     const std::vector<OlapScanRange*>* key_ranges = nullptr;
     const std::vector<ExprContext*>* conjunct_ctxs = nullptr;
 
@@ -119,6 +121,10 @@ private:
     std::shared_ptr<ChunkIterator> _prj_iter;
     // slot descriptors for each one of |_scanner_columns|.
     std::vector<SlotDescriptor*> _query_slots;
+
+    bool _is_changes_query = false;
+    SlotDescriptor* _changes_action_slot = nullptr;
+    FieldPtr _changes_action_field;
 
     int64_t _num_rows_read = 0;
     int64_t _raw_rows_read = 0;

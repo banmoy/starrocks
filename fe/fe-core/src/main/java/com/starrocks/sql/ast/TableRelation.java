@@ -55,6 +55,15 @@ public class TableRelation extends Relation {
     private QueryPeriod queryPeriod;
     // used for tvr incremental read
     private TvrVersionRange tvrVersionRange;
+    // used for OlapTable VERSION(x)
+    private Expr tableVersionExpr;
+    private Long tableVersion;
+
+    // used for OlapTable CHANGES BETWEEN v1 AND v2
+    private Expr changesFromExpr;
+    private Expr changesToExpr;
+    private Long changesFromVersion;
+    private Long changesToVersion;
 
     // TABLE SAMPLE
     private TableSampleClause sampleClause;
@@ -223,6 +232,58 @@ public class TableRelation extends Relation {
 
     public void setQueryPeriod(QueryPeriod queryPeriod) {
         this.queryPeriod = queryPeriod;
+    }
+
+    public Expr getTableVersionExpr() {
+        return tableVersionExpr;
+    }
+
+    public void setTableVersionExpr(Expr tableVersionExpr) {
+        this.tableVersionExpr = tableVersionExpr;
+    }
+
+    public Long getTableVersion() {
+        return tableVersion;
+    }
+
+    public void setTableVersion(Long tableVersion) {
+        this.tableVersion = tableVersion;
+    }
+
+    public Expr getChangesFromExpr() {
+        return changesFromExpr;
+    }
+
+    public void setChangesFromExpr(Expr changesFromExpr) {
+        this.changesFromExpr = changesFromExpr;
+    }
+
+    public Expr getChangesToExpr() {
+        return changesToExpr;
+    }
+
+    public void setChangesToExpr(Expr changesToExpr) {
+        this.changesToExpr = changesToExpr;
+    }
+
+    public Long getChangesFromVersion() {
+        return changesFromVersion;
+    }
+
+    public void setChangesFromVersion(Long changesFromVersion) {
+        this.changesFromVersion = changesFromVersion;
+    }
+
+    public Long getChangesToVersion() {
+        return changesToVersion;
+    }
+
+    public void setChangesToVersion(Long changesToVersion) {
+        this.changesToVersion = changesToVersion;
+    }
+
+    public boolean isChangesQuery() {
+        return changesFromVersion != null && changesToVersion != null;
     }
 
     public void setTvrVersionRange(TvrVersionRange tvrVersionRange) {

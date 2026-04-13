@@ -41,6 +41,7 @@ import java.util.Set;
 public class PhysicalTopNOperator extends PhysicalOperator {
     private long offset;
     private List<ColumnRefOperator> partitionByColumns;
+    private List<ColumnRefOperator> shuffleColumns;
     private long partitionLimit;
     private SortPhase sortPhase;
     private TopNType topNType;
@@ -72,6 +73,7 @@ public class PhysicalTopNOperator extends PhysicalOperator {
         this.limit = limit;
         this.offset = offset;
         this.partitionByColumns = partitionByColumns;
+        this.shuffleColumns = null;
         this.partitionLimit = partitionLimit;
         this.sortPhase = sortPhase;
         this.topNType = topNType;
@@ -85,6 +87,14 @@ public class PhysicalTopNOperator extends PhysicalOperator {
 
     public List<ColumnRefOperator> getPartitionByColumns() {
         return partitionByColumns;
+    }
+
+    public List<ColumnRefOperator> getShuffleColumns() {
+        return shuffleColumns;
+    }
+
+    public void setShuffleColumns(List<ColumnRefOperator> shuffleColumns) {
+        this.shuffleColumns = shuffleColumns;
     }
 
     public long getPartitionLimit() {
@@ -148,7 +158,8 @@ public class PhysicalTopNOperator extends PhysicalOperator {
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), orderSpec, offset, sortPhase, topNType, isSplit, isEnforced, perPipeline);
+        return Objects.hash(super.hashCode(), partitionByColumns, shuffleColumns, partitionLimit,
+                orderSpec, offset, sortPhase, topNType, isSplit, isEnforced, perPipeline, preAggCall);
     }
 
     @Override
@@ -165,6 +176,7 @@ public class PhysicalTopNOperator extends PhysicalOperator {
 
         return partitionLimit == that.partitionLimit && offset == that.offset && isSplit == that.isSplit &&
                 Objects.equals(partitionByColumns, that.partitionByColumns) &&
+                Objects.equals(shuffleColumns, that.shuffleColumns) &&
                 Objects.equals(orderSpec, that.orderSpec) &&
                 Objects.equals(preAggCall, that.preAggCall) &&
                 sortPhase == that.sortPhase && topNType == that.topNType && isEnforced == that.isEnforced &&
@@ -219,6 +231,7 @@ public class PhysicalTopNOperator extends PhysicalOperator {
             super.withOperator(operator);
             builder.offset = operator.offset;
             builder.partitionByColumns = operator.partitionByColumns;
+            builder.shuffleColumns = operator.shuffleColumns;
             builder.partitionLimit = operator.partitionLimit;
             builder.sortPhase = operator.sortPhase;
             builder.topNType = operator.topNType;
@@ -232,6 +245,11 @@ public class PhysicalTopNOperator extends PhysicalOperator {
         public Builder setPartitionByColumns(
                 List<ColumnRefOperator> partitionByColumns) {
             builder.partitionByColumns = partitionByColumns;
+            return this;
+        }
+
+        public Builder setShuffleColumns(List<ColumnRefOperator> shuffleColumns) {
+            builder.shuffleColumns = shuffleColumns;
             return this;
         }
 

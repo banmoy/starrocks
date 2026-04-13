@@ -556,6 +556,17 @@ public class ExpressionTest extends PlanTestBase {
     }
 
     @Test
+    public void testCoalesceOutputNotNullable() throws Exception {
+        String sql = "select coalesce(v1, 0) from t0";
+        ExecPlan plan = UtFrameUtils.getPlanAndFragment(connectContext, sql).second;
+        List<ColumnRefOperator> outColumns = plan.getOutputColumns();
+
+        Assertions.assertEquals(1, outColumns.size());
+        Assertions.assertEquals(IntegerType.BIGINT, outColumns.get(0).getType());
+        Assertions.assertFalse(outColumns.get(0).isNullable());
+    }
+
+    @Test
     public void testMd5sum() throws Exception {
         String sql = "select 1 from t0 left outer join t1 on t0.v1= t1.v4 where md5sum(t1.v4) = 'a'";
         String plan = getFragmentPlan(sql);

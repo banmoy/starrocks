@@ -387,3 +387,11 @@ All source files must include the appropriate license header:
 // Licensed under the Apache License, Version 2.0 (the "License");
 // ...
 ```
+
+## Incremental Materialize View
+Key Words:
+- 增量物化视图
+- Incremental View Materialization (IVM)
+
+[IVM_current_code.md](./IVM_current_code.md) describes the current implementation of Incremental Materialized Views in StarRocks.
+[IVM_design_doc.md](./IVM_design_doc.md) provides the design document for Incremental Materialized Views.

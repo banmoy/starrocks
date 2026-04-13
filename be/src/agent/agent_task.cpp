@@ -995,6 +995,13 @@ void run_update_meta_info_task(const std::shared_ptr<UpdateTabletMetaInfoAgentTa
                     update_manager->index_cache().release(index_entry);
                 }
             } break;
+            case TTabletMetaType::BASE_VERSION:
+                if (tablet_meta_info.__isset.base_version) {
+                    LOG(INFO) << "update tablet:" << tablet->tablet_id()
+                              << " base_version:" << tablet_meta_info.base_version;
+                    tablet->tablet_meta()->set_base_version(tablet_meta_info.base_version);
+                }
+                break;
             case TTabletMetaType::STORAGE_TYPE:
                 LOG(INFO) << "change storage_type not supported";
                 break;

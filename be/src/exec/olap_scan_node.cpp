@@ -724,6 +724,9 @@ Status OlapScanNode::_start_scan_thread(RuntimeState* state) {
 
             TabletScannerParams scanner_params;
             scanner_params.scan_range = scan_range.get();
+            if (scan_range->__isset.changes_from || scan_range->__isset.changes_to) {
+                scanner_params.rowsets = &tablet_rowset;
+            }
             scanner_params.key_ranges = &agg_key_ranges;
             scanner_params.conjunct_ctxs = &conjunct_ctxs;
             scanner_params.skip_aggregation = _olap_scan_node.is_preaggregation;
@@ -777,7 +780,22 @@ StatusOr<TabletSharedPtr> OlapScanNode::get_tablet(const TInternalScanRange* sca
 StatusOr<std::vector<RowsetSharedPtr>> OlapScanNode::capture_tablet_rowsets(const TabletSharedPtr& tablet,
                                                                             const TInternalScanRange* scan_range) {
     std::vector<RowsetSharedPtr> rowsets;
-    if (scan_range->__isset.gtid) {
+    if (scan_range->__isset.changes_from || scan_range->__isset.changes_to) {
+        if (!scan_range->__isset.changes_from || !scan_range->__isset.changes_to) {
+            return Status::InvalidArgument("changes range is incomplete");
+        }
+        int64_t from_version = scan_range->changes_from + 1;
+        int64_t to_version = scan_range->changes_to;
+        if (from_version > to_version) {
+            return Status::InvalidArgument("changes range must satisfy v2 > v1");
+        }
+        if (tablet->tablet_schema()->keys_type() == PRIMARY_KEYS) {
+            from_version = 0;
+        }
+        std::shared_lock l(tablet->get_header_lock());
+        RETURN_IF_ERROR(tablet->capture_consistent_rowsets(Version(from_version, to_version), &rowsets));
+        Rowset::acquire_readers(rowsets);
+    } else if (scan_range->__isset.gtid) {
         std::shared_lock l(tablet->get_header_lock());
         RETURN_IF_ERROR(tablet->capture_consistent_rowsets(scan_range->gtid, &rowsets));
         Rowset::acquire_readers(rowsets);
@@ -815,7 +833,23 @@ Status OlapScanNode::_capture_tablet_rowsets() {
         // Capture row sets of this version tablet.
         {
             std::shared_lock l(tablet->get_header_lock());
-            RETURN_IF_ERROR(tablet->capture_consistent_rowsets(Version(0, version), &_tablet_rowsets[i]));
+            if (scan_range->__isset.changes_from || scan_range->__isset.changes_to) {
+                if (!scan_range->__isset.changes_from || !scan_range->__isset.changes_to) {
+                    return Status::InvalidArgument("changes range is incomplete");
+                }
+                int64_t from_version = scan_range->changes_from + 1;
+                int64_t to_version = scan_range->changes_to;
+                if (from_version > to_version) {
+                    return Status::InvalidArgument("changes range must satisfy v2 > v1");
+                }
+                if (tablet->tablet_schema()->keys_type() == PRIMARY_KEYS) {
+                    from_version = 0;
+                }
+                RETURN_IF_ERROR(
+                        tablet->capture_consistent_rowsets(Version(from_version, to_version), &_tablet_rowsets[i]));
+            } else {
+                RETURN_IF_ERROR(tablet->capture_consistent_rowsets(Version(0, version), &_tablet_rowsets[i]));
+            }
             Rowset::acquire_readers(_tablet_rowsets[i]);
         }
     }

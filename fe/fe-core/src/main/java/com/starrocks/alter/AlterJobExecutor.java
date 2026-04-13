@@ -208,7 +208,7 @@ public class AlterJobExecutor implements AstVisitorExtendInterface<Void, Connect
 
     @Override
     public Void visitAlterTableModifyDefaultBucketsClause(AlterTableModifyDefaultBucketsClause clause,
-                                                         ConnectContext context) {
+                                                          ConnectContext context) {
         // apply synchronously: update default distribution bucket num
         if (table instanceof OlapTable olap) {
             if (olap.getDefaultDistributionInfo() instanceof HashDistributionInfo) {
@@ -507,6 +507,8 @@ public class AlterJobExecutor implements AstVisitorExtendInterface<Void, Connect
                     throw new DdlException("Failed to update base compaction forbidden time ranges for "
                             + tableName.getTbl() + ": " + e.getMessage());
                 }
+            } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_BASE_VERSION)) {
+                schemaChangeHandler.updateTableMeta(db, tableName.getTbl(), properties, TTabletMetaType.BASE_VERSION);
             } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_BINLOG_ENABLE) ||
                     properties.containsKey(PropertyAnalyzer.PROPERTIES_BINLOG_TTL) ||
                     properties.containsKey(PropertyAnalyzer.PROPERTIES_BINLOG_MAX_SIZE)) {
@@ -674,7 +676,7 @@ public class AlterJobExecutor implements AstVisitorExtendInterface<Void, Connect
     @Override
     public Void visitRollupRenameClause(RollupRenameClause clause, ConnectContext context) {
         try (AutoCloseableLock ignore =
-                    new AutoCloseableLock(new Locker(), db.getId(), Lists.newArrayList(table.getId()), LockType.WRITE)) {
+                new AutoCloseableLock(new Locker(), db.getId(), Lists.newArrayList(table.getId()), LockType.WRITE)) {
             ErrorReport.wrapWithRuntimeException(() ->
                     GlobalStateMgr.getCurrentState().getLocalMetastore().renameRollup(db, (OlapTable) table, clause));
         }
@@ -746,7 +748,7 @@ public class AlterJobExecutor implements AstVisitorExtendInterface<Void, Connect
         }
 
         try (AutoCloseableLock ignore =
-                    new AutoCloseableLock(new Locker(), db.getId(), Lists.newArrayList(table.getId()), LockType.WRITE)) {
+                new AutoCloseableLock(new Locker(), db.getId(), Lists.newArrayList(table.getId()), LockType.WRITE)) {
             ErrorReport.wrapWithRuntimeException(() ->
                     GlobalStateMgr.getCurrentState().getLocalMetastore().dropPartition(db, table, clause));
         }
@@ -758,7 +760,7 @@ public class AlterJobExecutor implements AstVisitorExtendInterface<Void, Connect
     public Void visitTruncatePartitionClause(TruncatePartitionClause clause, ConnectContext context) {
         // This logic is used to adapt mysql syntax.
         // ALTER TABLE test TRUNCATE PARTITION p1;
-        
+
         // Convert TableName to QualifiedName for TableRef
         List<String> parts = Lists.newArrayList();
         if (tableName.getCatalog() != null) {
@@ -769,14 +771,14 @@ public class AlterJobExecutor implements AstVisitorExtendInterface<Void, Connect
         }
         parts.add(tableName.getTbl());
         QualifiedName qualifiedName = QualifiedName.of(parts, tableName.getPos());
-        
+
         // Convert PartitionNames to PartitionRef
         PartitionRef partitionRef = null;
         if (clause.getPartitionNames() != null) {
-            partitionRef = new PartitionRef(clause.getPartitionNames().getPartitionNames(), 
+            partitionRef = new PartitionRef(clause.getPartitionNames().getPartitionNames(),
                     clause.getPartitionNames().isTemp(), clause.getPartitionNames().getPos());
         }
-        
+
         TableRef tableRef = new TableRef(qualifiedName, partitionRef, tableName.getPos());
         TruncateTableStmt tStmt = new TruncateTableStmt(tableRef);
         ConnectContext ctx = ConnectContext.buildInner();
@@ -967,7 +969,7 @@ public class AlterJobExecutor implements AstVisitorExtendInterface<Void, Connect
         try {
             try {
                 GlobalStateMgr.getCurrentState().getLocalMetastore()
-                    .alterTableAutoIncrement(db.getFullName(), table.getName(), clause.getAutoIncrementValue());
+                        .alterTableAutoIncrement(db.getFullName(), table.getName(), clause.getAutoIncrementValue());
             } catch (DdlException e) {
                 throw new AlterJobException(e.getMessage());
             }

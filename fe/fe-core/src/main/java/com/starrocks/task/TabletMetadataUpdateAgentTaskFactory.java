@@ -80,6 +80,12 @@ public class TabletMetadataUpdateAgentTaskFactory {
         return new UpdateCompactionStrategyTask(backendId, tablets, compactionStrategy);
     }
 
+    public static TabletMetadataUpdateAgentTask createBaseVersionUpdateTask(long backendId, Set<Long> tablets,
+                                                                            long baseVersion) {
+        requireNonNull(tablets, "tablets is null");
+        return new UpdateBaseVersionTask(backendId, tablets, baseVersion);
+    }
+
     public static TabletMetadataUpdateAgentTask createEnablePersistentIndexUpdateTask(long backend,
                                                                                       List<Pair<Long, Boolean>> valueList) {
         return new UpdateEnablePersistentIndexTask(backend, requireNonNull(valueList, "valueList is null"));
@@ -109,8 +115,8 @@ public class TabletMetadataUpdateAgentTaskFactory {
         return createPrimaryIndexCacheExpireTimeUpdateTask(backendId, expireTimeList);
     }
 
-    public static TabletMetadataUpdateAgentTask createPrimaryIndexCacheExpireTimeUpdateTask(long backendId,
-            List<Pair<Long, Integer>> expireTimes) {
+    public static TabletMetadataUpdateAgentTask createPrimaryIndexCacheExpireTimeUpdateTask(
+            long backendId, List<Pair<Long, Integer>> expireTimes) {
         return new UpdatePrimaryIndexCacheExpireTimeTask(backendId, requireNonNull(expireTimes, "expireTimes is null"));
     }
 
@@ -185,13 +191,42 @@ public class TabletMetadataUpdateAgentTaskFactory {
         }
     }
 
+    private static class UpdateBaseVersionTask extends TabletMetadataUpdateAgentTask {
+        private final Set<Long> tablets;
+        private final long baseVersion;
+
+        private UpdateBaseVersionTask(long backendId, Set<Long> tablets, long baseVersion) {
+            super(backendId, Objects.hash(tablets, baseVersion));
+            this.tablets = requireNonNull(tablets, "tablets is null");
+            this.baseVersion = baseVersion;
+        }
+
+        @Override
+        public Set<Long> getTablets() {
+            return tablets;
+        }
+
+        @Override
+        public List<TTabletMetaInfo> getTTabletMetaInfoList() {
+            List<TTabletMetaInfo> metaInfos = Lists.newArrayList();
+            for (Long tabletId : tablets) {
+                TTabletMetaInfo metaInfo = new TTabletMetaInfo();
+                metaInfo.setTablet_id(tabletId);
+                metaInfo.setBase_version(baseVersion);
+                metaInfo.setMeta_type(TTabletMetaType.BASE_VERSION);
+                metaInfos.add(metaInfo);
+            }
+            return metaInfos;
+        }
+    }
+
     private static class UpdateLakePersistentIndexTask extends TabletMetadataUpdateAgentTask {
         private final Set<Long> tablets;
         private boolean enablePersistentIndex;
         private String persistentIndexType;
 
         private UpdateLakePersistentIndexTask(long backendId, Set<Long> tablets,
-                boolean enablePersistentIndex, String persistentIndexType) {
+                                              boolean enablePersistentIndex, String persistentIndexType) {
             super(backendId, Objects.hash(tablets, enablePersistentIndex, persistentIndexType));
             this.tablets = tablets;
             this.enablePersistentIndex = enablePersistentIndex;

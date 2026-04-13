@@ -117,6 +117,7 @@ import com.starrocks.sql.plan.PlanFragmentBuilder;
 import com.starrocks.system.SystemInfoService;
 import com.starrocks.thrift.TPartialUpdateMode;
 import com.starrocks.thrift.TResultSinkType;
+import com.starrocks.type.IntegerType;
 import com.starrocks.type.NullType;
 import com.starrocks.type.Type;
 import org.apache.commons.collections4.CollectionUtils;
@@ -133,6 +134,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -155,6 +157,23 @@ public class InsertPlanner {
     private List<Column> outputFullSchema;
 
     private static final Logger LOG = LogManager.getLogger(InsertPlanner.class);
+
+    private boolean hasExplicitLoadOpColumn(InsertStmt insertStmt, Table targetTable) {
+        return Load.tableSupportOpColumn(targetTable)
+                && insertStmt.getTargetColumnNames() != null
+                && insertStmt.getTargetColumnNames().stream().anyMatch(Load.LOAD_OP_COLUMN::equalsIgnoreCase);
+    }
+
+    private void appendExplicitLoadOpSchemaIfNeeded(InsertStmt insertStmt, Table targetTable) {
+        if (!hasExplicitLoadOpColumn(insertStmt, targetTable)) {
+            return;
+        }
+        boolean hasLoadOpSchema = outputFullSchema.stream()
+                .anyMatch(col -> col != null && col.getName().equalsIgnoreCase(Load.LOAD_OP_COLUMN));
+        if (!hasLoadOpSchema) {
+            outputFullSchema.add(new Column(Load.LOAD_OP_COLUMN, IntegerType.TINYINT, false));
+        }
+    }
 
     public InsertPlanner() {
         this.useOptimisticLock = false;
@@ -300,8 +319,8 @@ public class InsertPlanner {
         if (insertStmt.usePartialUpdate()) {
             inferOutputSchemaForPartialUpdate(insertStmt);
         } else {
-            outputBaseSchema = targetTable.getBaseSchema();
-            outputFullSchema = targetTable.getFullSchema();
+            outputBaseSchema = new ArrayList<>(targetTable.getBaseSchema());
+            outputFullSchema = new ArrayList<>(targetTable.getFullSchema());
         }
 
         if (targetTable.isIcebergTable()) {
@@ -310,6 +329,7 @@ public class InsertPlanner {
             outputFullSchema = outputFullSchema.stream().filter(col ->
                     !IcebergTable.ICEBERG_META_COLUMNS.contains(col.getName())).toList();
         }
+        appendExplicitLoadOpSchemaIfNeeded(insertStmt, targetTable);
 
         refreshExternalTable(insertStmt.getQueryStatement(), session);
 
@@ -369,6 +389,7 @@ public class InsertPlanner {
                             buildExecPlan(insertStmt, session, outputColumns, logicalPlan, columnRefFactory,
                                     queryRelation,
                                     targetTable);
+            appendPkLoadOpSchemaIfNeeded(insertStmt, targetTable, execPlan);
 
             DescriptorTable descriptorTable = execPlan.getDescTbl();
             TupleDescriptor tupleDesc = descriptorTable.createTupleDescriptor();
@@ -463,6 +484,7 @@ public class InsertPlanner {
                 session.getSessionVariable().setPreferComputeNode(false);
                 session.getSessionVariable().setUseComputeNodes(0);
                 OlapTableSink olapTableSink = (OlapTableSink) dataSink;
+                setIvmLocalShuffleExprsIfNeeded(insertStmt, targetTable, tupleDesc, olapTableSink);
                 TableRef tableRef = insertStmt.getTableRef();
                 TableName catalogDbTable = TableName.fromTableRef(tableRef);
                 Database db = GlobalStateMgr.getCurrentState().getMetadataMgr().getDb(session, catalogDbTable.getCatalog(),
@@ -591,6 +613,7 @@ public class InsertPlanner {
         try (Timer ignore2 = Tracers.watchScope("Optimizer")) {
             OptimizerContext optimizerContext = OptimizerFactory.initContext(session, columnRefFactory);
             optimizerContext.setSourceTablesCount(sourceTablesCount);
+            optimizerContext.setStatement(insertStmt);
             Optimizer optimizer = OptimizerFactory.create(optimizerContext);
             optimizedPlan = optimizer.optimize(
                     logicalPlan.getRoot(),
@@ -603,11 +626,105 @@ public class InsertPlanner {
                 || targetTable instanceof MysqlTable);
         ExecPlan execPlan;
         try (Timer ignore3 = Tracers.watchScope("PlanBuilder")) {
+            List<ColumnRefOperator> planOutputColumns =
+                    resolvePlanOutputColumns(outputColumns, optimizedPlan, columnRefFactory);
             execPlan = PlanFragmentBuilder.createPhysicalPlan(
-                    optimizedPlan, session, logicalPlan.getOutputColumn(), columnRefFactory,
+                    optimizedPlan, session, planOutputColumns, columnRefFactory,
                     queryRelation.getColumnOutputNames(), TResultSinkType.MYSQL_PROTOCAL, hasOutputFragment);
         }
         return execPlan;
+    }
+
+    private List<ColumnRefOperator> resolvePlanOutputColumns(List<ColumnRefOperator> outputColumns,
+                                                             OptExpression optimizedPlan,
+                                                             ColumnRefFactory columnRefFactory) {
+        List<ColumnRefOperator> optimizedOutputColumns = optimizedPlan.getOutputColumns()
+                .getColumnRefOperators(columnRefFactory);
+        Set<Integer> optimizedOutputColumnIds = optimizedOutputColumns.stream()
+                .map(ColumnRefOperator::getId)
+                .collect(Collectors.toSet());
+        Map<String, List<ColumnRefOperator>> optimizedOutputColumnsByName = optimizedOutputColumns.stream()
+                .collect(Collectors.groupingBy(col -> col.getName().toLowerCase()));
+
+        List<ColumnRefOperator> resolvedOutputColumns = new ArrayList<>(outputColumns.size());
+        for (ColumnRefOperator outputColumn : outputColumns) {
+            if (optimizedOutputColumnIds.contains(outputColumn.getId())) {
+                resolvedOutputColumns.add(outputColumn);
+                continue;
+            }
+            List<ColumnRefOperator> candidates =
+                    optimizedOutputColumnsByName.get(outputColumn.getName().toLowerCase());
+            if (CollectionUtils.isNotEmpty(candidates)) {
+                resolvedOutputColumns.add(candidates.get(0));
+                continue;
+            }
+            resolvedOutputColumns.add(outputColumn);
+        }
+
+        boolean hasLoadOpOutput = resolvedOutputColumns.stream()
+                .anyMatch(col -> Load.LOAD_OP_COLUMN.equalsIgnoreCase(col.getName()));
+        if (hasLoadOpOutput) {
+            return resolvedOutputColumns;
+        }
+
+        Optional<ColumnRefOperator> loadOpColumn = optimizedOutputColumns.stream()
+                .filter(col -> col != null && Load.LOAD_OP_COLUMN.equalsIgnoreCase(col.getName()))
+                .findFirst();
+        loadOpColumn.ifPresent(resolvedOutputColumns::add);
+        return resolvedOutputColumns;
+    }
+
+    private void appendPkLoadOpSchemaIfNeeded(InsertStmt insertStmt, Table targetTable, ExecPlan execPlan) {
+        if (!insertStmt.isSystem()) {
+            return;
+        }
+        if (!(targetTable instanceof OlapTable olapTable) || olapTable.getKeysType() != KeysType.PRIMARY_KEYS) {
+            return;
+        }
+        boolean hasLoadOpOutput = execPlan.getOutputColumns().stream()
+                .anyMatch(col -> col != null && Load.LOAD_OP_COLUMN.equalsIgnoreCase(col.getName()));
+        if (!hasLoadOpOutput) {
+            return;
+        }
+        boolean hasLoadOpSchema = outputFullSchema.stream()
+                .anyMatch(col -> col != null && col.getName().equalsIgnoreCase(Load.LOAD_OP_COLUMN));
+        if (hasLoadOpSchema) {
+            return;
+        }
+        outputFullSchema.add(new Column(Load.LOAD_OP_COLUMN, IntegerType.TINYINT, false));
+    }
+
+    private void setIvmLocalShuffleExprsIfNeeded(InsertStmt insertStmt, Table targetTable, TupleDescriptor tupleDesc,
+                                                 OlapTableSink olapTableSink) {
+        if (!insertStmt.isSystem()) {
+            return;
+        }
+        if (!(targetTable instanceof MaterializedView) || !(targetTable instanceof OlapTable olapTable)) {
+            return;
+        }
+        if (olapTable.getKeysType() != KeysType.PRIMARY_KEYS) {
+            return;
+        }
+        boolean hasLoadOpSchema = outputFullSchema.stream()
+                .anyMatch(col -> col != null && Load.LOAD_OP_COLUMN.equalsIgnoreCase(col.getName()));
+        if (!hasLoadOpSchema) {
+            return;
+        }
+
+        Map<String, SlotDescriptor> slotByName = tupleDesc.getSlots().stream()
+                .filter(slot -> slot.getColumn() != null)
+                .collect(Collectors.toMap(slot -> slot.getColumn().getName().toLowerCase(Locale.ROOT),
+                        slot -> slot, (left, right) -> left));
+        List<Expr> localShuffleExprs = Lists.newArrayList();
+        for (Column keyColumn : olapTable.getKeyColumnsInOrder()) {
+            SlotDescriptor slot = slotByName.get(keyColumn.getName().toLowerCase(Locale.ROOT));
+            if (slot != null) {
+                localShuffleExprs.add(new SlotRef(slot));
+            }
+        }
+        if (!localShuffleExprs.isEmpty()) {
+            olapTableSink.setLocalShuffleExprs(localShuffleExprs);
+        }
     }
 
     private void castLiteralToTargetColumnsType(InsertStmt insertStatement) {
@@ -725,6 +842,12 @@ public class InsertPlanner {
                 }
             }
         }
+        if (hasExplicitLoadOpColumn(insertStatement, insertStatement.getTargetTable())) {
+            int loadOpIdx = insertStatement.getTargetColumnNames().indexOf(Load.LOAD_OP_COLUMN);
+            ColumnRefOperator loadOpColumn = logicalPlan.getOutputColumn().get(loadOpIdx);
+            outputColumns.add(loadOpColumn);
+            columnRefMap.put(loadOpColumn, loadOpColumn);
+        }
         return logicalPlan.getRootBuilder().withNewRoot(new LogicalProjectOperator(new HashMap<>(columnRefMap)));
     }
 
@@ -776,6 +899,9 @@ public class InsertPlanner {
                 outputColumns.add(columnRefOperator);
                 columnRefMap.put(columnRefOperator, scalarOperator);
             } else if (baseSchema.contains(outputFullSchema.get(columnIdx))) {
+                ColumnRefOperator columnRefOperator = outputColumns.get(columnIdx);
+                columnRefMap.put(columnRefOperator, columnRefOperator);
+            } else if (targetColumn.nameEquals(Load.LOAD_OP_COLUMN, false)) {
                 ColumnRefOperator columnRefOperator = outputColumns.get(columnIdx);
                 columnRefMap.put(columnRefOperator, columnRefOperator);
             }

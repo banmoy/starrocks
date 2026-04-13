@@ -59,6 +59,9 @@ public class PhysicalOlapScanOperator extends PhysicalScanOperator {
 
     private boolean usePkIndex = false;
     private TableSampleClause sample;
+    private Long tableVersion;
+    private Long changesFromVersion;
+    private Long changesToVersion;
 
     private List<Pair<Integer, ColumnDict>> globalDicts = Lists.newArrayList();
     private Map<Integer, ScalarOperator> globalDictsExpr = Maps.newHashMap();
@@ -110,6 +113,9 @@ public class PhysicalOlapScanOperator extends PhysicalScanOperator {
         this.usePkIndex = scanOperator.isUsePkIndex();
         this.vectorSearchOptions = scanOperator.getVectorSearchOptions();
         this.sample = scanOperator.getSample();
+        this.tableVersion = scanOperator.getTableVersion();
+        this.changesFromVersion = scanOperator.getChangesFromVersion();
+        this.changesToVersion = scanOperator.getChangesToVersion();
     }
 
     public VectorSearchOptions getVectorSearchOptions() {
@@ -122,6 +128,22 @@ public class PhysicalOlapScanOperator extends PhysicalScanOperator {
 
     public long getGtid() {
         return gtid;
+    }
+
+    public Long getTableVersion() {
+        return tableVersion;
+    }
+
+    public Long getChangesFromVersion() {
+        return changesFromVersion;
+    }
+
+    public Long getChangesToVersion() {
+        return changesToVersion;
+    }
+
+    public boolean isChangesQuery() {
+        return changesFromVersion != null && changesToVersion != null;
     }
 
     public void setSelectedPartitionId(List<Long> selectedPartitionId) {
@@ -252,7 +274,7 @@ public class PhysicalOlapScanOperator extends PhysicalScanOperator {
     @Override
     public int hashCode() {
         return Objects.hash(super.hashCode(), selectedIndexMetaId, selectedPartitionId,
-                selectedTabletId, sample);
+                selectedTabletId, sample, tableVersion, changesFromVersion, changesToVersion);
     }
 
     @Override
@@ -272,7 +294,10 @@ public class PhysicalOlapScanOperator extends PhysicalScanOperator {
                 Objects.equals(distributionSpec, that.distributionSpec) &&
                 Objects.equals(selectedPartitionId, that.selectedPartitionId) &&
                 Objects.equals(sample, that.sample) &&
-                Objects.equals(selectedTabletId, that.selectedTabletId);
+                Objects.equals(selectedTabletId, that.selectedTabletId) &&
+                Objects.equals(tableVersion, that.tableVersion) &&
+                Objects.equals(changesFromVersion, that.changesFromVersion) &&
+                Objects.equals(changesToVersion, that.changesToVersion);
     }
 
     public DistributionSpec getDistributionSpec() {
@@ -323,6 +348,9 @@ public class PhysicalOlapScanOperator extends PhysicalScanOperator {
             builder.vectorSearchOptions = operator.vectorSearchOptions;
             builder.sample = operator.getSample();
             builder.columnAccessPaths = operator.columnAccessPaths;
+            builder.tableVersion = operator.tableVersion;
+            builder.changesFromVersion = operator.changesFromVersion;
+            builder.changesToVersion = operator.changesToVersion;
             return this;
         }
 

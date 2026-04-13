@@ -262,6 +262,13 @@ public class RequiredPropertyDeriver extends PropertyDeriverBase<Void, Expressio
 
     @Override
     public Void visitPhysicalTopN(PhysicalTopNOperator topN, ExpressionContext context) {
+        if (topN.getSortPhase().isPartial() && CollectionUtils.isNotEmpty(topN.getShuffleColumns())) {
+            List<DistributionCol> shuffleCols = topN.getShuffleColumns().stream()
+                    .map(col -> new DistributionCol(col.getId(), true))
+                    .collect(Collectors.toList());
+            requiredProperties.add(computeAggRequiredShuffleProperties(shuffleCols));
+            return null;
+        }
         requiredProperties.add(Lists.newArrayList(PhysicalPropertySet.EMPTY));
         return null;
     }
@@ -290,7 +297,7 @@ public class RequiredPropertyDeriver extends PropertyDeriverBase<Void, Expressio
             } else {
                 List<DistributionCol> distributionCols = partitionColumnRefSet.stream()
                         .map(e -> new DistributionCol(e, true)).collect(
-                        Collectors.toList());
+                                Collectors.toList());
                 distributionProperty = createShuffleAggProperty(distributionCols);
             }
         }
@@ -401,7 +408,6 @@ public class RequiredPropertyDeriver extends PropertyDeriverBase<Void, Expressio
         requiredProperties.add(Lists.newArrayList(requiredPropertyToChild));
         return null;
     }
-
 
     private List<PhysicalPropertySet> computeAggRequiredShuffleProperties(List<DistributionCol> groupByCols) {
         Optional<HashDistributionDesc> requiredShuffleDescOptional =

@@ -950,6 +950,8 @@ public class PlanFragmentBuilder {
             scanNode.setGtid(node.getGtid());
             scanNode.setVectorSearchOptions(node.getVectorSearchOptions());
             scanNode.setSample(node.getSample());
+            scanNode.setTargetVersion(node.getTableVersion());
+            scanNode.setChangesVersionRange(node.getChangesFromVersion(), node.getChangesToVersion());
             currentExecGroup.add(scanNode);
             // set tablet
             try {

@@ -143,6 +143,9 @@ public class CallOperator extends ArgsScalarOperator {
 
     @Override
     public boolean isNullable() {
+        if (FunctionSet.COALESCE.equalsIgnoreCase(fnName)) {
+            return false;
+        }
         // check if fn always return non null
         if (fn != null && !fn.isNullable()) {
             return false;

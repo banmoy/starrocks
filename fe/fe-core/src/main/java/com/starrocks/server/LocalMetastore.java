@@ -798,7 +798,8 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
                     throw new DdlException(String.format("Storage volume %s does not exist", storageVolumeName));
                 }
                 try {
-                    GlobalStateMgr.getCurrentState().getEditLog().logAlterDb(dbInfo, wal -> {});
+                    GlobalStateMgr.getCurrentState().getEditLog().logAlterDb(dbInfo, wal -> {
+                    });
                 } catch (Throwable e) {
                     if (oldSv != null) {
                         // rollback to its original storage volume
@@ -1563,10 +1564,10 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
     }
 
     protected void dropPartitionInternal(OlapTable olapTable,
-                                       Database db,
-                                       List<String> partitionNames,
-                                       boolean isTempPartition,
-                                       boolean isForceDrop) {
+                                         Database db,
+                                         List<String> partitionNames,
+                                         boolean isTempPartition,
+                                         boolean isForceDrop) {
         PartitionInfo partitionInfo = olapTable.getPartitionInfo();
         for (String partitionName : partitionNames) {
             // drop
@@ -3798,8 +3799,8 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
     }
 
     private void alterStorageCooldownTTL(OlapTable table,
-                                       Map<String, String> properties,
-                                       List<Runnable> appliers) throws DdlException {
+                                         Map<String, String> properties,
+                                         List<Runnable> appliers) throws DdlException {
         try {
             String storageCoolDownTTL = properties.get(PropertyAnalyzer.PROPERTIES_STORAGE_COOLDOWN_TTL);
             PeriodDuration periodDuration = PropertyAnalyzer.analyzeStorageCoolDownTTL(properties, true);
@@ -3832,8 +3833,8 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
     }
 
     private void alterLabelsLocation(OlapTable table,
-                                    Map<String, String> properties,
-                                    List<Runnable> appliers) throws DdlException {
+                                     Map<String, String> properties,
+                                     List<Runnable> appliers) throws DdlException {
         if (table.getColocateGroup() != null) {
             throw new DdlException("Cannot set location for colocate table");
         }
@@ -3887,8 +3888,8 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
     }
 
     private void alterTimeDriftConstraint(OlapTable table,
-                                        Map<String, String> properties,
-                                        List<Runnable> appliers) {
+                                          Map<String, String> properties,
+                                          List<Runnable> appliers) {
         String spec = properties.get(PropertyAnalyzer.PROPERTIES_TIME_DRIFT_CONSTRAINT);
         PropertyAnalyzer.analyzeTimeDriftConstraint(spec, table, properties);
         TableProperty tableProperty = table.getTableProperty();
@@ -3941,8 +3942,8 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
     }
 
     private void alterTableQueryTimeout(OlapTable table,
-                                       Map<String, String> properties,
-                                       List<Runnable> appliers) throws DdlException {
+                                        Map<String, String> properties,
+                                        List<Runnable> appliers) throws DdlException {
         try {
             int tableQueryTimeout = PropertyAnalyzer.analyzeTableQueryTimeout(properties);
             appliers.add(() -> table.setTableQueryTimeout(tableQueryTimeout));
@@ -3959,7 +3960,7 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
             alterPartitionLiveNumber(db, table, properties, appliers);
         }
         if (propertiesToPersist.containsKey(PropertyAnalyzer.PROPERTIES_STORAGE_MEDIUM)) {
-            alterStorageMedium(table, properties,  appliers);
+            alterStorageMedium(table, properties, appliers);
         }
         if (propertiesToPersist.containsKey(PropertyAnalyzer.PROPERTIES_STORAGE_COOLDOWN_TTL)) {
             alterStorageCooldownTTL(table, properties, appliers);
@@ -4276,7 +4277,21 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
             modifyTablePrimaryIndexCacheExpireSec(db, table, properties);
         } else if (metaType == TTabletMetaType.ENABLE_LOAD_PROFILE) {
             modifyTableEnableLoadProfile(db, table, properties);
+        } else if (metaType == TTabletMetaType.BASE_VERSION) {
+            modifyTableBaseVersion(db, table, properties);
         }
+    }
+
+    private void modifyTableBaseVersion(Database db, OlapTable table, Map<String, String> properties) {
+        long baseVersion;
+        try {
+            baseVersion = PropertyAnalyzer.analyzeBaseVersion(properties, false);
+        } catch (AnalysisException e) {
+            throw new SemanticException(e.getMessage());
+        }
+        ModifyTablePropertyOperationLog info =
+                new ModifyTablePropertyOperationLog(db.getId(), table.getId(), properties);
+        GlobalStateMgr.getCurrentState().getEditLog().logAlterTableProperties(info, wal -> table.setBaseVersion(baseVersion));
     }
 
     public void setHasForbiddenGlobalDict(String dbName, String tableName, boolean isForbit) throws DdlException {
@@ -4560,9 +4575,9 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
      * Supports both permanent tables and session-specific temporary tables.
      *
      * @param context the connection context (used for session-aware table lookup)
-     * @param db the database containing the table
+     * @param db      the database containing the table
      * @param tableId the ID of the table to validate
-     * @param dbTbl the table name (used for lookup and error messages)
+     * @param dbTbl   the table name (used for lookup and error messages)
      * @return the validated OlapTable
      * @throws DdlException if validation fails (table not found, wrong type, wrong state, or table replaced)
      */
@@ -4775,7 +4790,7 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
     }
 
     protected void truncateTableInternal(long dbId, OlapTable olapTable, List<Partition> newPartitions,
-                                       boolean isEntireTable, boolean isReplay) {
+                                         boolean isEntireTable, boolean isReplay) {
         // use new partitions to replace the old ones.
         Set<Tablet> oldTablets = Sets.newHashSet();
         for (Partition newPartition : newPartitions) {
@@ -4966,7 +4981,7 @@ public class LocalMetastore implements ConnectorMetadata, MVRepairHandler, Memor
 
             // trigger to refresh related mvs
             LoadJobMVListener.INSTANCE.onTableDataChange(db, olapTable);
-          
+
             LOG.info("finished to replace partitions {} with temp partitions {} from table: {}",
                     clause.getPartitionNames(), clause.getTempPartitionNames(), tableName);
 

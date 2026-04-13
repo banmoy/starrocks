@@ -806,6 +806,7 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
     public static final String ENABLE_CBO_BASED_MV_REWRITE = "enable_cbo_based_mv_rewrite";
 
     public static final String ENABLE_IVM_REFRESH = "enable_ivm_refresh";
+    public static final String ENABLE_OLAP_IVM_REFRESH = "enable_olap_ivm_refresh";
     public static final String TVR_TARGET_MVID = "tvr_target_mvid";
 
     public static final String ENABLE_SPM_REWRITE = "enable_spm_rewrite";
@@ -2705,6 +2706,9 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
 
     @VarAttr(name = ENABLE_IVM_REFRESH, flag = VariableMgr.INVISIBLE)
     private boolean enableIVMRefresh = false;
+
+    @VarAttr(name = ENABLE_OLAP_IVM_REFRESH, flag = VariableMgr.INVISIBLE)
+    private boolean enableOlapIVMRefresh = false;
 
     @VarAttr(name = ENABLE_SPM_REWRITE)
     private boolean enableSPMRewrite = false;
@@ -5027,6 +5031,14 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
 
     public boolean isEnableIVMRefresh() {
         return enableIVMRefresh;
+    }
+
+    public void setEnableOlapIVMRefresh(boolean enableOlapIVMRefresh) {
+        this.enableOlapIVMRefresh = enableOlapIVMRefresh;
+    }
+
+    public boolean isEnableOlapIVMRefresh() {
+        return enableOlapIVMRefresh;
     }
 
     public void setTvrTargetMvid(String tvrTargetMvid) {

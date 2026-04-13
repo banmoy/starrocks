@@ -195,11 +195,13 @@ public class OlapScanNode extends AbstractOlapTableScanNode {
     private TableSampleClause sample;
 
     private long gtid = 0;
+    private Long targetVersion = null;
+    private Long changesFromVersion = null;
+    private Long changesToVersion = null;
 
     private Map<Long, Long> scanPartitionVersions = Maps.newHashMap();
 
     private VectorSearchOptions vectorSearchOptions = new VectorSearchOptions();
-
 
     // Set to true after it's confirmed at some point during the execution of this request that there is some living CN.
     // Set just once per query.
@@ -215,9 +217,19 @@ public class OlapScanNode extends AbstractOlapTableScanNode {
         super(id, desc, planNodeName, (OlapTable) desc.getTable(), selectedIndexId);
     }
 
-    public OlapScanNode(PlanNodeId id, TupleDescriptor desc, String planNodeName, long selectedIndexId, ComputeResource computeResource) {
+    public OlapScanNode(PlanNodeId id, TupleDescriptor desc, String planNodeName, long selectedIndexId,
+                        ComputeResource computeResource) {
         this(id, desc, planNodeName, selectedIndexId);
         this.computeResource = computeResource;
+    }
+
+    public void setTargetVersion(Long targetVersion) {
+        this.targetVersion = targetVersion;
+    }
+
+    public void setChangesVersionRange(Long fromVersion, Long toVersion) {
+        this.changesFromVersion = fromVersion;
+        this.changesToVersion = toVersion;
     }
 
     public Map<Long, Long> getScanPartitionVersions() {
@@ -558,11 +570,42 @@ public class OlapScanNode extends AbstractOlapTableScanNode {
         int schemaHash = olapTable.getSchemaHashByIndexMetaId(index.getMetaId());
         String schemaHashStr = String.valueOf(schemaHash);
         long visibleVersion = physicalPartition.getVisibleVersion();
-        scanPartitionVersions.put(physicalPartition.getId(), visibleVersion);
-        String visibleVersionStr = String.valueOf(visibleVersion);
+        long scanVersion = visibleVersion;
+        if (changesFromVersion != null || changesToVersion != null) {
+            if (changesFromVersion == null || changesToVersion == null) {
+                throw new StarRocksException("CHANGES clause requires both start and end versions");
+            }
+            long baseVersion = olapTable.getBaseVersion();
+            if (baseVersion > 0 && changesFromVersion < baseVersion) {
+                throw new StarRocksException("Requested changes start version " + changesFromVersion +
+                        " is smaller than base version " + baseVersion);
+            }
+            if (changesToVersion > visibleVersion) {
+                throw new StarRocksException("Requested changes end version " + changesToVersion +
+                        " is greater than visible version " + visibleVersion);
+            }
+            if (changesToVersion <= changesFromVersion) {
+                throw new StarRocksException("CHANGES range must satisfy v2 > v1");
+            }
+            scanVersion = changesToVersion;
+        }
+        if (targetVersion != null) {
+            long baseVersion = olapTable.getBaseVersion();
+            if (baseVersion > 0 && targetVersion < baseVersion) {
+                throw new StarRocksException(
+                        "Requested version " + targetVersion + " is smaller than base version " + baseVersion);
+            }
+            if (targetVersion > visibleVersion) {
+                throw new StarRocksException(
+                        "Requested version " + targetVersion + " is greater than visible version " + visibleVersion);
+            }
+            scanVersion = targetVersion;
+        }
+        scanPartitionVersions.put(physicalPartition.getId(), scanVersion);
+        String visibleVersionStr = String.valueOf(scanVersion);
         boolean fillDataCache = olapTable.isEnableFillDataCache(partition);
         selectedPartitionNames.add(partition.getName());
-        selectedPartitionVersions.add(visibleVersion);
+        selectedPartitionVersions.add(scanVersion);
 
         checkSomeAliveComputeNode();
         boolean checkScanRangeSize = false;
@@ -602,16 +645,20 @@ public class OlapScanNode extends AbstractOlapTableScanNode {
             if (gtid > 0) {
                 internalRange.setGtid(gtid);
             }
+            if (changesFromVersion != null && changesToVersion != null) {
+                internalRange.setChanges_from(changesFromVersion);
+                internalRange.setChanges_to(changesToVersion);
+            }
 
             // random shuffle List && only collect one copy
             List<Replica> allQueryableReplicas = Lists.newArrayList();
             List<Replica> localReplicas = Lists.newArrayList();
             if (RunMode.isSharedDataMode()) {
                 tablet.getQueryableReplicas(allQueryableReplicas, localReplicas,
-                        visibleVersion, localBeId, schemaHash, computeResource, tabletLocationInfo.get(tabletId));
+                        scanVersion, localBeId, schemaHash, computeResource, tabletLocationInfo.get(tabletId));
             } else {
                 tablet.getQueryableReplicas(allQueryableReplicas, localReplicas,
-                        visibleVersion, localBeId, schemaHash);
+                        scanVersion, localBeId, schemaHash);
             }
 
             if (allQueryableReplicas.isEmpty()) {
@@ -841,6 +888,18 @@ public class OlapScanNode extends AbstractOlapTableScanNode {
             output.append(prefix).append("table: ").append(olapTable.getName())
                     .append(", ").append("rollup: ")
                     .append(olapTable.getIndexNameByMetaId(selectedIndexMetaId)).append("\n");
+        }
+
+        if (targetVersion != null) {
+            output.append(prefix).append("tableVersion: ").append(targetVersion).append("\n");
+        }
+        if (changesFromVersion != null && changesToVersion != null) {
+            output.append(prefix).append("onlyChanges: (")
+                    .append(changesFromVersion)
+                    .append(", ")
+                    .append(changesToVersion)
+                    .append("]")
+                    .append("\n");
         }
 
         if (null != sortColumn) {

@@ -495,7 +495,7 @@ public class TableProperty implements Writable, GsonPostProcessable {
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX)) {
             boolean enableFlatJson = PropertyAnalyzer.analyzeFlatJsonEnabled(properties);
-            
+
             // In gsonPostProcess, we should be tolerant of existing properties even when flat_json.enable is false.
             // The validation should be done at ALTER TABLE time, not during deserialization/copy.
             // If flat_json.enable is false, ignore other flat JSON properties and use default values.
@@ -927,7 +927,7 @@ public class TableProperty implements Writable, GsonPostProcessable {
 
     public TableProperty buildCompactionStrategy() {
         String defaultStrategy = properties.getOrDefault(
-                    PropertyAnalyzer.PROPERTIES_COMPACTION_STRATEGY, DEFAULT_COMPACTION_STRATEGY);
+                PropertyAnalyzer.PROPERTIES_COMPACTION_STRATEGY, DEFAULT_COMPACTION_STRATEGY);
         if (defaultStrategy.equalsIgnoreCase(DEFAULT_COMPACTION_STRATEGY)) {
             compactionStrategy = TCompactionStrategy.DEFAULT;
         } else if (defaultStrategy.equalsIgnoreCase(REAL_TIME_COMPACTION_STRATEGY)) {
@@ -971,6 +971,25 @@ public class TableProperty implements Writable, GsonPostProcessable {
 
     public Map<String, String> getProperties() {
         return properties;
+    }
+
+    public long getBaseVersion() {
+        if (properties == null) {
+            return INVALID;
+        }
+        String val = properties.get(PropertyAnalyzer.PROPERTIES_BASE_VERSION);
+        if (val == null) {
+            return INVALID;
+        }
+        try {
+            return Long.parseLong(val);
+        } catch (NumberFormatException e) {
+            return INVALID;
+        }
+    }
+
+    public void setBaseVersion(long baseVersion) {
+        properties.put(PropertyAnalyzer.PROPERTIES_BASE_VERSION, String.valueOf(baseVersion));
     }
 
     public DynamicPartitionProperty getDynamicPartitionProperty() {

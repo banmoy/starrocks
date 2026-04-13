@@ -319,6 +319,7 @@ message TabletMetaPB {
     // If the tablet is replicated from another cluster, the source_schema saved the schema in the cluster
     optional TabletSchemaPB source_schema = 70;
     optional FlatJsonConfigPB flat_json_config = 80;
+    optional int64 base_version = 81;
 }
 
 message OLAPIndexHeaderMessage {

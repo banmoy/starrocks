@@ -75,6 +75,7 @@ import com.starrocks.sql.ast.ShowTableStmt;
 import com.starrocks.sql.ast.ShowTabletStmt;
 import com.starrocks.sql.ast.ShowTemporaryTableStmt;
 import com.starrocks.sql.ast.ShowTransactionStmt;
+import com.starrocks.sql.ast.ShowVersionsStmt;
 import com.starrocks.sql.ast.TableRef;
 import com.starrocks.sql.ast.expression.BinaryPredicate;
 import com.starrocks.sql.ast.expression.BinaryType;
@@ -151,6 +152,12 @@ public class ShowStmtAnalyzer {
         @Override
         public Void visitShowTabletStatement(ShowTabletStmt node, ConnectContext context) {
             ShowTabletStmtAnalyzer.analyze(node, context);
+            return null;
+        }
+
+        @Override
+        public Void visitShowVersionsStatement(ShowVersionsStmt node, ConnectContext context) {
+            ShowVersionsStmtAnalyzer.analyze(node, context);
             return null;
         }
 

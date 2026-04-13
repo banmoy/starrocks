@@ -14,8 +14,10 @@
 
 #pragma once
 
+#include <limits>
 #include <utility>
 
+#include "column/field.h"
 #include "exec/olap_common.h"
 #include "exec/olap_scan_prepare.h"
 #include "exec/olap_utils.h"
@@ -27,8 +29,10 @@
 #include "runtime/runtime_state.h"
 #include "storage/conjunctive_predicates.h"
 #include "storage/predicate_tree/predicate_tree.hpp"
+#include "storage/rowset/rowset.h"
 #include "storage/tablet.h"
 #include "storage/tablet_reader.h"
+#include "types/logical_type.h"
 #include "util/runtime_profile.h"
 
 namespace starrocks {
@@ -59,6 +63,12 @@ private:
     Status _init_reader_params(const std::vector<std::unique_ptr<OlapScanRange>>& key_ranges);
     Status _init_scanner_columns(std::vector<uint32_t>& scanner_columns, std::vector<uint32_t>& reader_columns);
     Status _init_unused_output_columns(const std::vector<std::string>& unused_output_columns);
+    Status _init_pk_changes_reader(const Schema& child_schema, const Schema& output_schema,
+                                   const std::vector<RowsetSharedPtr>& rowsets,
+                                   const std::vector<RowsetSharedPtr>& insert_rowsets,
+                                   const std::vector<uint32_t>& reader_columns,
+                                   const std::vector<uint32_t>& scanner_columns);
+    Status _init_pk_changes_delete_rowid_range(const std::vector<RowsetSharedPtr>& rowsets);
     Status _init_olap_reader(RuntimeState* state);
     TCounterMinMaxType::type _get_counter_min_max_type(const std::string& metric_name);
     void _init_counter(RuntimeState* state);
@@ -105,6 +115,15 @@ private:
 
     // slot descriptors for each one of |output_columns|.
     std::vector<SlotDescriptor*> _query_slots;
+    bool _is_changes_query = false;
+    bool _is_pk_changes_query = false;
+    bool _is_pk_changes_delete_phase = false;
+    bool _pk_changes_delete_reader_eof = false;
+    SlotDescriptor* _changes_action_slot = nullptr;
+    FieldPtr _changes_action_field;
+    std::shared_ptr<RowidRangeOption> _pk_changes_delete_rowid_range;
+    std::shared_ptr<TabletReader> _pk_changes_delete_reader;
+    std::shared_ptr<ChunkIterator> _pk_changes_delete_prj_iter;
 
     std::vector<ColumnAccessPathPtr> _column_access_paths;
 

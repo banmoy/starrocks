@@ -34,6 +34,7 @@ import com.starrocks.catalog.ListPartitionInfo;
 import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.Partition;
 import com.starrocks.catalog.PartitionInfo;
+import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.catalog.RangePartitionInfo;
 import com.starrocks.catalog.Table;
 import com.starrocks.catalog.TableName;
@@ -234,6 +235,27 @@ public class AlterTableClauseAnalyzer implements AstVisitorExtendInterface<Void,
             if (WriteQuorum.findTWriteQuorumByName(properties.get(PropertyAnalyzer.PROPERTIES_WRITE_QUORUM)) == null) {
                 ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
                         "Property " + PropertyAnalyzer.PROPERTIES_WRITE_QUORUM + " not valid");
+            }
+        } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_BASE_VERSION)) {
+            if (!(table instanceof OlapTable)) {
+                throw new SemanticException("Only support OlapTable for base_version");
+            }
+            long baseVersion;
+            try {
+                baseVersion = PropertyAnalyzer.analyzeBaseVersion(properties, false);
+            } catch (AnalysisException e) {
+                throw new SemanticException(e.getMessage());
+            }
+            OlapTable tbl = (OlapTable) table;
+            long minVisibleVersion = Long.MAX_VALUE;
+            for (Partition partition : tbl.getPartitions()) {
+                for (PhysicalPartition physicalPartition : partition.getSubPartitions()) {
+                    minVisibleVersion = Math.min(minVisibleVersion, physicalPartition.getVisibleVersion());
+                }
+            }
+            if (minVisibleVersion != Long.MAX_VALUE && baseVersion > minVisibleVersion) {
+                throw new SemanticException("base_version " + baseVersion + " is greater than visible version " +
+                        minVisibleVersion);
             }
         } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_LABELS_LOCATION)) {
             try {

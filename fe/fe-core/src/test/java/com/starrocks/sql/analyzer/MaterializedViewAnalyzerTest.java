@@ -29,8 +29,10 @@ import com.starrocks.qe.ShowExecutor;
 import com.starrocks.qe.ShowResultSet;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.CreateMaterializedViewStatement;
+import com.starrocks.sql.ast.KeysType;
 import com.starrocks.sql.ast.RangeDistributionDesc;
 import com.starrocks.sql.ast.ShowStmt;
+import com.starrocks.sql.optimizer.rule.ivm.IvmRowIdDeriver;
 import com.starrocks.sql.plan.ConnectorPlanTestBase;
 import com.starrocks.type.IntegerType;
 import com.starrocks.utframe.StarRocksAssert;
@@ -228,6 +230,36 @@ public class MaterializedViewAnalyzerTest {
     }
 
     @Test
+    public void testCreateIncrementalMvStoresRewrittenIvmViewDef() {
+        String sql = "create materialized view ivm_row_id_mv\n" +
+                "distributed by hash(v1)\n" +
+                "refresh incremental as\n" +
+                "select v1 from tprimary";
+        CreateMaterializedViewStatement statement = (CreateMaterializedViewStatement) analyzeSuccess(sql);
+
+        Assertions.assertNotNull(statement.getIvmViewDef());
+        Assertions.assertTrue(statement.getIvmViewDef().contains(IvmRowIdDeriver.DERIVED_ROW_ID_COLUMN_PREFIX));
+        Assertions.assertTrue(statement.getQueryStatement().getQueryRelation().getColumnOutputNames().stream()
+                .anyMatch(IvmRowIdDeriver::isDerivedRowIdColumnName));
+    }
+
+    @Test
+    public void testCreateIncrementalMvPreservesWindowAliasAfterRewrite() {
+        String sql = "create materialized view ivm_window_alias_mv\n" +
+                "distributed by hash(sum_amount)\n" +
+                "refresh incremental as\n" +
+                "select sum(v2) over(partition by v1 order by pk rows between unbounded preceding and current row) " +
+                "as sum_amount\n" +
+                "from tprimary";
+        CreateMaterializedViewStatement statement = (CreateMaterializedViewStatement) analyzeSuccess(sql);
+
+        Assertions.assertTrue(statement.getIvmViewDef().contains("sum_amount"));
+        Assertions.assertEquals("sum_amount", statement.getQueryStatement().getQueryRelation().getColumnOutputNames().get(0));
+        Assertions.assertTrue(statement.getQueryStatement().getQueryRelation().getColumnOutputNames().stream()
+                .anyMatch(IvmRowIdDeriver::isDerivedRowIdColumnName));
+    }
+
+    @Test
     public void testNondeterministicFunction() {
         analyzeFail("create materialized view mv partition by k1 distributed by hash(k2) buckets 3 refresh async " +
                         "as select  k1, k2, rand() from tbl1 group by k1, k2",
@@ -418,6 +450,33 @@ public class MaterializedViewAnalyzerTest {
         checkQueryOutputIndices(Arrays.asList(3, 2, 1, 0), "3,2,1,0", true);
         checkQueryOutputIndices(Arrays.asList(1, 2, 3, 0), "3,0,1,2", true);
         checkQueryOutputIndices(Arrays.asList(0, 1), "0,1", false);
+    }
+
+    @Test
+    public void testGetQueryOutputIndicesIgnoreSyntheticColumns() {
+        List<Pair<Column, Integer>> mvColumnPairs = Lists.newArrayList();
+        mvColumnPairs.add(Pair.create(new Column("pk", IntegerType.BIGINT), -1));
+        mvColumnPairs.add(Pair.create(new Column("v1", IntegerType.INT), 0));
+        List<Integer> queryOutputIndices = MaterializedViewAnalyzer.getQueryOutputIndices(mvColumnPairs);
+        Assertions.assertEquals(List.of(0), queryOutputIndices);
+    }
+
+    @Test
+    public void testCreateMvAppendOlapIvmRowIdColumns() throws Exception {
+        String sql = "create materialized view mv_row_id_append\n" +
+                "refresh async\n" +
+                "properties(\"refresh_mode\" = \"auto\")\n" +
+                "as select v1 from tprimary";
+        CreateMaterializedViewStatement statement = (CreateMaterializedViewStatement) analyzeSuccess(sql);
+        Assertions.assertEquals(KeysType.PRIMARY_KEYS, statement.getKeysType());
+        Assertions.assertEquals(List.of("__row_id_0_pk"), statement.getSortKeys());
+        Assertions.assertEquals(List.of(), statement.getQueryOutputIndices());
+        List<Column> mvColumns = statement.getMvColumnItems();
+        Assertions.assertEquals(2, mvColumns.size());
+        Assertions.assertEquals("__row_id_0_pk", mvColumns.get(0).getName());
+        Assertions.assertTrue(mvColumns.get(0).isKey());
+        Assertions.assertTrue(mvColumns.get(0).isHidden());
+        Assertions.assertEquals("v1", mvColumns.get(1).getName());
     }
 
     private void checkQueryOutputIndices(List<Integer> inputs, String expect, boolean isChanged) {

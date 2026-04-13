@@ -775,9 +775,28 @@ void Tablet::delete_expired_stale_rowset() {
 
         std::vector<PathVersionListSharedPtr> stale_version_paths;
         stale_version_paths.reserve(path_id_vec.size());
+        int64_t base_version = _tablet_meta->base_version();
         for (int64_t path_id : path_id_vec) {
-            PathVersionListSharedPtr version_path = _timestamped_version_tracker.fetch_and_delete_path_by_id(path_id);
-            stale_version_paths.emplace_back(std::move(version_path));
+            PathVersionListSharedPtr version_path = _timestamped_version_tracker.fetch_path_version_by_id(path_id);
+            if (version_path == nullptr) {
+                continue;
+            }
+            if (base_version > 0) {
+                bool need_retain = false;
+                for (const auto& timestamped_version : version_path->timestamped_versions()) {
+                    if (timestamped_version->version().second >= base_version) {
+                        need_retain = true;
+                        break;
+                    }
+                }
+                if (need_retain) {
+                    continue;
+                }
+            }
+            version_path = _timestamped_version_tracker.fetch_and_delete_path_by_id(path_id);
+            if (version_path != nullptr) {
+                stale_version_paths.emplace_back(std::move(version_path));
+            }
         }
 
         old_stale_rs_size = _stale_rs_version_map.size();

@@ -562,6 +562,11 @@ public class AddDecodeNodeForDictStringRule implements TreeRewriteRule {
                 partitionByColumns = operator.getPartitionByColumns().stream().map(context::getMappedOperator)
                         .collect(Collectors.toList());
             }
+            List<ColumnRefOperator> shuffleColumns = null;
+            if (operator.getShuffleColumns() != null) {
+                shuffleColumns = operator.getShuffleColumns().stream().map(context::getMappedOperator)
+                        .collect(Collectors.toList());
+            }
 
             OrderSpec newOrderSpec = new OrderSpec(orderingList);
 
@@ -575,9 +580,12 @@ public class AddDecodeNodeForDictStringRule implements TreeRewriteRule {
                 }
             }
 
-            return new PhysicalTopNOperator(newOrderSpec, operator.getLimit(), operator.getOffset(), partitionByColumns,
+            PhysicalTopNOperator rewrittenTopN = new PhysicalTopNOperator(
+                    newOrderSpec, operator.getLimit(), operator.getOffset(), partitionByColumns,
                     operator.getPartitionLimit(), operator.getSortPhase(), operator.getTopNType(), operator.isSplit(),
                     operator.isEnforced(), operator.isPerPipeline(), predicate, operator.getProjection(), ImmutableMap.of());
+            rewrittenTopN.setShuffleColumns(shuffleColumns);
+            return rewrittenTopN;
         }
 
         private void rewriteOneScalarOperatorForProjection(ColumnRefOperator keyColumn, ScalarOperator valueOperator,

@@ -2258,6 +2258,15 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 - Description: The row count threshold for deciding between SAMPLE and FULL statistics collection during loading-triggered statistics operations. If the number of loaded or changed rows exceeds this threshold (default 200,000), SAMPLE statistics collection is used; otherwise, FULL statistics collection is used. This setting works in conjunction with `enable_statistic_collect_on_first_load` and `statistic_sample_collect_ratio_threshold_of_first_load`.
 - Introduced in: -
 
+##### statistic_max_changes_rows_estimate_value
+
+- Default: 9223372036854775807
+- Type: Long
+- Unit: -
+- Is mutable: Yes
+- Description: The fixed upper bound for the estimated output row count of `CHANGES` queries. StarRocks first estimates the `CHANGES` scan row count from the base table row count and version span, and then caps the result at `statistic_max_changes_rows_estimate_value`. Set a smaller value to reduce overly large `CHANGES` cardinality estimates. Valid values: greater than or equal to `0`. This item takes effect immediately and does not require an FE restart.
+- Introduced in: -
+
 ##### statistic_update_interval_sec
 
 - Default: 24 * 60 * 60

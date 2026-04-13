@@ -48,6 +48,9 @@ public final class LogicalOlapScanOperator extends LogicalScanOperator {
     private List<ScalarOperator> prunedPartitionPredicates;
     private boolean usePkIndex;
     private TableSampleClause sample;
+    private Long tableVersion;
+    private Long changesFromVersion;
+    private Long changesToVersion;
 
     // record if this scan is derived from SplitScanORToUnionRule
     private boolean fromSplitOR;
@@ -76,7 +79,10 @@ public final class LogicalOlapScanOperator extends LogicalScanOperator {
                 Lists.newArrayList(),
                 Lists.newArrayList(),
                 Lists.newArrayList(),
-                false);
+                false,
+                null,
+                null,
+                null);
     }
 
     public LogicalOlapScanOperator(
@@ -93,7 +99,31 @@ public final class LogicalOlapScanOperator extends LogicalScanOperator {
             List<Long> selectedTabletId,
             List<Long> hintsTabletIds,
             List<Long> hintsReplicaIds,
-            boolean usePkIndex) {
+            boolean usePkIndex,
+            Long tableVersion) {
+        this(table, colRefToColumnMetaMap, columnMetaToColRefMap, distributionSpec, limit, predicate,
+                selectedIndexMetaId, selectedPartitionId, partitionNames, hasTableHints, selectedTabletId,
+                hintsTabletIds, hintsReplicaIds, usePkIndex, tableVersion, null, null);
+    }
+
+    public LogicalOlapScanOperator(
+            Table table,
+            Map<ColumnRefOperator, Column> colRefToColumnMetaMap,
+            Map<Column, ColumnRefOperator> columnMetaToColRefMap,
+            DistributionSpec distributionSpec,
+            long limit,
+            ScalarOperator predicate,
+            long selectedIndexMetaId,
+            List<Long> selectedPartitionId,
+            PartitionNames partitionNames,
+            boolean hasTableHints,
+            List<Long> selectedTabletId,
+            List<Long> hintsTabletIds,
+            List<Long> hintsReplicaIds,
+            boolean usePkIndex,
+            Long tableVersion,
+            Long changesFromVersion,
+            Long changesToVersion) {
         super(OperatorType.LOGICAL_OLAP_SCAN, table, colRefToColumnMetaMap, columnMetaToColRefMap, limit, predicate,
                 null);
 
@@ -108,6 +138,9 @@ public final class LogicalOlapScanOperator extends LogicalScanOperator {
         this.hintsReplicaIds = hintsReplicaIds;
         this.prunedPartitionPredicates = Lists.newArrayList();
         this.usePkIndex = usePkIndex;
+        this.tableVersion = tableVersion;
+        this.changesFromVersion = changesFromVersion;
+        this.changesToVersion = changesToVersion;
     }
 
     private LogicalOlapScanOperator() {
@@ -161,6 +194,22 @@ public final class LogicalOlapScanOperator extends LogicalScanOperator {
         return usePkIndex;
     }
 
+    public Long getTableVersion() {
+        return tableVersion;
+    }
+
+    public Long getChangesFromVersion() {
+        return changesFromVersion;
+    }
+
+    public Long getChangesToVersion() {
+        return changesToVersion;
+    }
+
+    public boolean isChangesQuery() {
+        return changesFromVersion != null && changesToVersion != null;
+    }
+
     public List<ScalarOperator> getPrunedPartitionPredicates() {
         return prunedPartitionPredicates;
     }
@@ -212,6 +261,9 @@ public final class LogicalOlapScanOperator extends LogicalScanOperator {
                 Objects.equals(partitionNames, that.partitionNames) &&
                 Objects.equals(selectedTabletId, that.selectedTabletId) &&
                 Objects.equals(sample, that.sample) &&
+                Objects.equals(tableVersion, that.tableVersion) &&
+                Objects.equals(changesFromVersion, that.changesFromVersion) &&
+                Objects.equals(changesToVersion, that.changesToVersion) &&
                 Objects.equals(hintsTabletIds, that.hintsTabletIds) &&
                 Objects.equals(hintsReplicaIds, that.hintsReplicaIds);
     }
@@ -219,7 +271,8 @@ public final class LogicalOlapScanOperator extends LogicalScanOperator {
     @Override
     public int hashCode() {
         return Objects.hash(super.hashCode(), selectedIndexMetaId, gtid, selectedPartitionId,
-                selectedTabletId, hintsTabletIds, hintsReplicaIds, sample);
+                selectedTabletId, hintsTabletIds, hintsReplicaIds, sample, tableVersion,
+                changesFromVersion, changesToVersion);
     }
 
     public static Builder builder() {
@@ -251,6 +304,9 @@ public final class LogicalOlapScanOperator extends LogicalScanOperator {
             builder.fromSplitOR = scanOperator.fromSplitOR;
             builder.vectorSearchOptions = scanOperator.vectorSearchOptions;
             builder.sample = scanOperator.getSample();
+            builder.tableVersion = scanOperator.getTableVersion();
+            builder.changesFromVersion = scanOperator.getChangesFromVersion();
+            builder.changesToVersion = scanOperator.getChangesToVersion();
             return this;
         }
 
@@ -320,6 +376,17 @@ public final class LogicalOlapScanOperator extends LogicalScanOperator {
 
         public Builder setSample(TableSampleClause sample) {
             builder.sample = sample;
+            return this;
+        }
+
+        public Builder setTableVersion(Long tableVersion) {
+            builder.tableVersion = tableVersion;
+            return this;
+        }
+
+        public Builder setChangesVersionRange(Long fromVersion, Long toVersion) {
+            builder.changesFromVersion = fromVersion;
+            builder.changesToVersion = toVersion;
             return this;
         }
     }

@@ -522,6 +522,14 @@ public class OptExpressionDuplicator {
                 }
                 opBuilder.setPartitionByColumns(newPartitionBys);
             }
+            if (topNOperator.getShuffleColumns() != null) {
+                List<ColumnRefOperator> newShuffleColumns = Lists.newArrayList();
+                for (ColumnRefOperator shuffleColumn : topNOperator.getShuffleColumns()) {
+                    ColumnRefOperator newColRef = getNewColRef(shuffleColumn);
+                    newShuffleColumns.add(newColRef);
+                }
+                opBuilder.setShuffleColumns(newShuffleColumns);
+            }
 
             // ordering
             List<Ordering> newOrderings = Lists.newArrayList();

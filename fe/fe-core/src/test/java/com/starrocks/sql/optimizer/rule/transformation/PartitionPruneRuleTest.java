@@ -389,7 +389,7 @@ public class PartitionPruneRuleTest {
         LogicalOlapScanOperator operator =
                 new LogicalOlapScanOperator(olapTable, scanColumnMap, columnMetaToColRefMap,
                         null, -1, null, olapTable.getBaseIndexMetaId(),
-                        null, partitionNames, false, Lists.newArrayList(), Lists.newArrayList(), null, false);
+                        null, partitionNames, false, Lists.newArrayList(), Lists.newArrayList(), null, false, null);
 
         Partition part1 = new Partition(10001L, 10003L, "p1", new MaterializedIndex(), null);
         Partition part2 = new Partition(10002L, 10004L, "p2", new MaterializedIndex(), null);

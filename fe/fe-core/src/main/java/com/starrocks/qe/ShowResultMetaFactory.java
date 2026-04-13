@@ -116,6 +116,7 @@ import com.starrocks.sql.ast.ShowTriggersStmt;
 import com.starrocks.sql.ast.ShowUserPropertyStmt;
 import com.starrocks.sql.ast.ShowUserStmt;
 import com.starrocks.sql.ast.ShowVariablesStmt;
+import com.starrocks.sql.ast.ShowVersionsStmt;
 import com.starrocks.sql.ast.ShowWarningStmt;
 import com.starrocks.sql.ast.ShowWhiteListStmt;
 import com.starrocks.sql.ast.StatementBase;
@@ -1060,6 +1061,16 @@ public class ShowResultMetaFactory implements AstVisitorExtendInterface<ShowResu
     public ShowResultSetMetaData visitShowTabletStatement(ShowTabletStmt statement, Void context) {
         List<String> titleNames = statement.getTitleNames();
 
+        ShowResultSetMetaData.Builder builder = ShowResultSetMetaData.builder();
+        for (String title : titleNames) {
+            builder.addColumn(new Column(title, TypeFactory.createVarcharType(30)));
+        }
+        return builder.build();
+    }
+
+    @Override
+    public ShowResultSetMetaData visitShowVersionsStatement(ShowVersionsStmt statement, Void context) {
+        List<String> titleNames = statement.getTitleNames();
         ShowResultSetMetaData.Builder builder = ShowResultSetMetaData.builder();
         for (String title : titleNames) {
             builder.addColumn(new Column(title, TypeFactory.createVarcharType(30)));

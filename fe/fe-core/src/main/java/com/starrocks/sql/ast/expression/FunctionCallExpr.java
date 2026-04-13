@@ -278,6 +278,9 @@ public class FunctionCallExpr extends Expr {
 
     // TODO(kks): improve this
     public boolean isNullable() {
+        if (FunctionSet.COALESCE.equalsIgnoreCase(fnRef.getFunctionName())) {
+            return false;
+        }
         // check if fn always return non null
         if (fn != null && !fn.isNullable()) {
             return false;

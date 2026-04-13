@@ -232,20 +232,31 @@ public class AlterMVJobExecutor extends AlterJobExecutor {
         if (currentRefreshMode.isIncrementalOrAuto()) {
             ParseNode mvDefinedQueryParseNode = materializedView.getDefineQueryParseNode();
             if ((mvDefinedQueryParseNode instanceof QueryStatement queryStatement)) {
-                IVMAnalyzer ivmAnalyzer = new IVMAnalyzer(context, null, queryStatement);
-
-                Optional<IVMAnalyzer.IVMAnalyzeResult> result;
-                try {
-                    result = ivmAnalyzer.rewrite(
-                            MaterializedView.RefreshMode.valueOf(mvRefreshMode.toUpperCase(Locale.ROOT)));
-                } catch (SemanticException e) {
-                    throw new SemanticException("Cannot alter materialized view refresh mode to %s: %s",
-                            mvRefreshMode, e.getMessage());
-                }
-                if (result.isEmpty()) {
-                    throw new SemanticException("Cannot alter materialized view refresh mode to %s," +
-                            " because the materialized view is not eligible for %s refresh mode",
-                            mvRefreshMode, mvRefreshMode);
+                Optional<IVMAnalyzer.IVMAnalyzeResult> result = Optional.empty();
+                if (materializedView.getBaseTableInfos().stream().allMatch(base -> {
+                    Optional<Table> table = MvUtils.getTableWithIdentifier(base);
+                    return table.isPresent() && table.get() instanceof OlapTable;
+                })) {
+                    Optional<String> unsupportedReason =
+                            MaterializedViewAnalyzer.validateOlapIvmRewrite(context, queryStatement);
+                    if (unsupportedReason.isPresent()) {
+                        throw new SemanticException("Cannot alter materialized view refresh mode to %s: %s",
+                                mvRefreshMode, unsupportedReason.get());
+                    }
+                } else {
+                    IVMAnalyzer ivmAnalyzer = new IVMAnalyzer(context, null, queryStatement);
+                    try {
+                        result = ivmAnalyzer.rewrite(
+                                MaterializedView.RefreshMode.valueOf(mvRefreshMode.toUpperCase(Locale.ROOT)));
+                    } catch (SemanticException e) {
+                        throw new SemanticException("Cannot alter materialized view refresh mode to %s: %s",
+                                mvRefreshMode, e.getMessage());
+                    }
+                    if (result.isEmpty()) {
+                        throw new SemanticException("Cannot alter materialized view refresh mode to %s," +
+                                " because the materialized view is not eligible for %s refresh mode",
+                                mvRefreshMode, mvRefreshMode);
+                    }
                 }
                 // if materialized's original refresh mode is not auto or ivm, throw exception
                 if (!materializedView.getCurrentRefreshMode().isIncrementalOrAuto()) {
@@ -253,7 +264,9 @@ public class AlterMVJobExecutor extends AlterJobExecutor {
                             " only support alter original incremental/auto based materialized view",
                             mvRefreshMode);
                 }
-                currentRefreshMode = result.get().currentRefreshMode();
+                if (result.isPresent()) {
+                    currentRefreshMode = result.get().currentRefreshMode();
+                }
             } else {
                 throw new SemanticException("Cannot alter materialized view refresh mode to %s", mvRefreshMode);
             }

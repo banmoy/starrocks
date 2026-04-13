@@ -224,6 +224,15 @@ public class InsertPlanTest extends PlanTestBase {
     }
 
     @Test
+    public void testInsertPrimaryKeyTableWithOpColumn() throws Exception {
+        String explainString =
+                getInsertExecPlan("insert into tprimary(pk, v1, v2, __op) values (1, 'a', 2, 0)");
+        Assertions.assertTrue(explainString.contains("OUTPUT EXPRS:1: column_0 | 2: column_1 | 3: column_2 | 4: column_3"),
+                explainString);
+        Assertions.assertTrue(explainString.contains("1 | 'a' | 2 | 0"), explainString);
+    }
+
+    @Test
     public void testInsertFromTable() throws Exception {
         starRocksAssert.withTable("CREATE TABLE `ti1` (\n" +
                 "  `v1` bigint NULL COMMENT \"\",\n" +

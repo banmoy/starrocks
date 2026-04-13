@@ -395,15 +395,25 @@ public class StatisticsCalculator extends OperatorVisitor<Void, ExpressionContex
                 .recordPredicateColumns(node.getPredicate(), optimizerContext.getColumnRefFactory(),
                         context.getOptExpression());
 
-        // 1. get table row count
-        long tableRowCount = StatisticsCalcUtils.getTableRowCount(table, node, optimizerContext);
-        // 2. get required columns statistics
-        Statistics.Builder builder = StatisticsCalcUtils.estimateScanColumns(table, colRefToColumnMetaMap, optimizerContext);
-        if (tableRowCount <= 1) {
-            builder.setTableRowCountMayInaccurate(true);
+        Statistics.Builder builder;
+        long tableRowCount;
+        if (isChangesOlapScan(node)) {
+            Collection<Partition> selectedPartitions = getSelectedPartitionsForChanges(table, selectedPartitionIds);
+            Statistics changesStats = GlobalStateMgr.getCurrentState().getStatisticStorage().getChangesStatistics(
+                    table, selectedPartitions, colRefToColumnMetaMap, getChangesFromVersion(node), getChangesToVersion(node));
+            builder = Statistics.buildFrom(changesStats);
+            tableRowCount = (long) changesStats.getOutputRowCount();
+        } else {
+            // 1. get table row count
+            tableRowCount = StatisticsCalcUtils.getTableRowCount(table, node, optimizerContext);
+            // 2. get required columns statistics
+            builder = StatisticsCalcUtils.estimateScanColumns(table, colRefToColumnMetaMap, optimizerContext);
+            if (tableRowCount <= 1) {
+                builder.setTableRowCountMayInaccurate(true);
+            }
+            // 3. get multi-column combined statistics according to required columns
+            builder = StatisticsCalcUtils.estimateMultiColumnCombinedStats(table, builder, colRefToColumnMetaMap);
         }
-        // 3. get multi-column combined statistics according to required columns
-        builder = StatisticsCalcUtils.estimateMultiColumnCombinedStats(table, builder, colRefToColumnMetaMap);
 
         // 4. deal with column statistics for partition prune
         OlapTable olapTable = (OlapTable) table;
@@ -423,6 +433,40 @@ public class StatisticsCalculator extends OperatorVisitor<Void, ExpressionContex
         context.setStatistics(builder.build());
 
         return visitOperator(node, context);
+    }
+
+    private boolean isChangesOlapScan(Operator node) {
+        if (node instanceof LogicalOlapScanOperator) {
+            return ((LogicalOlapScanOperator) node).isChangesQuery();
+        }
+        if (node instanceof PhysicalOlapScanOperator) {
+            return ((PhysicalOlapScanOperator) node).isChangesQuery();
+        }
+        return false;
+    }
+
+    private long getChangesFromVersion(Operator node) {
+        if (node instanceof LogicalOlapScanOperator) {
+            return ((LogicalOlapScanOperator) node).getChangesFromVersion();
+        }
+        return ((PhysicalOlapScanOperator) node).getChangesFromVersion();
+    }
+
+    private long getChangesToVersion(Operator node) {
+        if (node instanceof LogicalOlapScanOperator) {
+            return ((LogicalOlapScanOperator) node).getChangesToVersion();
+        }
+        return ((PhysicalOlapScanOperator) node).getChangesToVersion();
+    }
+
+    private Collection<Partition> getSelectedPartitionsForChanges(Table table, Collection<Long> selectedPartitionIds) {
+        if (!(table instanceof OlapTable olapTable)) {
+            return List.of();
+        }
+        if (selectedPartitionIds == null || selectedPartitionIds.isEmpty()) {
+            return olapTable.getPartitions();
+        }
+        return selectedPartitionIds.stream().map(olapTable::getPartition).filter(Objects::nonNull).collect(Collectors.toList());
     }
 
     /**

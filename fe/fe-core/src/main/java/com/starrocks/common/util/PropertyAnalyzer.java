@@ -211,6 +211,7 @@ public class PropertyAnalyzer {
     public static final String PROPERTIES_PARTITION_LIVE_NUMBER = "partition_live_number";
     public static final String PROPERTIES_PARTITION_RETENTION_CONDITION = "partition_retention_condition";
     public static final String PROPERTIES_TIME_DRIFT_CONSTRAINT = "time_drift_constraint";
+    public static final String PROPERTIES_BASE_VERSION = "base_version";
 
     // default: same as cluster query_timeout
     public static final String PROPERTIES_TABLE_QUERY_TIMEOUT = "table_query_timeout";
@@ -262,7 +263,7 @@ public class PropertyAnalyzer {
     // fast schema evolution
     public static final String PROPERTIES_USE_FAST_SCHEMA_EVOLUTION = "fast_schema_evolution";
     public static final String PROPERTIES_USE_LIGHT_SCHEMA_CHANGE = "light_schema_change";
- 
+
     /**
      * Configuration for the v2 implementation of fast schema evolution for cloud-native table.
      * This version is more lightweight, modifying only FE metadata instead of both FE and tablet metadata.
@@ -466,6 +467,25 @@ public class PropertyAnalyzer {
             }
         }
         return partitionLiveNumber;
+    }
+
+    public static long analyzeBaseVersion(Map<String, String> properties, boolean removeProperties) throws AnalysisException {
+        if (properties == null || !properties.containsKey(PROPERTIES_BASE_VERSION)) {
+            return INVALID;
+        }
+        String val = properties.get(PROPERTIES_BASE_VERSION);
+        try {
+            long baseVersion = Long.parseLong(val);
+            if (baseVersion <= 0) {
+                throw new AnalysisException("base_version must be greater than 0");
+            }
+            if (removeProperties) {
+                properties.remove(PROPERTIES_BASE_VERSION);
+            }
+            return baseVersion;
+        } catch (NumberFormatException e) {
+            throw new AnalysisException("Invalid base_version: " + val, e);
+        }
     }
 
     public static String analyzePartitionRetentionCondition(Database db,
@@ -1358,6 +1378,7 @@ public class PropertyAnalyzer {
 
     /**
      * Analyze table_query_timeout property.
+     *
      * @param properties table properties
      * @return table query timeout in seconds, -1 means use cluster query_timeout
      * @throws AnalysisException if the value is invalid
@@ -2026,7 +2047,8 @@ public class PropertyAnalyzer {
     }
 
     public static boolean analyzeCloudNativeFastSchemaEvolutionV2(Table.TableType tableType,
-            Map<String, String> properties, boolean removeFromProperties) throws SemanticException {
+                                                                  Map<String, String> properties, boolean removeFromProperties)
+            throws SemanticException {
         if (tableType != Table.TableType.CLOUD_NATIVE) {
             ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
                     String.format("Property %s only supports cloud-native tables, but table type is %s",

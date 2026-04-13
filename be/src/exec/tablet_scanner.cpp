@@ -14,9 +14,11 @@
 
 #include "exec/tablet_scanner.h"
 
+#include <limits>
 #include <memory>
 #include <utility>
 
+#include "column/column_helper.h"
 #include "column/vectorized_fwd.h"
 #include "common/status.h"
 #include "exec/olap_scan_node.h"
@@ -28,10 +30,16 @@
 #include "storage/projection_iterator.h"
 #include "storage/storage_engine.h"
 #include "storage/tablet_manager.h"
+#include "types/logical_type.h"
 #include "util/runtime_profile.h"
 #include "util/starrocks_metrics.h"
 
 namespace starrocks {
+
+namespace {
+constexpr const char* kChangesActionColumnName = "action";
+constexpr int16_t kChangesActionValue = 1;
+} // namespace
 
 TabletScanner::TabletScanner(OlapScanNode* parent) : _parent(parent) {}
 
@@ -49,6 +57,13 @@ Status TabletScanner::init(RuntimeState* runtime_state, const TabletScannerParam
 
     RETURN_IF_ERROR(Expr::clone_if_not_exists(runtime_state, &_pool, *params.conjunct_ctxs, &_conjunct_ctxs));
     RETURN_IF_ERROR(_get_tablet(params.scan_range));
+    _is_changes_query = params.scan_range->__isset.changes_from || params.scan_range->__isset.changes_to;
+    if (_is_changes_query && (!params.scan_range->__isset.changes_from || !params.scan_range->__isset.changes_to)) {
+        return Status::InvalidArgument("changes range is incomplete");
+    }
+    if (_is_changes_query && params.rowsets == nullptr) {
+        return Status::InvalidArgument("changes query requires captured rowsets");
+    }
 
     // if column_desc come from fe, reset tablet schema
     if (_parent->_olap_scan_node.__isset.columns_desc && !_parent->_olap_scan_node.columns_desc.empty() &&
@@ -63,7 +78,12 @@ Status TabletScanner::init(RuntimeState* runtime_state, const TabletScannerParam
     RETURN_IF_ERROR(_init_global_dicts());
     RETURN_IF_ERROR(_init_reader_params(params.key_ranges));
     Schema child_schema = ChunkHelper::convert_schema(_tablet_schema, _reader_columns);
-    _reader = std::make_shared<TabletReader>(_tablet, Version(0, _version), std::move(child_schema));
+    if (_is_changes_query && params.rowsets != nullptr && !params.rowsets->empty()) {
+        _reader = std::make_shared<TabletReader>(_tablet, Version(0, _version), std::move(child_schema),
+                                                 std::vector<RowsetSharedPtr>(*params.rowsets), &_tablet_schema);
+    } else {
+        _reader = std::make_shared<TabletReader>(_tablet, Version(0, _version), std::move(child_schema));
+    }
     if (_reader_columns.size() == _scanner_columns.size()) {
         _prj_iter = _reader;
     } else {
@@ -209,6 +229,16 @@ Status TabletScanner::_init_return_columns() {
         if (!slot->is_materialized()) {
             continue;
         }
+        if (_is_changes_query && slot->col_name() == kChangesActionColumnName) {
+            _changes_action_slot = slot;
+            _query_slots.push_back(slot);
+            if (_changes_action_field == nullptr) {
+                _changes_action_field =
+                        std::make_shared<Field>(std::numeric_limits<ColumnId>::max(), kChangesActionColumnName,
+                                                LogicalType::TYPE_SMALLINT, true);
+            }
+            continue;
+        }
         int32_t index = _tablet_schema->field_index(slot->col_name());
         if (index < 0) {
             auto msg = strings::Substitute("Invalid column name: $0", slot->col_name());
@@ -223,7 +253,7 @@ Status TabletScanner::_init_return_columns() {
     // Put key columns before non-key columns, as the `MergeIterator` and `AggregateIterator`
     // required.
     std::sort(_scanner_columns.begin(), _scanner_columns.end());
-    if (_scanner_columns.empty()) {
+    if (_scanner_columns.empty() && _changes_action_slot == nullptr) {
         return Status::InternalError("failed to build storage scanner, no materialized slot!");
     }
     return Status::OK();
@@ -231,6 +261,9 @@ Status TabletScanner::_init_return_columns() {
 
 Status TabletScanner::_init_unused_output_columns(const std::vector<std::string>& unused_output_columns) {
     for (const auto& col_name : unused_output_columns) {
+        if (_is_changes_query && col_name == kChangesActionColumnName) {
+            continue;
+        }
         int32_t index = _tablet_schema->field_index(col_name);
         if (index < 0) {
             auto msg = strings::Substitute("Invalid column name: $0", col_name);
@@ -250,6 +283,9 @@ Status TabletScanner::_init_global_dicts() {
     // mapping column id to storage column ids
     for (auto slot : _parent->_tuple_desc->slots()) {
         if (!slot->is_materialized()) {
+            continue;
+        }
+        if (_is_changes_query && slot->col_name() == kChangesActionColumnName) {
             continue;
         }
         auto iter = global_dict_map.find(slot->id());
@@ -273,6 +309,16 @@ Status TabletScanner::get_chunk(RuntimeState* state, Chunk* chunk) {
     do {
         if (Status status = _prj_iter->get_next(chunk); !status.ok()) {
             return status;
+        }
+        if (_is_changes_query && _changes_action_slot != nullptr) {
+            auto action_column =
+                    ColumnHelper::create_const_column<TYPE_SMALLINT>(kChangesActionValue, chunk->num_rows());
+            if (chunk->schema()->get_field_by_name(kChangesActionColumnName) == nullptr) {
+                chunk->append_column(std::move(action_column), _changes_action_field);
+            } else {
+                size_t action_index = chunk->schema()->get_field_index_by_name(kChangesActionColumnName);
+                chunk->update_column_by_index(std::move(action_column), action_index);
+            }
         }
         TRY_CATCH_ALLOC_SCOPE_START()
         for (auto slot : _query_slots) {

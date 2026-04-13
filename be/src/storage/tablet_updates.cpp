@@ -2761,6 +2761,17 @@ void TabletUpdates::remove_expired_versions(int64_t expire_time) {
             }
             keep_index_min--;
         }
+        int64_t base_version = _tablet.tablet_meta()->base_version();
+        if (base_version > 0) {
+            size_t base_index = 0;
+            while (base_index < _edit_version_infos.size() &&
+                   _edit_version_infos[base_index]->version.major_number() < base_version) {
+                base_index++;
+            }
+            if (base_index < _edit_version_infos.size() && keep_index_min > base_index) {
+                keep_index_min = base_index;
+            }
+        }
         num_version_removed = keep_index_min;
         if (num_version_removed > 0) {
             for (size_t i = 0; i < num_version_removed; i++) {

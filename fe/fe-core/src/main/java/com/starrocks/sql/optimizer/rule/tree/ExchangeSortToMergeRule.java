@@ -48,22 +48,25 @@ public class ExchangeSortToMergeRule extends OptExpressionVisitor<OptExpression,
             PhysicalTopNOperator topN = (PhysicalTopNOperator) optExpr.inputAt(0).getOp();
 
             if (topN.getSortPhase().isFinal() && !topN.isSplit() && topN.getLimit() == Operator.DEFAULT_LIMIT) {
+                PhysicalTopNOperator partialTopN = new PhysicalTopNOperator(topN.getOrderSpec(), topN.getLimit(),
+                        topN.getOffset(), topN.getPartitionByColumns(), topN.getPartitionLimit(), SortPhase.PARTIAL,
+                        topN.getTopNType(), false, topN.isEnforced(), topN.isPerPipeline(), null, null,
+                        ImmutableMap.of());
+                partialTopN.setShuffleColumns(topN.getShuffleColumns());
                 OptExpression.Builder partialSortOptBuilder = OptExpression.builder()
-                        .setOp(new PhysicalTopNOperator(topN.getOrderSpec(), topN.getLimit(), topN.getOffset(),
-                                topN.getPartitionByColumns(), topN.getPartitionLimit(), SortPhase.PARTIAL,
-                                topN.getTopNType(), false, topN.isEnforced(), topN.isPerPipeline(), null, null,
-                                ImmutableMap.of()))
+                        .setOp(partialTopN)
                         .setInputs(optExpr.inputAt(0).getInputs())
                         .setLogicalProperty(optExpr.inputAt(0).getLogicalProperty())
                         .setStatistics(optExpr.getStatistics())
                         .setCost(optExpr.getCost());
 
+                PhysicalTopNOperator finalTopN = new PhysicalTopNOperator(topN.getOrderSpec(), topN.getLimit(),
+                        topN.getOffset(), topN.getPartitionByColumns(), topN.getPartitionLimit(), SortPhase.FINAL,
+                        topN.getTopNType(), true, topN.isEnforced(), topN.isPerPipeline(), null,
+                        topN.getProjection(), null);
+                finalTopN.setShuffleColumns(topN.getShuffleColumns());
                 OptExpression.Builder newOptBuilder = OptExpression.builder()
-                        .setOp(new PhysicalTopNOperator(
-                                        topN.getOrderSpec(), topN.getLimit(), topN.getOffset(), topN.getPartitionByColumns(),
-                                        topN.getPartitionLimit(), SortPhase.FINAL, topN.getTopNType(), true,
-                                        topN.isEnforced(), topN.isPerPipeline(), null,
-                                        topN.getProjection(), null))
+                        .setOp(finalTopN)
                         .setInputs(Lists.newArrayList(partialSortOptBuilder.build()))
                         .setLogicalProperty(optExpr.getLogicalProperty())
                         .setStatistics(optExpr.getStatistics())

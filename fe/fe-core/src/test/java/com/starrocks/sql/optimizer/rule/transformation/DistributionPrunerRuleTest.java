@@ -162,7 +162,7 @@ public class DistributionPrunerRuleTest {
         LogicalOlapScanOperator operator =
                 new LogicalOlapScanOperator(olapTable, scanColumnMap, Maps.newHashMap(), null, -1, predicate,
                         1, Lists.newArrayList(1L), null, false, Lists.newArrayList(), Lists.newArrayList(), null,
-                        false);
+                        false, null);
         operator.setPredicate(predicate);
 
         new Expectations() {
@@ -251,7 +251,7 @@ public class DistributionPrunerRuleTest {
         LogicalOlapScanOperator operator =
                 new LogicalOlapScanOperator(olapTable, scanColumnMap, Maps.newHashMap(), null, -1, predicate,
                         1, Lists.newArrayList(1L), null, false, Lists.newArrayList(), Lists.newArrayList(), null,
-                        false);
+                        false, null);
         operator.setPredicate(predicate);
 
         // Mock RangeDistributionPruner to ensure RANGE branch in OptDistributionPruner is exercised

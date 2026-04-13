@@ -279,6 +279,11 @@ void TabletMeta::init_from_pb(TabletMetaPB* ptablet_meta_pb, bool use_tablet_sch
     _shard_id = tablet_meta_pb.shard_id();
     _creation_time = tablet_meta_pb.creation_time();
     _cumulative_layer_point = tablet_meta_pb.cumulative_layer_point();
+    if (tablet_meta_pb.has_base_version()) {
+        _base_version = tablet_meta_pb.base_version();
+    } else {
+        _base_version = -1;
+    }
     _tablet_uid = TabletUid(tablet_meta_pb.tablet_uid());
     if (tablet_meta_pb.has_tablet_type()) {
         _tablet_type = tablet_meta_pb.tablet_type();
@@ -391,6 +396,7 @@ void TabletMeta::to_meta_pb(TabletMetaPB* tablet_meta_pb, bool skip_tablet_schem
     tablet_meta_pb->set_shard_id(shard_id());
     tablet_meta_pb->set_creation_time(creation_time());
     tablet_meta_pb->set_cumulative_layer_point(cumulative_layer_point());
+    tablet_meta_pb->set_base_version(_base_version);
     tablet_meta_pb->set_enable_persistent_index(get_enable_persistent_index());
     if (!_storage_type.empty()) {
         tablet_meta_pb->set_storage_type(_storage_type);
@@ -670,6 +676,7 @@ bool operator==(const TabletMeta& a, const TabletMeta& b) {
     if (a._shard_id != b._shard_id) return false;
     if (a._creation_time != b._creation_time) return false;
     if (a._cumulative_layer_point != b._cumulative_layer_point) return false;
+    if (a._base_version != b._base_version) return false;
     if (a._tablet_uid != b._tablet_uid) return false;
     if (a._tablet_type != b._tablet_type) return false;
     if (a._tablet_state != b._tablet_state) return false;

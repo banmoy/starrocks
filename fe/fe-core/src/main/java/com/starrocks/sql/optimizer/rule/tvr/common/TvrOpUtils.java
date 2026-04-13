@@ -37,6 +37,7 @@ import com.starrocks.type.VarbinaryType;
 import com.starrocks.type.VarcharType;
 
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * Utility class for TVR operations.
@@ -66,25 +67,36 @@ public class TvrOpUtils {
      * TODO: Implement type-based optimization during semantic analysis phase.
      */
     public static int deduceEncodeRowIdVersion(List<Expr> children) {
+        return deduceEncodeRowIdVersionByTypes(children, Expr::isAnalyzed, Expr::getType);
+    }
+
+    public static int deduceEncodeRowIdVersionForScalarOperators(List<ScalarOperator> children) {
+        return deduceEncodeRowIdVersionByTypes(children, child -> true, ScalarOperator::getType);
+    }
+
+    private static <T> int deduceEncodeRowIdVersionByTypes(List<T> children,
+                                                           Predicate<T> isReady,
+                                                           java.util.function.Function<T, Type> getType) {
         // Check if all children have types available (they should be analyzed)
         boolean allTypesAvailable = true;
         int totalSize = 0;
 
-        for (Expr child : children) {
-            if (!child.isAnalyzed() || child.getType() == null || !child.getType().isValid()) {
+        for (T child : children) {
+            Type childType = getType.apply(child);
+            if (!isReady.test(child) || childType == null || !childType.isValid()) {
                 allTypesAvailable = false;
                 break;
             }
 
             // Check if it's a variable-length type
-            if (child.getType().isScalarType()) {
-                ScalarType scalarType = (ScalarType) child.getType();
+            if (childType.isScalarType()) {
+                ScalarType scalarType = (ScalarType) childType;
                 if (scalarType.getPrimitiveType().isVariableLengthType()) {
                     allTypesAvailable = false;
                     break;
                 }
                 totalSize += scalarType.getPrimitiveType().getTypeSize();
-            } else if (child.getType().isComplexType()) {
+            } else if (childType.isComplexType()) {
                 // Complex types (ARRAY, MAP, STRUCT) are variable-length
                 allTypesAvailable = false;
                 break;

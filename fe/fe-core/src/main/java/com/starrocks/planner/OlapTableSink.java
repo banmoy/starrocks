@@ -160,6 +160,7 @@ public class OlapTableSink extends DataSink {
     private boolean enableDynamicOverwrite = false;
     private boolean isFromOverwrite = false;
     private boolean isMultiStatementTxn = false;
+    private List<Expr> localShuffleExprs = Collections.emptyList();
 
     public OlapTableSink(OlapTable dstTable, TupleDescriptor tupleDescriptor, List<Long> partitionIds,
                          TWriteQuorumType writeQuorum, boolean enableReplicatedStorage,
@@ -266,6 +267,14 @@ public class OlapTableSink extends DataSink {
         this.isMultiStatementTxn = isMultiStatementTxn;
     }
 
+    public void setLocalShuffleExprs(List<Expr> localShuffleExprs) {
+        if (localShuffleExprs == null || localShuffleExprs.isEmpty()) {
+            this.localShuffleExprs = Collections.emptyList();
+            return;
+        }
+        this.localShuffleExprs = new ArrayList<>(localShuffleExprs);
+    }
+
     public void complete(String mergeCondition) throws StarRocksException {
         TOlapTableSink tSink = tDataSink.getOlap_table_sink();
         if (mergeCondition != null && !mergeCondition.isEmpty()) {
@@ -358,6 +367,9 @@ public class OlapTableSink extends DataSink {
         tSink.setNodes_info(GlobalStateMgr.getCurrentState().createNodesInfo(computeResource, getSystemInfoService(dstTable)));
         tSink.setPartial_update_mode(this.partialUpdateMode);
         tSink.setAutomatic_bucket_size(automaticBucketSize);
+        if (!localShuffleExprs.isEmpty()) {
+            tSink.setLocal_shuffle_exprs(ExprToThrift.treesToThrift(localShuffleExprs));
+        }
         if (canUseColocateMVIndex(dstTable)) {
             tSink.setEnable_colocate_mv_index(true);
         }

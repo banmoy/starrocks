@@ -60,19 +60,15 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
         return visitStatement(statement, context);
     }
 
-
     // ---------------------------------------- Database Statement -----------------------------------------------------
-
 
     default R visitAlterDatabaseQuotaStatement(AlterDatabaseQuotaStmt statement, C context) {
         return visitDDLStatement(statement, context);
     }
 
-
     default R visitAlterDatabaseRenameStatement(AlterDatabaseRenameStatement statement, C context) {
         return visitDDLStatement(statement, context);
     }
-
 
     // ---------------------------------------- Table Statement --------------------------------------------------------
 
@@ -112,7 +108,6 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
         return visitDDLStatement(statement, context);
     }
 
-
     default R visitRefreshTableStatement(RefreshTableStmt statement, C context) {
         return visitDDLStatement(statement, context);
     }
@@ -138,6 +133,10 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
     }
 
     default R visitShowTabletStatement(ShowTabletStmt statement, C context) {
+        return visitShowStatement(statement, context);
+    }
+
+    default R visitShowVersionsStatement(ShowVersionsStmt statement, C context) {
         return visitShowStatement(statement, context);
     }
 
@@ -287,7 +286,6 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
 
     // ---------------------------------------- Resource Group Statement -----------------------------------------------
 
-
     // ---------------------------------------- External Resource Statement---------------------------------------------
 
     default R visitCreateResourceStatement(CreateResourceStmt statement, C context) {
@@ -317,7 +315,6 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
     default R visitCancelLoadStatement(CancelLoadStmt statement, C context) {
         return visitDDLStatement(statement, context);
     }
-
 
     // ---------------------------------------- Show Statement ---------------------------------------------------------
 
@@ -372,7 +369,6 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
     }
 
     // ---------------------------------------- Backup Restore Statement -----------------------------------------------
-
 
     default R visitCancelBackupStatement(CancelBackupStmt statement, C context) {
         return visitDDLStatement(statement, context);
@@ -433,8 +429,6 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
     default R visitDescStorageVolumeStatement(DescStorageVolumeStmt statement, C context) {
         return visitShowStatement(statement, context);
     }
-
-
 
     // -------------------------------------------- Pipe Statement -----------------------------------------------------
     default R visitPipeName(PipeName statement, C context) {
@@ -498,11 +492,9 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
         return visitNode(clause, context);
     }
 
-
     default R visitReorderColumnsClause(ReorderColumnsClause clause, C context) {
         return visitNode(clause, context);
     }
-
 
     default R visitAlterTableModifyDefaultBucketsClause(AlterTableModifyDefaultBucketsClause clause, C context) {
         return visitNode(clause, context);
@@ -526,7 +518,6 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
 
     //Alter partition clause
 
-
     default R visitAddPartitionClause(AddPartitionClause clause, C context) {
         return visitNode(clause, context);
     }
@@ -542,7 +533,6 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
     default R visitReplacePartitionClause(ReplacePartitionClause clause, C context) {
         return visitNode(clause, context);
     }
-
 
     // Alter View
     default R visitAlterViewClause(AlterViewClause clause, C context) {
@@ -667,7 +657,6 @@ public interface AstVisitorExtendInterface<R, C> extends AstVisitor<R, C> {
     }
 
     // ------------------------------------------- Collections --------------------------------------
-
 
     default R visitMapExpr(MapExpr node, C context) {
         return visitExpression(node, context);

@@ -146,6 +146,8 @@ public:
     void set_creation_time(int64_t creation_time);
     int64_t cumulative_layer_point() const;
     void set_cumulative_layer_point(int64_t new_point);
+    int64_t base_version() const;
+    void set_base_version(int64_t base_version);
 
     size_t num_rows() const;
     // disk space occupied by tablet
@@ -263,6 +265,7 @@ private:
     int32_t _shard_id = 0;
     int64_t _creation_time = 0;
     int64_t _cumulative_layer_point = 0;
+    int64_t _base_version = -1;
     bool _enable_persistent_index = false;
     int32_t _primary_index_cache_expire_sec = 0;
     TabletUid _tablet_uid;
@@ -329,6 +332,14 @@ inline void TabletMeta::TEST_set_table_id(int64_t table_id) {
 
 inline int64_t TabletMeta::partition_id() const {
     return _partition_id;
+}
+
+inline int64_t TabletMeta::base_version() const {
+    return _base_version;
+}
+
+inline void TabletMeta::set_base_version(int64_t base_version) {
+    _base_version = base_version;
 }
 
 inline int64_t TabletMeta::tablet_id() const {

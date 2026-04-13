@@ -56,6 +56,7 @@ import com.starrocks.common.ErrorReport;
 import com.starrocks.common.FeConstants;
 import com.starrocks.common.Pair;
 import com.starrocks.common.util.DateUtils;
+import com.starrocks.common.util.ParseUtil;
 import com.starrocks.common.util.PropertyAnalyzer;
 import com.starrocks.common.util.TimeUtils;
 import com.starrocks.connector.iceberg.IcebergPartitionTransform;
@@ -88,6 +89,7 @@ import com.starrocks.sql.ast.QueryStatement;
 import com.starrocks.sql.ast.RandomDistributionDesc;
 import com.starrocks.sql.ast.RangeDistributionDesc;
 import com.starrocks.sql.ast.RefreshMaterializedViewStatement;
+import com.starrocks.sql.ast.SelectListItem;
 import com.starrocks.sql.ast.SelectRelation;
 import com.starrocks.sql.ast.SetOperationRelation;
 import com.starrocks.sql.ast.StatementBase;
@@ -115,6 +117,8 @@ import com.starrocks.sql.optimizer.base.PhysicalPropertySet;
 import com.starrocks.sql.optimizer.operator.scalar.ColumnRefOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperator;
 import com.starrocks.sql.optimizer.rewrite.ScalarOperatorRewriter;
+import com.starrocks.sql.optimizer.rule.ivm.IvmRowIdDeriver;
+import com.starrocks.sql.optimizer.rule.ivm.common.IvmRuleUtils;
 import com.starrocks.sql.optimizer.rule.transformation.materialization.MvUtils;
 import com.starrocks.sql.optimizer.rule.tvr.common.TvrOpUtils;
 import com.starrocks.sql.optimizer.transformer.ExpressionMapping;
@@ -127,6 +131,7 @@ import com.starrocks.sql.parser.ParsingException;
 import com.starrocks.sql.parser.SqlParser;
 import com.starrocks.sql.plan.ExecPlan;
 import com.starrocks.sql.plan.PlanFragmentBuilder;
+import com.starrocks.sql.spm.LogicalPlan2SQLBuilder;
 import com.starrocks.type.IntegerType;
 import com.starrocks.type.PrimitiveType;
 import com.starrocks.type.ScalarType;
@@ -186,6 +191,104 @@ public class MaterializedViewAnalyzer {
 
     public static void analyze(StatementBase stmt, ConnectContext session) {
         new MaterializedViewAnalyzerVisitor().visit(stmt, session);
+    }
+
+    public static Optional<String> validateOlapIvmRewrite(ConnectContext context, QueryStatement queryStatement) {
+        return analyzeOlapIvmRewrite(context, queryStatement).unsupportedReason();
+    }
+
+    public record OlapIvmAnalyzeResult(Optional<String> unsupportedReason,
+                                       Optional<List<String>> rowIdColumnNames,
+                                       Optional<QueryStatement> rewrittenQueryStatement) {
+    }
+
+    public static OlapIvmAnalyzeResult analyzeOlapIvmRewrite(ConnectContext context, QueryStatement queryStatement) {
+        try {
+            ColumnRefFactory columnRefFactory = new ColumnRefFactory();
+            LogicalPlan logicalPlan = new RelationTransformer(columnRefFactory, context)
+                    .transform(queryStatement.getQueryRelation());
+            OptimizerContext optimizerContext = OptimizerFactory.initContext(context, columnRefFactory);
+            IvmRowIdDeriver.Result result = IvmRowIdDeriver.deriveAndRewrite(logicalPlan.getRoot(), optimizerContext);
+            if (!result.success()) {
+                if (result.unsupportedReason() != null) {
+                    return new OlapIvmAnalyzeResult(Optional.of(result.unsupportedReason()), Optional.empty(), Optional.empty());
+                }
+                return new OlapIvmAnalyzeResult(Optional.of("unsupported query pattern for OLAP IVM"), Optional.empty(),
+                        Optional.empty());
+            }
+            List<ColumnRefOperator> rowIdColumns = Optional.ofNullable(result.rootRowIdColumnRefs()).orElse(List.of());
+            List<String> rowIdColumnNames = rowIdColumns.stream().map(ColumnRefOperator::getName).toList();
+            Optional<QueryStatement> rewrittenQueryStatement =
+                    rewriteOlapIvmQueryStatementIfNeeded(context, queryStatement, logicalPlan, result.rewrittenRoot(),
+                            rowIdColumns);
+            return new OlapIvmAnalyzeResult(Optional.empty(), Optional.of(rowIdColumnNames), rewrittenQueryStatement);
+        } catch (Exception e) {
+            return new OlapIvmAnalyzeResult(Optional.ofNullable(e.getMessage()), Optional.empty(), Optional.empty());
+        }
+    }
+
+    private static Optional<QueryStatement> rewriteOlapIvmQueryStatementIfNeeded(ConnectContext context,
+                                                                                 QueryStatement originQueryStatement,
+                                                                                 LogicalPlan logicalPlan,
+                                                                                 OptExpression rewrittenRoot,
+                                                                                 List<ColumnRefOperator> rowIdColumns) {
+        List<ColumnRefOperator> outputColumns = new ArrayList<>(logicalPlan.getOutputColumn());
+        Set<Integer> outputColumnIds = outputColumns.stream()
+                .map(ColumnRefOperator::getId)
+                .collect(Collectors.toSet());
+        List<ColumnRefOperator> extraRowIdColumns = rowIdColumns.stream()
+                .filter(columnRef -> outputColumnIds.add(columnRef.getId()))
+                .toList();
+        if (rewrittenRoot == logicalPlan.getRoot() && extraRowIdColumns.isEmpty()) {
+            return Optional.empty();
+        }
+        outputColumns.addAll(extraRowIdColumns);
+        String rewrittenSql = buildAliasedOlapIvmRewriteSql(context, originQueryStatement,
+                new LogicalPlan2SQLBuilder().toSQL(rewrittenRoot, outputColumns), extraRowIdColumns);
+        StatementBase statement = SqlParser.parseSingleStatement(rewrittenSql, context.getSessionVariable().getSqlMode());
+        if (!(statement instanceof QueryStatement rewrittenQueryStatement)) {
+            throw new SemanticException("Failed to rebuild query statement for OLAP IVM");
+        }
+        return Optional.of(rewrittenQueryStatement);
+    }
+
+    private static String buildAliasedOlapIvmRewriteSql(ConnectContext context, QueryStatement originQueryStatement,
+                                                        String rewrittenSql,
+                                                        List<ColumnRefOperator> extraRowIdColumns) {
+        StatementBase statement = SqlParser.parseSingleStatement(rewrittenSql, context.getSessionVariable().getSqlMode());
+        if (!(statement instanceof QueryStatement rewrittenQueryStatement)) {
+            throw new SemanticException("Failed to rebuild query statement for OLAP IVM");
+        }
+        Analyzer.analyze(rewrittenQueryStatement, context);
+
+        List<String> sourceColumnNames = rewrittenQueryStatement.getQueryRelation().getColumnOutputNames();
+        List<String> targetColumnNames = new ArrayList<>(originQueryStatement.getQueryRelation().getColumnOutputNames());
+        targetColumnNames.addAll(extraRowIdColumns.stream().map(ColumnRefOperator::getName).toList());
+        Preconditions.checkState(sourceColumnNames.size() == targetColumnNames.size(),
+                "OLAP IVM rewrite output columns mismatch");
+        if (sourceColumnNames.equals(targetColumnNames)) {
+            return rewrittenSql;
+        }
+
+        String relationAlias = "ivm_rewrite_0";
+        String selectSql = IntStream.range(0, targetColumnNames.size())
+                .mapToObj(i -> ParseUtil.backquote(relationAlias) + "." + ParseUtil.backquote(sourceColumnNames.get(i))
+                        + " AS " + ParseUtil.backquote(targetColumnNames.get(i)))
+                .collect(Collectors.joining(", "));
+        return "SELECT " + selectSql + " FROM (" + rewrittenSql + ") " + ParseUtil.backquote(relationAlias);
+    }
+
+    private static boolean hasOnlyOlapBaseTables(QueryStatement queryStatement) {
+        Map<TableName, Table> tableNameTableMap = AnalyzerUtils.collectAllConnectorTableAndView(queryStatement);
+        for (Table table : tableNameTableMap.values()) {
+            if (table == null || table.isView()) {
+                continue;
+            }
+            if (!(table instanceof OlapTable)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public static Set<BaseTableInfo> getBaseTableInfos(QueryStatement queryStatement, boolean withCheck) {
@@ -370,24 +473,54 @@ public class MaterializedViewAnalyzer {
                     statement.getQueryStopIndex()));
 
             MaterializedView.RefreshMode refreshMode = IVMAnalyzer.getRefreshMode(statement);
+            Optional<List<String>> olapIvmPkColumns = Optional.empty();
             if (refreshMode.isIncrementalOrAuto()) {
-                IVMAnalyzer ivmAnalyzer = new IVMAnalyzer(context, statement, statement.getQueryStatement());
-                Optional<IVMAnalyzer.IVMAnalyzeResult> ivmAnalyzeResult = ivmAnalyzer.rewrite(refreshMode);
-                if (ivmAnalyzeResult.isPresent()) {
-                    IVMAnalyzer.IVMAnalyzeResult result = ivmAnalyzeResult.get();
-                    queryStatement = result.queryStatement();
-                    // re-analyze again
-                    Analyzer.analyze(queryStatement, context);
-                    statement.setIvmViewDef(AstToSQLBuilder.buildSimple(queryStatement));
-                    statement.setQueryStatement(queryStatement);
-                    // use primary key as default keys type for ivm
-                    if (result.needRetractableSink()) {
+                if (hasOnlyOlapBaseTables(queryStatement)) {
+                    OlapIvmAnalyzeResult olapIvmAnalyzeResult = analyzeOlapIvmRewrite(context, queryStatement);
+                    Optional<String> unsupportedReason = olapIvmAnalyzeResult.unsupportedReason();
+                    if (unsupportedReason.isPresent()) {
+                        if (refreshMode.isIncremental()) {
+                            throw new SemanticException("Failed to rewrite the query for IVM: %s",
+                                    unsupportedReason.get());
+                        } else {
+                            statement.setCurrentRefreshMode(MaterializedView.RefreshMode.PCT);
+                        }
+                    } else {
+                        statement.setCurrentRefreshMode(refreshMode);
                         statement.setKeysType(KeysType.PRIMARY_KEYS);
+                        olapIvmPkColumns = olapIvmAnalyzeResult.rowIdColumnNames();
+                        if (olapIvmPkColumns.isEmpty() || olapIvmPkColumns.get().isEmpty()) {
+                            throw new SemanticException("Failed to derive row-id column for OLAP IVM");
+                        }
+                        if (olapIvmAnalyzeResult.rewrittenQueryStatement().isPresent()) {
+                            queryStatement = olapIvmAnalyzeResult.rewrittenQueryStatement().get();
+                            Analyzer.analyze(queryStatement, context);
+                            statement.setQueryStatement(queryStatement);
+                        }
+                        if (rewriteOlapIvmRetractableAggColumns(queryStatement)) {
+                            Analyzer.analyze(queryStatement, context);
+                        }
+                        statement.setIvmViewDef(AstToSQLBuilder.buildSimple(queryStatement));
                     }
-                    statement.setCurrentRefreshMode(result.currentRefreshMode());
                 } else {
-                    // if not ivm, set query statement directly
-                    statement.setCurrentRefreshMode(MaterializedView.RefreshMode.PCT);
+                    IVMAnalyzer ivmAnalyzer = new IVMAnalyzer(context, statement, statement.getQueryStatement());
+                    Optional<IVMAnalyzer.IVMAnalyzeResult> ivmAnalyzeResult = ivmAnalyzer.rewrite(refreshMode);
+                    if (ivmAnalyzeResult.isPresent()) {
+                        IVMAnalyzer.IVMAnalyzeResult result = ivmAnalyzeResult.get();
+                        queryStatement = result.queryStatement();
+                        // re-analyze again
+                        Analyzer.analyze(queryStatement, context);
+                        statement.setIvmViewDef(AstToSQLBuilder.buildSimple(queryStatement));
+                        statement.setQueryStatement(queryStatement);
+                        // use primary key as default keys type for ivm
+                        if (result.needRetractableSink()) {
+                            statement.setKeysType(KeysType.PRIMARY_KEYS);
+                        }
+                        statement.setCurrentRefreshMode(result.currentRefreshMode());
+                    } else {
+                        // if not ivm, set query statement directly
+                        statement.setCurrentRefreshMode(MaterializedView.RefreshMode.PCT);
+                    }
                 }
             } else {
                 statement.setCurrentRefreshMode(refreshMode);
@@ -415,6 +548,9 @@ public class MaterializedViewAnalyzer {
 
             // set the sort keys into createMaterializedViewStatement
             List<String> sortKeys = genMaterializedViewSortKeys(statement);
+            if (olapIvmPkColumns.isPresent() && statement.getCurrentRefreshMode().isIncrementalOrAuto()) {
+                sortKeys = Lists.newArrayList(olapIvmPkColumns.get());
+            }
             statement.setSortKeys(sortKeys);
 
             // set the columns into createMaterializedViewStatement
@@ -423,6 +559,7 @@ public class MaterializedViewAnalyzer {
             List<Pair<Column, Integer>> mvColumnPairs = genMaterializedViewColumns(statement.getKeysType(),
                     queryStatement, colWithComments, keyCols);
             List<Column> mvColumns = mvColumnPairs.stream().map(pair -> pair.first).collect(Collectors.toList());
+            appendOlapIvmRetractableColumnsIfNeeded(statement, queryStatement, mvColumns);
             statement.setMvColumnItems(mvColumns);
 
             List<Integer> queryOutputIndices = getQueryOutputIndices(mvColumnPairs);
@@ -660,6 +797,9 @@ public class MaterializedViewAnalyzer {
                 if (colName.startsWith(TvrOpUtils.COLUMN_AGG_STATE_PREFIX)) {
                     column.setIsHidden(true);
                 }
+                if (IvmRuleUtils.isIvmRetractHiddenColumn(colName)) {
+                    column.setIsHidden(true);
+                }
                 if (colWithComments != null) {
                     column.setComment(colWithComments.get(i).getComment());
                 }
@@ -718,6 +858,261 @@ public class MaterializedViewAnalyzer {
                 }
             }
             return reorderedColumns;
+        }
+
+        private void appendOlapIvmRetractableColumnsIfNeeded(CreateMaterializedViewStatement statement,
+                                                             QueryStatement queryStatement,
+                                                             List<Column> mvColumns) {
+            if (!statement.getCurrentRefreshMode().isIncrementalOrAuto()) {
+                return;
+            }
+            if (statement.getKeysType() != KeysType.PRIMARY_KEYS || !hasOnlyOlapBaseTables(queryStatement)) {
+                return;
+            }
+            if (!(queryStatement.getQueryRelation() instanceof SelectRelation selectRelation)) {
+                return;
+            }
+            List<FunctionCallExpr> aggregateExprs = selectRelation.getAggregate();
+            if (CollectionUtils.isEmpty(aggregateExprs)) {
+                return;
+            }
+            List<Column> helperColumns = Lists.newArrayList();
+            Set<String> existingColumnNames = mvColumns.stream()
+                    .map(Column::getName)
+                    .map(String::toLowerCase)
+                    .collect(Collectors.toSet());
+            List<Field> relationFields = queryStatement.getQueryRelation().getScope().getRelationFields().getAllFields();
+            for (int i = 0; i < mvColumns.size() && i < relationFields.size(); i++) {
+                Column mvColumn = mvColumns.get(i);
+                Expr originExpr = relationFields.get(i).getOriginExpression();
+                if (!(originExpr instanceof FunctionCallExpr aggFn)) {
+                    continue;
+                }
+                if (aggFn.isDistinct()) {
+                    return;
+                }
+                String fnName = aggFn.getFunctionName().toLowerCase();
+                if (FunctionSet.COUNT.equals(fnName)) {
+                    if (!isCountStarOrOne(aggFn)) {
+                        if (!isCountColumn(aggFn)) {
+                            return;
+                        }
+                        addHelperColumnIfAbsent(helperColumns, existingColumnNames,
+                                IvmRuleUtils.count1StateColumnName(mvColumn.getName()),
+                                IntegerType.BIGINT, false);
+                    }
+                    continue;
+                }
+                if (FunctionSet.SUM.equals(fnName)) {
+                    if (!isNumericSlotRefArg(aggFn)) {
+                        return;
+                    }
+                    addHelperColumnIfAbsent(helperColumns, existingColumnNames,
+                            IvmRuleUtils.count1StateColumnName(mvColumn.getName()),
+                            IntegerType.BIGINT, false);
+                    continue;
+                }
+                if (FunctionSet.AVG.equals(fnName)) {
+                    if (!isNumericSlotRefArg(aggFn)) {
+                        return;
+                    }
+                    addHelperColumnIfAbsent(helperColumns, existingColumnNames,
+                            IvmRuleUtils.count1StateColumnName(mvColumn.getName()),
+                            IntegerType.BIGINT, false);
+                    addHelperColumnIfAbsent(helperColumns, existingColumnNames,
+                            IvmRuleUtils.sumStateColumnName(mvColumn.getName()),
+                            mvColumn.getType(), true);
+                    addHelperColumnIfAbsent(helperColumns, existingColumnNames,
+                            IvmRuleUtils.countStateColumnName(mvColumn.getName()),
+                            IntegerType.BIGINT, false);
+                    continue;
+                }
+                return;
+            }
+            mvColumns.addAll(helperColumns);
+        }
+
+        private boolean rewriteOlapIvmRetractableAggColumns(QueryStatement queryStatement) {
+            if (!(queryStatement.getQueryRelation() instanceof SelectRelation selectRelation)) {
+                return false;
+            }
+            if (CollectionUtils.isEmpty(selectRelation.getAggregate())) {
+                return false;
+            }
+            List<Field> relationFields = queryStatement.getQueryRelation().getScope().getRelationFields().getAllFields();
+            if (CollectionUtils.isEmpty(relationFields)) {
+                return false;
+            }
+            List<Expr> currentOutputExprs = selectRelation.getOutputExpression();
+            if (currentOutputExprs == null) {
+                return false;
+            }
+
+            Set<String> existingAliases = relationFields.stream()
+                    .map(Field::getName)
+                    .filter(name -> name != null)
+                    .map(String::toLowerCase)
+                    .collect(Collectors.toSet());
+            List<SelectListItem> helperItems = Lists.newArrayList();
+            List<Expr> helperOutputExprs = Lists.newArrayList();
+            List<FunctionCallExpr> helperAggExprs = Lists.newArrayList();
+            List<Expr> groupByExprs = selectRelation.getGroupBy();
+            if (CollectionUtils.isNotEmpty(groupByExprs)) {
+                for (int i = 0; i < groupByExprs.size(); i++) {
+                    Expr groupByExpr = groupByExprs.get(i);
+                    if (containsExpressionBySql(currentOutputExprs, groupByExpr)
+                            || containsExpressionBySql(helperOutputExprs, groupByExpr)) {
+                        continue;
+                    }
+                    String alias = IvmRuleUtils.groupingKeyStateColumnName(i);
+                    if (existingAliases.contains(alias.toLowerCase())) {
+                        continue;
+                    }
+                    helperItems.add(new SelectListItem(groupByExpr.clone(), alias));
+                    helperOutputExprs.add(groupByExpr.clone());
+                    existingAliases.add(alias.toLowerCase());
+                }
+            }
+
+            for (Field field : relationFields) {
+                Expr originExpr = field.getOriginExpression();
+                if (!(originExpr instanceof FunctionCallExpr aggFn)) {
+                    continue;
+                }
+                if (aggFn.isDistinct()) {
+                    return false;
+                }
+                String fnName = aggFn.getFunctionName().toLowerCase();
+                String outputColumnName = field.getName();
+                if (FunctionSet.COUNT.equals(fnName)) {
+                    if (!isCountStarOrOne(aggFn) && !isCountColumn(aggFn)) {
+                        return false;
+                    }
+                    if (isCountColumn(aggFn)) {
+                        FunctionCallExpr count1Helper = new FunctionCallExpr(
+                                FunctionSet.COUNT, Lists.newArrayList(new IntLiteral(1)));
+                        appendHelperAggregate(helperItems, helperOutputExprs, helperAggExprs, existingAliases,
+                                count1Helper, IvmRuleUtils.count1StateColumnName(outputColumnName));
+                    }
+                    continue;
+                }
+                if (FunctionSet.SUM.equals(fnName)) {
+                    if (!isNumericSlotRefArg(aggFn)) {
+                        return false;
+                    }
+                    FunctionCallExpr count1Helper = new FunctionCallExpr(
+                            FunctionSet.COUNT, Lists.newArrayList(new IntLiteral(1)));
+                    appendHelperAggregate(helperItems, helperOutputExprs, helperAggExprs, existingAliases,
+                            count1Helper, IvmRuleUtils.count1StateColumnName(outputColumnName));
+                    continue;
+                }
+                if (FunctionSet.AVG.equals(fnName)) {
+                    if (!isNumericSlotRefArg(aggFn)) {
+                        return false;
+                    }
+                    Expr argExpr = aggFn.getChild(0).clone();
+                    FunctionCallExpr count1Helper = new FunctionCallExpr(
+                            FunctionSet.COUNT, Lists.newArrayList(new IntLiteral(1)));
+                    FunctionCallExpr sumHelper = new FunctionCallExpr(
+                            FunctionSet.SUM, Lists.newArrayList(argExpr.clone()));
+                    FunctionCallExpr countHelper = new FunctionCallExpr(
+                            FunctionSet.COUNT, Lists.newArrayList(argExpr.clone()));
+                    appendHelperAggregate(helperItems, helperOutputExprs, helperAggExprs, existingAliases,
+                            count1Helper, IvmRuleUtils.count1StateColumnName(outputColumnName));
+                    appendHelperAggregate(helperItems, helperOutputExprs, helperAggExprs, existingAliases,
+                            sumHelper, IvmRuleUtils.sumStateColumnName(outputColumnName));
+                    appendHelperAggregate(helperItems, helperOutputExprs, helperAggExprs, existingAliases,
+                            countHelper, IvmRuleUtils.countStateColumnName(outputColumnName));
+                    continue;
+                }
+                return false;
+            }
+
+            if (helperItems.isEmpty()) {
+                return false;
+            }
+            selectRelation.getSelectList().getItems().addAll(helperItems);
+            List<Expr> newOutputExprs = Lists.newArrayList(selectRelation.getOutputExpression());
+            newOutputExprs.addAll(helperOutputExprs);
+            selectRelation.setOutputExpr(newOutputExprs);
+            List<FunctionCallExpr> newAggExprs = Lists.newArrayList(selectRelation.getAggregate());
+            newAggExprs.addAll(helperAggExprs);
+            selectRelation.setAggregate(newAggExprs);
+            return true;
+        }
+
+        private void appendHelperAggregate(List<SelectListItem> helperItems,
+                                           List<Expr> helperOutputExprs,
+                                           List<FunctionCallExpr> helperAggExprs,
+                                           Set<String> existingAliases,
+                                           FunctionCallExpr helperExpr,
+                                           String alias) {
+            if (alias == null) {
+                return;
+            }
+            String lowerAlias = alias.toLowerCase();
+            if (existingAliases.contains(lowerAlias)) {
+                return;
+            }
+            helperItems.add(new SelectListItem(helperExpr, alias));
+            helperOutputExprs.add(helperExpr.clone());
+            helperAggExprs.add(helperExpr);
+            existingAliases.add(lowerAlias);
+        }
+
+        private boolean containsExpressionBySql(List<Expr> expressions, Expr target) {
+            if (expressions == null || target == null) {
+                return false;
+            }
+            String targetSql = ExprToSql.toSql(target);
+            for (Expr expression : expressions) {
+                if (expression == null) {
+                    continue;
+                }
+                if (targetSql.equalsIgnoreCase(ExprToSql.toSql(expression))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void addHelperColumnIfAbsent(List<Column> helperColumns, Set<String> existingColumnNames,
+                                             String columnName, Type type, boolean nullable) {
+            String lowerName = columnName.toLowerCase();
+            if (existingColumnNames.contains(lowerName)) {
+                return;
+            }
+            Column column = new Column(columnName, type, nullable);
+            column.setIsHidden(true);
+            column.setAggregationType(AggregateType.REPLACE, true);
+            helperColumns.add(column);
+            existingColumnNames.add(lowerName);
+        }
+
+        private boolean isCountStarOrOne(FunctionCallExpr fn) {
+            if (fn.getChildren().isEmpty()) {
+                return true;
+            }
+            if (fn.getChildren().size() != 1) {
+                return false;
+            }
+            Expr child = fn.getChild(0);
+            if (!(child instanceof IntLiteral literal)) {
+                return false;
+            }
+            return literal.getLongValue() == 1L;
+        }
+
+        private boolean isCountColumn(FunctionCallExpr fn) {
+            return isSingleSlotRefArg(fn);
+        }
+
+        private boolean isSingleSlotRefArg(FunctionCallExpr fn) {
+            return fn.getChildren().size() == 1 && fn.getChild(0) instanceof SlotRef;
+        }
+
+        private boolean isNumericSlotRefArg(FunctionCallExpr fn) {
+            return isSingleSlotRefArg(fn) && fn.getChild(0).getType() != null && fn.getChild(0).getType().isNumericType();
         }
 
         private List<Index> genMaterializedViewIndexes(CreateMaterializedViewStatement statement) {
@@ -1592,7 +1987,7 @@ public class MaterializedViewAnalyzer {
                 }
             } else {
                 // If the key type is primary key, the distribution must be hash distribution.
-                if  (KeysType.PRIMARY_KEYS.equals(statement.getKeysType())) {
+                if (KeysType.PRIMARY_KEYS.equals(statement.getKeysType())) {
                     distributionDesc = checkDistributionForPrimaryKey(statement);
                 } else {
                     // for non primary key tables, if user not specify distribution, we use hash distribution
@@ -1634,7 +2029,7 @@ public class MaterializedViewAnalyzer {
                 numBuckets = distributionDesc.getBuckets();
                 if (distributionDesc instanceof RandomDistributionDesc) {
                     LOG.warn("Check distribution for primary key mv, ignore random distribution, " +
-                            "use hash distribution with key columns: {}",
+                                    "use hash distribution with key columns: {}",
                             Joiner.on(",").join(keyColNames));
                 } else if (distributionDesc instanceof HashDistributionDesc) {
                     HashDistributionDesc hashDistributionDesc = (HashDistributionDesc) distributionDesc;

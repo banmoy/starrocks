@@ -142,6 +142,8 @@ struct TInternalScanRange {
   // skip local disk data cache when access page data
   15: optional bool skip_disk_cache = false;
   16: optional i64 gtid
+  17: optional i64 changes_from
+  18: optional i64 changes_to
 }
 
 enum TFileFormatType {
@@ -1338,6 +1340,7 @@ const string BINLOG_OP_COLUMN_NAME = "_binlog_op";
 const string BINLOG_VERSION_COLUMN_NAME = "_binlog_version";
 const string BINLOG_SEQ_ID_COLUMN_NAME = "_binlog_seq_id";
 const string BINLOG_TIMESTAMP_COLUMN_NAME = "_binlog_timestamp";
+const string CHANGE_ACTION_COLUMN_NAME = "__ACTION__";
 
 struct TBinlogScanNode {
   1: optional Types.TTupleId tuple_id

@@ -477,7 +477,8 @@ enum TTabletMetaType {
     BASE_COMPACTION_FORBIDDEN_TIME_RANGES,
     FLAT_JSON_CONFIG,
     ENABLE_FILE_BUNDLING,
-    COMPACTION_STRATEGY
+    COMPACTION_STRATEGY,
+    BASE_VERSION
 }
 
 struct TTabletMetaInfo {
@@ -496,6 +497,7 @@ struct TTabletMetaInfo {
     12: optional TFlatJsonConfig flat_json_config;
     13: optional bool bundle_tablet_metadata;
     14: optional TCompactionStrategy compaction_strategy;
+    15: optional i64 base_version;
 }
 
 struct TUpdateTabletMetaInfoReq {
@@ -605,4 +607,3 @@ struct TDeleteEtlFilesRequest {
     3: required string db_name
     4: required string label
 }
-

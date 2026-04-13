@@ -198,12 +198,16 @@ public class FullVacuumDaemon extends FrontendDaemon implements Writable {
 
         long graceTimestamp = startTime / MILLISECONDS_PER_SECOND - Config.lake_fullvacuum_meta_expired_seconds;
         graceTimestamp = Math.min(graceTimestamp,
-                                  Math.max(clusterSnapshotMgr.getSafeDeletionTimeMs() / MILLISECONDS_PER_SECOND, 1));
+                Math.max(clusterSnapshotMgr.getSafeDeletionTimeMs() / MILLISECONDS_PER_SECOND, 1));
         vacuumFullRequest.setGraceTimestamp(graceTimestamp);
 
         List<Long> retainVersions = new ArrayList<>();
         retainVersions.addAll(clusterSnapshotMgr.getVacuumRetainVersions(
-                              db.getId(), table.getId(), partition.getParentId(), partition.getId()));
+                db.getId(), table.getId(), partition.getParentId(), partition.getId()));
+        long baseVersion = table.getBaseVersion();
+        if (baseVersion > 0 && !retainVersions.contains(baseVersion)) {
+            retainVersions.add(baseVersion);
+        }
         if (!retainVersions.contains(visibleVersion)) {
             retainVersions.add(visibleVersion); // current visibleVersion should be retained 
         }
@@ -221,7 +225,6 @@ public class FullVacuumDaemon extends FrontendDaemon implements Writable {
                 "Sending full vacuum request to cn={}: table={}, partition={}, max_check_version={}, " + "min_active_txn_id={}",
                 chosenNode.getHost(), table.getName(), vacuumFullRequest.getPartitionId(), vacuumFullRequest.maxCheckVersion,
                 vacuumFullRequest.minActiveTxnId);
-
 
         boolean hasError = false;
         long vacuumedFiles = 0;
@@ -243,8 +246,8 @@ public class FullVacuumDaemon extends FrontendDaemon implements Writable {
                 if (response.status.statusCode != 0) {
                     hasError = true;
                     LOG.warn("Vacuumed {}.{}.{} with error: {}", db.getFullName(), table.getName(), partition.getId(),
-                             response.status.errorMsgs != null && !response.status.errorMsgs.isEmpty() ?
-                             response.status.errorMsgs.get(0) : "");
+                            response.status.errorMsgs != null && !response.status.errorMsgs.isEmpty() ?
+                                    response.status.errorMsgs.get(0) : "");
                 } else {
                     vacuumedFiles += response.vacuumedFiles;
                     vacuumedFileSize += response.vacuumedFileSize;

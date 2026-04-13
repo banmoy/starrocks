@@ -209,6 +209,7 @@ import com.starrocks.sql.ast.ShowTransactionStmt;
 import com.starrocks.sql.ast.ShowUserPropertyStmt;
 import com.starrocks.sql.ast.ShowUserStmt;
 import com.starrocks.sql.ast.ShowVariablesStmt;
+import com.starrocks.sql.ast.ShowVersionsStmt;
 import com.starrocks.sql.ast.StatementBase;
 import com.starrocks.sql.ast.StopRoutineLoadStmt;
 import com.starrocks.sql.ast.SubmitTaskStmt;
@@ -2134,6 +2135,11 @@ public class AuthorizerStmtVisitor implements AstVisitorExtendInterface<Void, Co
     @Override
     public Void visitShowTabletStatement(ShowTabletStmt statement, ConnectContext context) {
         // Privilege is checked in execution logic, see `ShowExecutor#handleShowTablet()` for details.
+        return null;
+    }
+
+    @Override
+    public Void visitShowVersionsStatement(ShowVersionsStmt statement, ConnectContext context) {
         return null;
     }
 

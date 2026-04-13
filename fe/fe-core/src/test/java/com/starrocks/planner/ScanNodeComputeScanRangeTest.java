@@ -18,6 +18,7 @@ import com.google.common.collect.Maps;
 import com.staros.client.StarClient;
 import com.staros.client.StarClientException;
 import com.staros.proto.ShardInfo;
+import com.starrocks.catalog.Column;
 import com.starrocks.catalog.MaterializedIndex;
 import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.Partition;
@@ -61,7 +62,9 @@ public class ScanNodeComputeScanRangeTest {
         starRocksAssert = new StarRocksAssert(connectContext);
         starRocksAssert.withDatabase("test").useDatabase("test")
                 .withTable("CREATE TABLE test.t1(k1 int, k2 int, k3 int)" +
-                        " distributed by hash(k1) buckets 10 properties('replication_num' = '1');");
+                        " distributed by hash(k1) buckets 10 properties('replication_num' = '1');")
+                .withTable("CREATE TABLE test.t_pk_changes(k1 int, k2 int, k3 int) PRIMARY KEY(k1)" +
+                        " DISTRIBUTED BY HASH(k1) BUCKETS 10 properties('replication_num' = '1');");
     }
 
     @Test
@@ -123,5 +126,38 @@ public class ScanNodeComputeScanRangeTest {
                 GlobalStateMgr.getCurrentState().getWarehouseMgr().getBackgroundComputeResource();
         Assertions.assertDoesNotThrow(() -> metaScanNode.computeRangeLocations(computeResource));
         Assertions.assertEquals(1, invokeCounter.get());
+    }
+
+    @Test
+    public void testPrimaryKeyChangesCanReadValueColumns() {
+        TupleDescriptor desc = new TupleDescriptor(new TupleId(0));
+        Table table = GlobalStateMgr.getCurrentState().getLocalMetastore().getTable("test", "t_pk_changes");
+        Assertions.assertNotNull(table);
+        Assertions.assertInstanceOf(OlapTable.class, table);
+        desc.setTable(table);
+
+        OlapTable olapTable = (OlapTable) table;
+        Column valueColumn = olapTable.getColumn("k2");
+        Assertions.assertNotNull(valueColumn);
+        SlotDescriptor valueSlot = new SlotDescriptor(new SlotId(1), desc);
+        valueSlot.setColumn(valueColumn);
+        valueSlot.setIsMaterialized(true);
+        desc.addSlot(valueSlot);
+
+        OlapScanNode scanNode =
+                new OlapScanNode(new PlanNodeId(1), desc, "OlapScanNode", olapTable.getBaseIndexMetaId());
+        long partitionId = olapTable.getAllPartitionIds().get(0);
+        Partition partition = olapTable.getPartition(partitionId);
+        PhysicalPartition physicalPartition = partition.getDefaultPhysicalPartition();
+        MaterializedIndex selectedIndex = physicalPartition.getLatestIndex(olapTable.getBaseIndexMetaId());
+
+        long fromVersion = olapTable.getBaseVersion();
+        long toVersion = physicalPartition.getVisibleVersion();
+        Assertions.assertTrue(toVersion > fromVersion,
+                "PK table should have a valid CHANGES range: visible version must be greater than base version");
+        scanNode.setChangesVersionRange(fromVersion, toVersion);
+
+        Assertions.assertDoesNotThrow(() -> scanNode.addScanRangeLocations(partition, physicalPartition, selectedIndex,
+                selectedIndex.getTablets(), -1));
     }
 }

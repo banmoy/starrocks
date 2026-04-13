@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 package com.starrocks.sql.optimizer.rule.implementation;
 
 import com.google.common.collect.Lists;
@@ -54,6 +53,7 @@ public class TopNImplementationRule extends ImplementationRule {
         if (logicalTopN.isTopNPushDownAgg()) {
             physicalTopN.setTopNPushDownAgg();
         }
+        physicalTopN.setShuffleColumns(logicalTopN.getShuffleColumns());
         return Lists.newArrayList(OptExpression.create(physicalTopN, input.getInputs()));
     }
 }

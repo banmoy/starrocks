@@ -29,6 +29,7 @@ import com.starrocks.sql.ast.AddPartitionClause;
 import com.starrocks.sql.ast.CreateViewStmt;
 import com.starrocks.sql.ast.ListPartitionDesc;
 import com.starrocks.sql.ast.PartitionDesc;
+import com.starrocks.sql.ast.QueryStatement;
 import com.starrocks.sql.ast.StatementBase;
 import com.starrocks.sql.parser.SqlParser;
 import com.starrocks.utframe.UtFrameUtils;
@@ -100,6 +101,13 @@ public class AnalyzeUtilTest {
         stringDatabaseMap = AnalyzerUtils.collectAllDatabase(AnalyzeTestUtil.getConnectContext(), statementBase.get(0));
         Assertions.assertEquals(stringDatabaseMap.size(), 1);
         Assertions.assertEquals("[test]", stringDatabaseMap.keySet().toString());
+    }
+
+    @Test
+    public void testSubqueryPreservesFieldNullability() {
+        QueryStatement statement = (QueryStatement) analyzeSuccess("select * from (select pk from tprimary) t");
+        Field field = statement.getQueryRelation().getScope().getRelationFields().getFieldByIndex(0);
+        Assertions.assertFalse(field.isNullable());
     }
 
     @Test

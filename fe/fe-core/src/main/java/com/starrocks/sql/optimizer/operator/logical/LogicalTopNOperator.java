@@ -44,6 +44,7 @@ import java.util.Objects;
 
 public class LogicalTopNOperator extends LogicalOperator {
     private List<ColumnRefOperator> partitionByColumns;
+    private List<ColumnRefOperator> shuffleColumns;
     private long partitionLimit;
     private List<Ordering> orderByElements;
     private long offset;
@@ -79,18 +80,25 @@ public class LogicalTopNOperator extends LogicalOperator {
         this(limit, null, null, null, DEFAULT_LIMIT, orderByElements, offset, sortPhase, TopNType.ROW_NUMBER, false);
     }
 
+    public LogicalTopNOperator(List<Ordering> orderByElements, long limit, long offset,
+                               SortPhase sortPhase, boolean perPipeline) {
+        this(orderByElements, limit, offset, sortPhase);
+        this.perPipeline = perPipeline;
+    }
+
     private LogicalTopNOperator() {
         super(OperatorType.LOGICAL_TOPN);
     }
 
     public LogicalTopNOperator(long limit,
-                                ScalarOperator predicate, Projection projection,
-                                List<ColumnRefOperator> partitionByColumns,
-                                long partitionLimit,
-                                List<Ordering> orderByElements, long offset,
-                                SortPhase sortPhase, TopNType topNType, boolean isSplit) {
+                               ScalarOperator predicate, Projection projection,
+                               List<ColumnRefOperator> partitionByColumns,
+                               long partitionLimit,
+                               List<Ordering> orderByElements, long offset,
+                               SortPhase sortPhase, TopNType topNType, boolean isSplit) {
         super(OperatorType.LOGICAL_TOPN, limit, predicate, projection);
         this.partitionByColumns = partitionByColumns;
+        this.shuffleColumns = null;
         this.partitionLimit = partitionLimit;
         this.orderByElements = orderByElements;
         this.offset = offset;
@@ -136,6 +144,10 @@ public class LogicalTopNOperator extends LogicalOperator {
 
     public List<ColumnRefOperator> getPartitionByColumns() {
         return partitionByColumns;
+    }
+
+    public List<ColumnRefOperator> getShuffleColumns() {
+        return shuffleColumns;
     }
 
     public long getPartitionLimit() {
@@ -234,6 +246,7 @@ public class LogicalTopNOperator extends LogicalOperator {
         LogicalTopNOperator that = (LogicalTopNOperator) o;
         return partitionLimit == that.partitionLimit && offset == that.offset && isSplit == that.isSplit &&
                 Objects.equals(partitionByColumns, that.partitionByColumns) &&
+                Objects.equals(shuffleColumns, that.shuffleColumns) &&
                 Objects.equals(orderByElements, that.orderByElements) &&
                 sortPhase == that.sortPhase && topNType == that.topNType && perPipeline == that.perPipeline &&
                 Objects.equals(partitionPreAggCall, that.partitionPreAggCall);
@@ -241,7 +254,8 @@ public class LogicalTopNOperator extends LogicalOperator {
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), orderByElements, offset, sortPhase, topNType, isSplit, perPipeline,
+        return Objects.hash(super.hashCode(), partitionByColumns, shuffleColumns,
+                orderByElements, offset, sortPhase, topNType, isSplit, perPipeline,
                 partitionPreAggCall);
     }
 
@@ -267,6 +281,7 @@ public class LogicalTopNOperator extends LogicalOperator {
             builder.isSplit = topNOperator.isSplit;
             builder.partitionLimit = topNOperator.partitionLimit;
             builder.partitionByColumns = topNOperator.partitionByColumns;
+            builder.shuffleColumns = topNOperator.shuffleColumns;
             builder.perPipeline = topNOperator.perPipeline;
             builder.partitionPreAggCall = topNOperator.partitionPreAggCall;
             return this;
@@ -274,6 +289,11 @@ public class LogicalTopNOperator extends LogicalOperator {
 
         public LogicalTopNOperator.Builder setPartitionByColumns(List<ColumnRefOperator> partitionByColumns) {
             builder.partitionByColumns = partitionByColumns;
+            return this;
+        }
+
+        public LogicalTopNOperator.Builder setShuffleColumns(List<ColumnRefOperator> shuffleColumns) {
+            builder.shuffleColumns = shuffleColumns;
             return this;
         }
 

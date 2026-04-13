@@ -92,6 +92,8 @@ public class AnalyzeInsertTest {
 
         analyzeSuccess("insert into t0 with label l1 select * from t0");
         analyzeSuccess("insert into t0 with label `l1` select * from t0");
+        analyzeSuccess("insert into tprimary(pk, v1, v2, v4, v3, __op) values (1, 'a', 2, 3, [4], 0)");
+        analyzeFail("insert into t0(v1, __op) values (1, 0)", "Unknown column '__op' in 't0'");
 
         analyzeSuccess("insert into tmc values (1,2)");
         analyzeSuccess("insert into tmc (id,name) values (1,2)");

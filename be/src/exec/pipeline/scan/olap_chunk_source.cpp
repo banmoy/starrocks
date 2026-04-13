@@ -17,12 +17,15 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "cache/data_cache_hit_rate_counter.hpp"
 #include "column/column.h"
 #include "column/column_access_path.h"
+#include "column/column_helper.h"
 #include "column/field.h"
 #include "common/status.h"
 #include "common/statusor.h"
@@ -35,6 +38,7 @@
 #include "gen_cpp/Metrics_types.h"
 #include "gen_cpp/RuntimeProfile_types.h"
 #include "gutil/map_util.h"
+#include "gutil/strings/substitute.h"
 #include "io/io_profiler.h"
 #include "runtime/current_thread.h"
 #include "runtime/descriptors.h"
@@ -45,8 +49,10 @@
 #include "storage/metadata_util.h"
 #include "storage/predicate_parser.h"
 #include "storage/projection_iterator.h"
+#include "storage/rowset/rowid_range_option.h"
 #include "storage/runtime_range_pruner.hpp"
 #include "storage/storage_engine.h"
+#include "storage/update_manager.h"
 #include "types/logical_type.h"
 #include "util/json.h"
 #include "util/runtime_profile.h"
@@ -54,6 +60,12 @@
 #include "util/table_metrics.h"
 
 namespace starrocks::pipeline {
+
+namespace {
+constexpr const char* kChangesActionColumnName = "__ACTION__";
+constexpr int8_t kChangesActionValue = 1;
+constexpr int8_t kChangesDeleteActionValue = -1;
+} // namespace
 
 OlapChunkSource::OlapChunkSource(ScanOperator* op, RuntimeProfile* runtime_profile, MorselPtr&& morsel,
                                  OlapScanNode* scan_node, OlapScanContext* scan_ctx)
@@ -319,6 +331,9 @@ Status OlapChunkSource::_init_reader_params(const std::vector<std::unique_ptr<Ol
     }
     for (auto& slot : *_slots) {
         if (conjuncts_slot_ids.contains(slot->id())) {
+            if (_is_changes_query && slot->col_name() == kChangesActionColumnName) {
+                continue;
+            }
             int32_t fid = _tablet_schema->field_index(slot->col_name());
             _unused_output_column_ids.erase(fid);
         }
@@ -351,6 +366,17 @@ Status OlapChunkSource::_init_scanner_columns(std::vector<uint32_t>& scanner_col
                                               std::vector<uint32_t>& reader_columns) {
     for (auto slot : *_slots) {
         DCHECK(slot->is_materialized());
+        if (_is_changes_query && slot->col_name() == kChangesActionColumnName) {
+            _changes_action_slot = slot;
+            _query_slots.push_back(slot);
+            if (_changes_action_field == nullptr) {
+                _changes_action_field =
+                        std::make_shared<Field>(std::numeric_limits<ColumnId>::max(), kChangesActionColumnName,
+                                                LogicalType::TYPE_TINYINT, true);
+            }
+            continue;
+        }
+
         int32_t index;
         if (_use_vector_index && !_use_ivfpq && slot->id() == _vector_slot_id) {
             index = _tablet_schema->num_columns();
@@ -374,7 +400,7 @@ Status OlapChunkSource::_init_scanner_columns(std::vector<uint32_t>& scanner_col
     // Put key columns before non-key columns, as the `MergeIterator` and `AggregateIterator`
     // required.
     std::sort(scanner_columns.begin(), scanner_columns.end());
-    if (scanner_columns.empty()) {
+    if (scanner_columns.empty() && _changes_action_slot == nullptr) {
         return Status::InternalError("failed to build storage scanner, no materialized slot!");
     }
 
@@ -398,8 +424,132 @@ Status OlapChunkSource::_init_scanner_columns(std::vector<uint32_t>& scanner_col
     return Status::OK();
 }
 
+Status OlapChunkSource::_init_pk_changes_delete_rowid_range(const std::vector<RowsetSharedPtr>& rowsets) {
+    if (!_scan_range->__isset.changes_from || !_scan_range->__isset.changes_to) {
+        return Status::InvalidArgument("changes range is incomplete");
+    }
+    if (_scan_range->changes_from < 0 || _scan_range->changes_from >= _scan_range->changes_to) {
+        return Status::InvalidArgument("changes range must satisfy 0 <= v1 < v2");
+    }
+
+    _pk_changes_delete_rowid_range = std::make_shared<RowidRangeOption>();
+    auto* update_mgr = StorageEngine::instance()->update_manager();
+    auto* kv_store = _tablet->data_dir()->get_meta();
+
+    for (const auto& rowset : rowsets) {
+        if (rowset == nullptr || rowset->end_version() > _scan_range->changes_from) {
+            continue;
+        }
+        uint32_t rowset_seg_id = rowset->rowset_meta()->get_rowset_seg_id();
+        RETURN_IF_ERROR(rowset->load());
+        auto& rowset_segments = rowset->segments();
+        if (rowset_segments.size() < static_cast<size_t>(rowset->num_segments())) {
+            return Status::InternalError(
+                    strings::Substitute("rowset segments not loaded enough, tablet=$0 rowset=$1 loaded=$2 expected=$3",
+                                        _tablet->tablet_id(), rowset->rowset_id().to_string(), rowset_segments.size(),
+                                        rowset->num_segments()));
+        }
+        for (uint32_t seg_idx = 0; seg_idx < rowset->num_segments(); ++seg_idx) {
+            TabletSegmentId tsid{_tablet->tablet_id(), rowset_seg_id + seg_idx};
+            DelVectorPtr from_delvec;
+            DelVectorPtr to_delvec;
+            RETURN_IF_ERROR(update_mgr->get_del_vec(kv_store, tsid, _scan_range->changes_from, &from_delvec));
+            RETURN_IF_ERROR(update_mgr->get_del_vec(kv_store, tsid, _scan_range->changes_to, &to_delvec));
+
+            if (to_delvec == nullptr || to_delvec->empty()) {
+                continue;
+            }
+            if (from_delvec != nullptr && from_delvec->cardinality() == to_delvec->cardinality()) {
+                continue;
+            }
+
+            Roaring new_deletes = *to_delvec->roaring();
+            if (from_delvec != nullptr && !from_delvec->empty()) {
+                new_deletes -= *from_delvec->roaring();
+            }
+            if (new_deletes.isEmpty()) {
+                continue;
+            }
+
+            SparseRangePtr delete_rowid_range = std::make_shared<SparseRange<>>();
+            uint32_t range_start = 0;
+            uint32_t range_end = 0;
+            bool has_active_range = false;
+            for (auto it = new_deletes.begin(); it != new_deletes.end(); ++it) {
+                uint32_t rowid = *it;
+                if (!has_active_range) {
+                    range_start = rowid;
+                    range_end = rowid + 1;
+                    has_active_range = true;
+                } else if (rowid == range_end) {
+                    ++range_end;
+                } else {
+                    delete_rowid_range->add({range_start, range_end});
+                    range_start = rowid;
+                    range_end = rowid + 1;
+                }
+            }
+            if (has_active_range) {
+                delete_rowid_range->add({range_start, range_end});
+            }
+            _pk_changes_delete_rowid_range->add(rowset.get(), rowset_segments[seg_idx].get(),
+                                                std::move(delete_rowid_range), true);
+        }
+    }
+    return Status::OK();
+}
+
+Status OlapChunkSource::_init_pk_changes_reader(const Schema& child_schema, const Schema& output_schema,
+                                                const std::vector<RowsetSharedPtr>& rowsets,
+                                                const std::vector<RowsetSharedPtr>& insert_rowsets,
+                                                const std::vector<uint32_t>& reader_columns,
+                                                const std::vector<uint32_t>& scanner_columns) {
+    RETURN_IF_ERROR(_init_pk_changes_delete_rowid_range(rowsets));
+
+    Version insert_read_version(0, _version);
+    _reader =
+            std::make_shared<TabletReader>(_tablet, insert_read_version, child_schema, insert_rowsets, &_tablet_schema);
+    _reader->set_use_gtid(_morsel->get_olap_scan_range()->__isset.gtid);
+    if (reader_columns.size() == scanner_columns.size()) {
+        _prj_iter = _reader;
+    } else {
+        _prj_iter = new_projection_iterator(output_schema, _reader);
+    }
+    _reader->set_is_asc_hint(_scan_op->is_asc());
+    RETURN_IF_ERROR(_reader->prepare());
+    RETURN_IF_ERROR(_reader->open(_params));
+
+    _is_pk_changes_delete_phase = false;
+    _pk_changes_delete_reader_eof = true;
+    _pk_changes_delete_reader.reset();
+    _pk_changes_delete_prj_iter.reset();
+    if (!_pk_changes_delete_rowid_range->rowid_range_per_segment_per_rowset.empty()) {
+        TabletReaderParams delete_params = _params;
+        delete_params.rowid_range_option = _pk_changes_delete_rowid_range;
+        Version delete_read_version(0, _scan_range->changes_from);
+        _pk_changes_delete_reader =
+                std::make_shared<TabletReader>(_tablet, delete_read_version, child_schema, rowsets, &_tablet_schema);
+        _pk_changes_delete_reader->set_use_gtid(_morsel->get_olap_scan_range()->__isset.gtid);
+        if (reader_columns.size() == scanner_columns.size()) {
+            _pk_changes_delete_prj_iter = _pk_changes_delete_reader;
+        } else {
+            _pk_changes_delete_prj_iter = new_projection_iterator(output_schema, _pk_changes_delete_reader);
+        }
+        _pk_changes_delete_reader->set_is_asc_hint(_scan_op->is_asc());
+        RETURN_IF_ERROR(_pk_changes_delete_reader->prepare());
+        RETURN_IF_ERROR(_pk_changes_delete_reader->open(delete_params));
+        _is_pk_changes_delete_phase = true;
+        _pk_changes_delete_reader_eof = false;
+    }
+
+    return Status::OK();
+}
+
 Status OlapChunkSource::_init_unused_output_columns(const std::vector<std::string>& unused_output_columns) {
     for (const auto& col_name : unused_output_columns) {
+        if (_is_changes_query && col_name == kChangesActionColumnName) {
+            continue;
+        }
         int32_t index = _tablet_schema->field_index(col_name);
         if (index < 0) {
             std::stringstream ss;
@@ -662,6 +812,7 @@ Status OlapChunkSource::_init_olap_reader(RuntimeState* runtime_state) {
     std::vector<uint32_t> reader_columns;
 
     RETURN_IF_ERROR(_get_tablet(_scan_range));
+    _is_changes_query = _scan_range->__isset.changes_from || _scan_range->__isset.changes_to;
     _table_metrics =
             StarRocksMetrics::instance()->table_metrics_mgr()->get_table_metrics(_tablet->tablet_meta()->table_id());
 
@@ -689,6 +840,7 @@ Status OlapChunkSource::_init_olap_reader(RuntimeState* runtime_state) {
             _tablet_schema = _tablet->tablet_schema();
         }
     }
+    _is_pk_changes_query = _is_changes_query && _tablet_schema->keys_type() == PRIMARY_KEYS;
 
     // Extend the tablet_schema with access path columns
     RETURN_IF_ERROR(_extend_schema_by_access_paths());
@@ -707,15 +859,37 @@ Status OlapChunkSource::_init_olap_reader(RuntimeState* runtime_state) {
     for (auto& rowset : _morsel->rowsets()) {
         rowsets.emplace_back(std::dynamic_pointer_cast<Rowset>(rowset));
     }
+    std::vector<RowsetSharedPtr> read_rowsets = rowsets;
+    if (_is_pk_changes_query && _scan_range->__isset.changes_from) {
+        read_rowsets.clear();
+        read_rowsets.reserve(rowsets.size());
+        for (const auto& rowset : rowsets) {
+            if (rowset != nullptr && rowset->end_version() > _scan_range->changes_from &&
+                rowset->start_version() <= _scan_range->changes_to) {
+                read_rowsets.emplace_back(rowset);
+            }
+        }
+    }
 
-    _reader = std::make_shared<TabletReader>(_tablet, Version(_morsel->from_version(), _version),
-                                             std::move(child_schema), std::move(rowsets), &_tablet_schema);
-    _reader->set_use_gtid(_morsel->get_olap_scan_range()->__isset.gtid);
-    if (reader_columns.size() == scanner_columns.size()) {
-        _prj_iter = _reader;
+    starrocks::Schema output_schema = ChunkHelper::convert_schema(_tablet_schema, scanner_columns);
+    if (_is_pk_changes_query) {
+        RETURN_IF_ERROR(_init_pk_changes_reader(child_schema, output_schema, rowsets, read_rowsets, reader_columns,
+                                                scanner_columns));
     } else {
-        starrocks::Schema output_schema = ChunkHelper::convert_schema(_tablet_schema, scanner_columns);
-        _prj_iter = new_projection_iterator(output_schema, _reader);
+        Version read_version(_morsel->from_version(), _version);
+        _reader = std::make_shared<TabletReader>(_tablet, read_version, std::move(child_schema),
+                                                 std::move(read_rowsets), &_tablet_schema);
+        _reader->set_use_gtid(_morsel->get_olap_scan_range()->__isset.gtid);
+        if (reader_columns.size() == scanner_columns.size()) {
+            _prj_iter = _reader;
+        } else {
+            _prj_iter = new_projection_iterator(output_schema, _reader);
+        }
+
+        _reader->set_is_asc_hint(_scan_op->is_asc());
+
+        RETURN_IF_ERROR(_reader->prepare());
+        RETURN_IF_ERROR(_reader->open(_params));
     }
 
     if (!_scan_ctx->not_push_down_conjuncts().empty() || !_non_pushdown_pred_tree.empty()) {
@@ -737,11 +911,6 @@ Status OlapChunkSource::_init_olap_reader(RuntimeState* runtime_state) {
     DCHECK(_params.global_dictmaps != nullptr);
     RETURN_IF_ERROR(_prj_iter->init_encoded_schema(*_params.global_dictmaps));
     RETURN_IF_ERROR(_prj_iter->init_output_schema(*_params.unused_output_column_ids));
-    _reader->set_is_asc_hint(_scan_op->is_asc());
-
-    RETURN_IF_ERROR(_reader->prepare());
-    RETURN_IF_ERROR(_reader->open(_params));
-
     return Status::OK();
 }
 
@@ -762,6 +931,9 @@ Status OlapChunkSource::_init_global_dicts(TabletReaderParams* params) {
     const TupleDescriptor* tuple_desc = _runtime_state->desc_tbl().get_tuple_descriptor(thrift_olap_scan_node.tuple_id);
     for (auto slot : tuple_desc->slots()) {
         if (!slot->is_materialized()) {
+            continue;
+        }
+        if (_is_changes_query && slot->col_name() == kChangesActionColumnName) {
             continue;
         }
         auto iter = global_dict_map.find(slot->id());
@@ -789,11 +961,42 @@ Status OlapChunkSource::_read_chunk_from_storage(RuntimeState* state, Chunk* chu
 
     do {
         RETURN_IF_ERROR(state->check_mem_limit("read chunk from storage"));
-        Status status = _prj_iter->get_next(chunk);
+        Status status;
+        if (_is_pk_changes_query) {
+            if (!_pk_changes_delete_reader_eof && _pk_changes_delete_prj_iter != nullptr) {
+                _is_pk_changes_delete_phase = true;
+                status = _pk_changes_delete_prj_iter->get_next(chunk);
+                if (status.is_end_of_file()) {
+                    _pk_changes_delete_reader_eof = true;
+                    _is_pk_changes_delete_phase = false;
+                    continue;
+                }
+            } else {
+                _is_pk_changes_delete_phase = false;
+                status = _prj_iter->get_next(chunk);
+            }
+        } else {
+            status = _prj_iter->get_next(chunk);
+        }
         // update counter when eof or error
         if (UNLIKELY(!status.ok())) {
             _update_realtime_counter(chunk);
             return status;
+        }
+        if (_is_changes_query && _changes_action_slot != nullptr) {
+            int8_t action_value = (_is_pk_changes_query && _is_pk_changes_delete_phase) ? kChangesDeleteActionValue
+                                                                                        : kChangesActionValue;
+            auto action_column = Int8Column::create();
+            if (chunk->num_rows() > 0) {
+                std::vector<int8_t> action_values(chunk->num_rows(), action_value);
+                action_column->append_numbers(action_values.data(), action_values.size() * sizeof(int8_t));
+            }
+            if (chunk->schema()->get_field_by_name(kChangesActionColumnName) == nullptr) {
+                chunk->append_column(std::move(action_column), _changes_action_field);
+            } else {
+                size_t action_index = chunk->schema()->get_field_index_by_name(kChangesActionColumnName);
+                chunk->update_column_by_index(std::move(action_column), action_index);
+            }
         }
 
         TRY_CATCH_ALLOC_SCOPE_START()
@@ -820,6 +1023,7 @@ Status OlapChunkSource::_read_chunk_from_storage(RuntimeState* state, Chunk* chu
             COUNTER_UPDATE(_expr_filter_counter, before_rows - after_rows);
             DCHECK_CHUNK(chunk);
         }
+
         TRY_CATCH_ALLOC_SCOPE_END()
 
     } while (chunk->num_rows() == 0);
@@ -832,7 +1036,11 @@ Status OlapChunkSource::_read_chunk_from_storage(RuntimeState* state, Chunk* chu
 }
 
 void OlapChunkSource::_update_realtime_counter(Chunk* chunk) {
-    auto& stats = _reader->stats();
+    const auto* reader_for_stats = _reader.get();
+    if (_is_pk_changes_query && _is_pk_changes_delete_phase && _pk_changes_delete_reader != nullptr) {
+        reader_for_stats = _pk_changes_delete_reader.get();
+    }
+    auto& stats = reader_for_stats->stats();
     size_t num_rows = chunk->num_rows();
     _num_rows_read += num_rows;
     _scan_rows_num = stats.raw_rows_read;

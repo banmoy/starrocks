@@ -1826,6 +1826,15 @@ ADMIN SET FRONTEND CONFIG ("key" = "value");
 - 描述：导入触发的统计信息采集操作中用于决定抽样采集和全量采集的行数阈值。如果加载或更改的行数超过此阈值（默认 200,000 行），则使用抽样统计信息采集；否则使用全量统计信息采集。此设置与 `enable_statistic_collect_on_first_load` 和 `statistic_sample_collect_ratio_threshold_of_first_load` 配合使用。
 - 引入版本：-
 
+##### statistic_max_changes_rows_estimate_value
+
+- 默认值：9223372036854775807
+- 类型：Long
+- 单位：-
+- 是否动态：是
+- 描述：用于限制 `CHANGES` 查询估算输出行数上限的固定值。StarRocks 会先根据基础表行数和版本跨度估算 `CHANGES` scan 的行数，再将估算结果限制在 `statistic_max_changes_rows_estimate_value` 以内。您可以调小该值以避免 `CHANGES` 基数估算过大。取值范围：大于等于 `0`。该参数修改后立即生效，无需重启 FE。
+- 引入版本：-
+
 ##### statistic_update_interval_sec
 
 - 默认值：24 * 60 * 60

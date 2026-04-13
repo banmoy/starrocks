@@ -966,7 +966,7 @@ public class SchemaChangeHandler extends AlterHandler {
     }
 
     protected void processModifyColumnComment(ModifyColumnCommentClause alterClause, Database db, OlapTable olapTable,
-                                        Map<Long, LinkedList<Column>> indexMetaIdToSchema) throws DdlException {
+                                              Map<Long, LinkedList<Column>> indexMetaIdToSchema) throws DdlException {
         String modifyColumnName = alterClause.getColumnName();
         String comment = alterClause.getComment();
         if (comment == null) {
@@ -986,7 +986,6 @@ public class SchemaChangeHandler extends AlterHandler {
             });
         }
     }
-
 
     // Because modifying the sort key columns and reordering table schema use the same syntax(Alter table xxx ORDER BY(...))
     // And reordering table schema need to provide all columns, so we use the number of columns in the alterClause to determine
@@ -1099,7 +1098,7 @@ public class SchemaChangeHandler extends AlterHandler {
 
     /**
      * @param olapTable
-     * @param newColumn      Add 'newColumn' to specified index.
+     * @param newColumn           Add 'newColumn' to specified index.
      * @param columnPos
      * @param targetIndexMetaId
      * @param baseIndexMetaId
@@ -1683,7 +1682,8 @@ public class SchemaChangeHandler extends AlterHandler {
     }
 
     private void calculateShortKey(OlapTable olapTable, long alterIndexMetaId, List<Column> alterSchema,
-               Map<String, String> indexProperties, SchemaChangeData.Builder dataBuilder) throws DdlException {
+                                   Map<String, String> indexProperties, SchemaChangeData.Builder dataBuilder)
+            throws DdlException {
         List<Integer> sortKeyIdxes = new ArrayList<>();
         List<Integer> sortKeyUniqueIds = new ArrayList<>();
         MaterializedIndexMeta index = olapTable.getIndexMetaByMetaId(alterIndexMetaId);
@@ -1732,7 +1732,7 @@ public class SchemaChangeHandler extends AlterHandler {
         } else {
             short newShortKeyCount = GlobalStateMgr.calcShortKeyColumnCount(alterSchema, indexProperties);
             LOG.debug("alter index[{}] short key column count: {}", alterIndexMetaId, newShortKeyCount);
-            
+
             List<Column> originShortKeyColumns = new ArrayList<>();
             for (int i = 0; i < index.getShortKeyColumnCount(); i++) {
                 originShortKeyColumns.add(originSchema.get(i));
@@ -2221,7 +2221,7 @@ public class SchemaChangeHandler extends AlterHandler {
                 }
             } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FILE_BUNDLING)) {
                 enableFileBundling = PropertyAnalyzer.analyzeBooleanProp(properties,
-                            PropertyAnalyzer.PROPERTIES_FILE_BUNDLING, false);
+                        PropertyAnalyzer.PROPERTIES_FILE_BUNDLING, false);
                 if (enableFileBundling == olapTable.isFileBundling()) {
                     LOG.info(String.format("table: %s file_bundling is %s, nothing need to do",
                             olapTable.getName(), enableFileBundling));
@@ -2381,6 +2381,16 @@ public class SchemaChangeHandler extends AlterHandler {
             if (primaryIndexCacheExpireSec == olapTable.primaryIndexCacheExpireSec()) {
                 return;
             }
+        } else if (metaType == TTabletMetaType.BASE_VERSION) {
+            long baseVersion;
+            try {
+                baseVersion = PropertyAnalyzer.analyzeBaseVersion(properties, false);
+            } catch (AnalysisException e) {
+                throw new DdlException(e.getMessage());
+            }
+            if (baseVersion == olapTable.getBaseVersion()) {
+                return;
+            }
         } else {
             LOG.warn("meta type: {} does not support", metaType);
             return;
@@ -2389,6 +2399,16 @@ public class SchemaChangeHandler extends AlterHandler {
         if (metaType == TTabletMetaType.INMEMORY || metaType == TTabletMetaType.ENABLE_PERSISTENT_INDEX) {
             for (Partition partition : partitions) {
                 updatePartitionTabletMeta(db, olapTable.getName(), partition.getName(), metaValue, metaType);
+            }
+        } else if (metaType == TTabletMetaType.BASE_VERSION) {
+            long baseVersion;
+            try {
+                baseVersion = PropertyAnalyzer.analyzeBaseVersion(properties, false);
+            } catch (AnalysisException e) {
+                throw new DdlException(e.getMessage());
+            }
+            if (!olapTable.isCloudNativeTableOrMaterializedView()) {
+                updateTableBaseVersionMeta(db, olapTable, baseVersion);
             }
         }
 
@@ -2399,6 +2419,79 @@ public class SchemaChangeHandler extends AlterHandler {
             locker.unLockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.WRITE);
         }
     }
+
+    private void updateTableBaseVersionMeta(Database db, OlapTable olapTable, long baseVersion) throws DdlException {
+        Map<Long, Set<Long>> beIdToTabletSet = Maps.newHashMap();
+
+        Locker locker = new Locker();
+        locker.lockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.READ);
+        try {
+            for (Partition partition : olapTable.getPartitions()) {
+                for (PhysicalPartition physicalPartition : partition.getSubPartitions()) {
+                    for (MaterializedIndex index : physicalPartition.getLatestMaterializedIndices(IndexExtState.VISIBLE)) {
+                        for (Tablet tablet : index.getTablets()) {
+                            for (Replica replica : ((LocalTablet) tablet).getImmutableReplicas()) {
+                                Set<Long> tabletSet =
+                                        beIdToTabletSet.computeIfAbsent(replica.getBackendId(), k -> Sets.newHashSet());
+                                tabletSet.add(tablet.getId());
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            locker.unLockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.READ);
+        }
+
+        int totalTaskNum = beIdToTabletSet.keySet().size();
+        MarkedCountDownLatch<Long, Set<Long>> countDownLatch = new MarkedCountDownLatch<>(totalTaskNum);
+        AgentBatchTask batchTask = new AgentBatchTask();
+        for (Map.Entry<Long, Set<Long>> kv : beIdToTabletSet.entrySet()) {
+            countDownLatch.addMark(kv.getKey(), kv.getValue());
+            long backendId = kv.getKey();
+            Set<Long> tablets = kv.getValue();
+            TabletMetadataUpdateAgentTask task = TabletMetadataUpdateAgentTaskFactory
+                    .createBaseVersionUpdateTask(backendId, tablets, baseVersion);
+            Preconditions.checkState(task != null, "task is null");
+            task.setLatch(countDownLatch);
+            batchTask.addTask(task);
+        }
+        if (!FeConstants.runningUnitTest) {
+            AgentTaskQueue.addBatchTask(batchTask);
+            AgentTaskExecutor.submit(batchTask);
+            LOG.info("send update tablet base_version meta task for table {}, number: {}",
+                    olapTable.getName(), batchTask.getTaskNum());
+
+            long timeout = Config.tablet_create_timeout_second * 1000L * totalTaskNum;
+            timeout = Math.min(timeout, Config.max_create_table_timeout_second * 1000L);
+            boolean ok = false;
+            try {
+                ok = countDownLatch.await(timeout, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                LOG.warn("InterruptedException: ", e);
+            }
+
+            if (!ok || !countDownLatch.getStatus().ok()) {
+                String errMsg = "Failed to update table[" + olapTable.getName() + "] base_version tablet meta.";
+                AgentTaskQueue.removeBatchTask(batchTask, TTaskType.UPDATE_TABLET_META_INFO);
+
+                if (!countDownLatch.getStatus().ok()) {
+                    errMsg += " Error: " + countDownLatch.getStatus().getErrorMsg();
+                } else {
+                    List<Map.Entry<Long, Set<Long>>> unfinishedMarks = countDownLatch.getLeftMarks();
+                    List<Map.Entry<Long, Set<Long>>> subList =
+                            unfinishedMarks.subList(0, Math.min(unfinishedMarks.size(), 3));
+                    if (!subList.isEmpty()) {
+                        errMsg += " Unfinished mark: " + Joiner.on(", ").join(subList);
+                    }
+                }
+                errMsg += ". This operation maybe partial successfully, You should retry until success.";
+                LOG.warn(errMsg);
+                throw new DdlException(errMsg);
+            }
+        }
+    }
+
 
     public boolean updateFlatJsonConfigMeta(Database db, Long tableId, Map<String, String> properties,
                                             TTabletMetaType metaType) {
@@ -2430,14 +2523,14 @@ public class SchemaChangeHandler extends AlterHandler {
                 hasChanged = true;
             }
         }
-        
+
         // Check if other flat JSON properties are set when flat_json.enable is false
         if (!flatJsonEnabled && (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_SPARSITY_FACTOR) ||
                 properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_COLUMN_MAX))) {
             throw new RuntimeException("flat JSON configuration must be set after enabling flat JSON.");
         }
-        
+
         if (properties.containsKey(PropertyAnalyzer.PROPERTIES_FLAT_JSON_NULL_FACTOR)) {
             double flatJsonNullFactor = PropertyAnalyzer.analyzeFlatJsonNullFactor(properties);
             if (flatJsonNullFactor != newFlatJsonConfig.getFlatJsonNullFactor()) {
@@ -2893,7 +2986,7 @@ public class SchemaChangeHandler extends AlterHandler {
         // Only assign meaningful indexId for OlapTable
         if (olapTable.isOlapTableOrMaterializedView() ||
                 (olapTable.isCloudNativeTableOrMaterializedView() && indexDef.getIndexType() != IndexDef.IndexType.VECTOR)) {
-            long indexId = IndexDef.IndexType.isCompatibleIndex(indexDef.getIndexType()) ? 
+            long indexId = IndexDef.IndexType.isCompatibleIndex(indexDef.getIndexType()) ?
                     olapTable.incAndGetMaxIndexId() : -1;
             newIndex = new Index(indexId, indexDef.getIndexName(),
                     MetaUtils.getColumnIdsByColumnNames(olapTable, indexDef.getColumns()),
@@ -3004,9 +3097,9 @@ public class SchemaChangeHandler extends AlterHandler {
     //          {c1: int, c2: int, c3: Struct<v1 int, v2 int, v3 int>}
     //       c. modify column `c1` from INT to BIGINT (when fast schema evolution v2 is enabled in shared-data mode)
     public void applyFastSchemaEvolutionMetaChange(Database db, OlapTable olapTable,
-                                     Map<Long, List<Column>> indexMetaIdToSchema,
-                                     List<Index> indexes, long jobId,
-                                     Map<Long, Long> indexMetaIdToNewSchemaId, boolean isReplay, long replayedTxnId)
+                                                   Map<Long, List<Column>> indexMetaIdToSchema,
+                                                   List<Index> indexes, long jobId,
+                                                   Map<Long, Long> indexMetaIdToNewSchemaId, boolean isReplay, long replayedTxnId)
             throws DdlException, NotImplementedException {
         Locker locker = new Locker();
         locker.lockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.WRITE);
@@ -3138,7 +3231,7 @@ public class SchemaChangeHandler extends AlterHandler {
      * Updates catalog only for fast schema evolution without creating an async job.
      * This is used in shared-nothing mode or shared-data mode with fast schema evolution v2 enabled,
      * where the schema change can be completed immediately by only updating FE metadata.
-     * 
+     *
      * @param schemaChangeData the schema change data containing the new schema information
      */
     private void updateCatalogForFastSchemaEvolution(SchemaChangeData schemaChangeData)
@@ -3219,11 +3312,11 @@ public class SchemaChangeHandler extends AlterHandler {
      * it creates a new {@link LakeTableAsyncFastSchemaChangeJob} to synchronize the tablet metadata
      * with the latest schema.
      *
-     * @param db The database containing the table.
-     * @param olapTable The table to be altered.
+     * @param db         The database containing the table.
+     * @param olapTable  The table to be altered.
      * @param properties The properties map from the ALTER TABLE statement.
      * @return An {@link Optional} containing the {@link AlterJobV2} if a job is created for disabling the feature,
-     *         otherwise an empty Optional.
+     * otherwise an empty Optional.
      * @throws DdlException if the property modification is invalid.
      */
     private Optional<AlterJobV2> processAlterCloudNativeFastSchemaEvolutionV2Property(
@@ -3252,14 +3345,14 @@ public class SchemaChangeHandler extends AlterHandler {
     }
 
     /**
-     * Creates an {@link LakeTableAsyncFastSchemaChangeJob} to disable the 'cloud_native_fast_schema_evolution_v2' 
+     * Creates an {@link LakeTableAsyncFastSchemaChangeJob} to disable the 'cloud_native_fast_schema_evolution_v2'
      * feature for a table.
      *
      * <p>When disabling this feature, it's necessary to ensure all tablet metadata is updated to the latest
      * schema version. This method creates a special {@link LakeTableAsyncFastSchemaChangeJob} that, instead of
      * performing a schema change, iterates through all tablets and updates their metadata.
      *
-     * @param db The database containing the table.
+     * @param db    The database containing the table.
      * @param table The table for which to disable the feature.
      * @return The created {@link AlterJobV2} to be executed.
      * @throws DdlException if there are no available compute nodes.
@@ -3277,7 +3370,7 @@ public class SchemaChangeHandler extends AlterHandler {
             job.setIndexTabletSchema(indexMetaId, indexName, schemaInfo);
         }
         ConnectContext connectContext = ConnectContext.get();
-        ComputeResource computeResource  = connectContext != null ?
+        ComputeResource computeResource = connectContext != null ?
                 connectContext.getCurrentComputeResource() : WarehouseManager.DEFAULT_RESOURCE;
         if (!GlobalStateMgr.getCurrentState().getWarehouseMgr().isResourceAvailable(computeResource)) {
             throw new DdlException("no available compute nodes:" + computeResource);
@@ -3290,15 +3383,15 @@ public class SchemaChangeHandler extends AlterHandler {
      * Retrieves a historical schema version for the specified table and schema ID.
      * <p>
      * Note: This method searches through all jobs to find a matching schema, which is acceptable when the
-     * number of jobs is not excessive. A future optimization could maintain a table ID to alter job mapping 
+     * number of jobs is not excessive. A future optimization could maintain a table ID to alter job mapping
      * for improved performance when dealing with many alter jobs.
      * </p>
      *
-     * @param dbId the database ID
-     * @param tableId the table ID
+     * @param dbId     the database ID
+     * @param tableId  the table ID
      * @param schemaId the schema ID to retrieve
      * @return an Optional containing the SchemaInfo if found, or empty if no matching
-     *         historical schema exists
+     * historical schema exists
      */
     public Optional<SchemaInfo> getHistorySchema(long dbId, long tableId, long schemaId) {
         for (AlterJobV2 alterJob : alterJobsV2.values()) {

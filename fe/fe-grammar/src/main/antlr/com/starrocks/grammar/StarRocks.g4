@@ -55,6 +55,7 @@ statement
     | recoverTableStatement
     | truncateTableStatement
     | showTableStatement
+    | showVersionsStatement
     | descTableStatement
     | showTableStatusStatement
     | showColumnStatement
@@ -588,6 +589,10 @@ showTableStatement
     : SHOW FULL? TABLES ((FROM | IN) db=qualifiedName)? ((LIKE pattern=string) | (WHERE expression))?
     ;
 
+showVersionsStatement
+    : SHOW VERSIONS FROM qualifiedName
+    ;
+
 showTemporaryTablesStatement
     : SHOW TEMPORARY TABLES ((FROM | IN) db=qualifiedName)? ((LIKE pattern=string) | (WHERE expression))?
     ;
@@ -1091,6 +1096,11 @@ swapTableClause
 
 modifyPropertiesClause
     : SET propertyList
+    | SET baseVersionClause
+    ;
+
+baseVersionClause
+    : identifier '=' INTEGER_VALUE
     ;
 
 modifyCommentClause
@@ -2375,6 +2385,14 @@ queryPeriod
     | FOR? periodType AS OF end=expression
     ;
 
+tableVersion
+    : VERSION '(' expression ')'
+    ;
+
+tableChanges
+    : CHANGES BETWEEN expression AND expression
+    ;
+
 periodType
     : SYSTEM_TIME
     | TIMESTAMP
@@ -2465,7 +2483,7 @@ relation
     ;
 
 relationPrimary
-    : qualifiedName queryPeriod? partitionNames? tabletList? replicaList? sampleClause? (
+    : qualifiedName queryPeriod? tableVersion? tableChanges? partitionNames? tabletList? replicaList? sampleClause? (
         AS? alias=identifier)? bracketHint? (BEFORE ts=string)?                          #tableAtom
     | '(' VALUES rowConstructor (',' rowConstructor)* ')'
         (AS? alias=identifier columnAliases?)?                                          #inlineTable

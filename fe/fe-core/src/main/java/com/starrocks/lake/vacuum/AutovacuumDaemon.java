@@ -128,8 +128,8 @@ public class AutovacuumDaemon extends FrontendDaemon {
             if (minRetainVersion <= 0) {
                 minRetainVersion = Math.max(1, partition.getVisibleVersion() - Config.lake_autovacuum_max_previous_versions);
             } else {
-                minRetainVersion = Math.min(minRetainVersion, 
-                                        partition.getVisibleVersion() - Config.lake_autovacuum_max_previous_versions);
+                minRetainVersion = Math.min(minRetainVersion,
+                        partition.getVisibleVersion() - Config.lake_autovacuum_max_previous_versions);
             }
             // the file before minRetainVersion vacuum success
             if (partition.getLastSuccVacuumVersion() >= minRetainVersion) {
@@ -253,7 +253,11 @@ public class AutovacuumDaemon extends FrontendDaemon {
             vacuumRequest.graceTimestamp = Math.min(vacuumRequest.graceTimestamp,
                     Math.max(clusterSnapshotMgr.getSafeDeletionTimeMs() / MILLISECONDS_PER_SECOND, 1));
             vacuumRequest.retainVersions = clusterSnapshotMgr.getVacuumRetainVersions(
-                                           db.getId(), table.getId(), partition.getParentId(), partition.getId());
+                    db.getId(), table.getId(), partition.getParentId(), partition.getId());
+            long baseVersion = table.getBaseVersion();
+            if (baseVersion > 0 && !vacuumRequest.retainVersions.contains(baseVersion)) {
+                vacuumRequest.retainVersions.add(baseVersion);
+            }
             vacuumRequest.minActiveTxnId = minActiveTxnId;
             vacuumRequest.partitionId = partition.getId();
             vacuumRequest.deleteTxnLog = needDeleteTxnLog;
@@ -335,7 +339,7 @@ public class AutovacuumDaemon extends FrontendDaemon {
         LOG.info("Vacuumed {}.{}.{} hasError={} vacuumedFiles={} vacuumedFileSize={} " +
                         "visibleVersion={} minRetainVersion={} minActiveTxnId={} vacuumVersion={} extraFileSize={} cost={}ms",
                 db.getFullName(), table.getName(), partition.getId(), hasError, vacuumedFiles, vacuumedFileSize,
-                visibleVersion, minRetainVersion, minActiveTxnId, vacuumedVersion, extraFileSize, 
+                visibleVersion, minRetainVersion, minActiveTxnId, vacuumedVersion, extraFileSize,
                 System.currentTimeMillis() - startTime);
     }
 

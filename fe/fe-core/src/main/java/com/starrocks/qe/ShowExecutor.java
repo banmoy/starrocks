@@ -226,6 +226,7 @@ import com.starrocks.sql.ast.ShowTransactionStmt;
 import com.starrocks.sql.ast.ShowUserPropertyStmt;
 import com.starrocks.sql.ast.ShowUserStmt;
 import com.starrocks.sql.ast.ShowVariablesStmt;
+import com.starrocks.sql.ast.ShowVersionsStmt;
 import com.starrocks.sql.ast.TableRef;
 import com.starrocks.sql.ast.UserRef;
 import com.starrocks.sql.ast.expression.BinaryPredicate;
@@ -1991,6 +1992,54 @@ public class ShowExecutor {
         }
 
         @Override
+        public ShowResultSet visitShowVersionsStatement(ShowVersionsStmt statement, ConnectContext context) {
+            List<List<String>> rows = Lists.newArrayList();
+            TableName tableName = statement.getTableName();
+            if (tableName == null) {
+                throw new SemanticException("Table name is null");
+            }
+
+            String dbName = tableName.getDb();
+            Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(dbName);
+            MetaUtils.checkDbNullAndReport(db, dbName);
+
+            Locker locker = new Locker();
+            locker.lockDatabase(db.getId(), LockType.READ);
+            try {
+                Table table = MetaUtils.getSessionAwareTable(context, db, tableName);
+                if (!(table instanceof OlapTable)) {
+                    throw new SemanticException("Only support OlapTable for SHOW VERSIONS");
+                }
+
+                Pair<Boolean, Boolean> privResult = Authorizer.checkPrivForShowTablet(context, db.getFullName(), table);
+                if (!privResult.first) {
+                    AccessDeniedException.reportAccessDenied(
+                            InternalCatalog.DEFAULT_INTERNAL_CATALOG_NAME,
+                            context.getCurrentUserIdentity(), context.getCurrentRoleIds(),
+                            PrivilegeType.ANY.name(), ObjectType.TABLE.name(), null);
+                }
+
+                OlapTable olapTable = (OlapTable) table;
+                long baseVersion = olapTable.getBaseVersion();
+                for (Partition partition : olapTable.getPartitions()) {
+                    for (PhysicalPartition physicalPartition : partition.getSubPartitions()) {
+                        rows.add(Lists.newArrayList(
+                                db.getFullName(),
+                                olapTable.getName(),
+                                partition.getName(),
+                                String.valueOf(physicalPartition.getId()),
+                                String.valueOf(physicalPartition.getVisibleVersion()),
+                                String.valueOf(baseVersion)));
+                    }
+                }
+            } finally {
+                locker.unLockDatabase(db.getId(), LockType.READ);
+            }
+
+            return new ShowResultSet(showResultMetaFactory.getMetadata(statement), rows);
+        }
+
+        @Override
         public ShowResultSet visitShowBackupStatement(ShowBackupStmt statement, ConnectContext context) {
             Database filterDb = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(statement.getDbName());
             List<List<String>> infos = Lists.newArrayList();
@@ -2283,7 +2332,7 @@ public class ShowExecutor {
                 if (dbName == null) {
                     dbName = context.getDatabase();
                 }
-                
+
                 PartitionRef partitionRef = statement.getPartitionRef();
                 PartitionNames partitionNames = null;
                 if (partitionRef != null) {
@@ -2292,7 +2341,7 @@ public class ShowExecutor {
                             partitionRef.getPartitionNames(),
                             partitionRef.getPos());
                 }
-                
+
                 results = MetadataViewer.getTabletDistribution(dbName, statement.getTblName(), partitionNames);
             } catch (DdlException e) {
                 throw new SemanticException(e.getMessage());
@@ -2665,19 +2714,18 @@ public class ShowExecutor {
             List<List<String>> rowSet = catalogMgr.getCatalogsInfo().stream()
                     .filter(rowMatch -> finalMatcher == null || finalMatcher.match(rowMatch.get(0)))
                     .filter(row -> {
-                                if (!InternalCatalog.DEFAULT_INTERNAL_CATALOG_NAME.equals(row.get(0))) {
+                        if (!InternalCatalog.DEFAULT_INTERNAL_CATALOG_NAME.equals(row.get(0))) {
 
-                                    try {
-                                        Authorizer.checkAnyActionOnCatalog(context, row.get(0));
-                                    } catch (AccessDeniedException e) {
-                                        return false;
-                                    }
+                            try {
+                                Authorizer.checkAnyActionOnCatalog(context, row.get(0));
+                            } catch (AccessDeniedException e) {
+                                return false;
+                            }
 
-                                    return true;
-                                }
-                                return true;
-                    }
-                    )
+                            return true;
+                        }
+                        return true;
+                    })
                     .sorted(Comparator.comparing(o -> o.get(0))).collect(Collectors.toList());
             return new ShowResultSet(showResultMetaFactory.getMetadata(statement), rowSet);
         }
@@ -2788,14 +2836,13 @@ public class ShowExecutor {
             storageVolumeNames = storageVolumeNames.stream()
                     .filter(storageVolumeName -> finalMatcher == null || finalMatcher.match(storageVolumeName))
                     .filter(storageVolumeName -> {
-                                try {
-                                    Authorizer.checkAnyActionOnStorageVolume(context, storageVolumeName);
-                                } catch (AccessDeniedException e) {
-                                    return false;
-                                }
-                                return true;
-                    }
-                    ).collect(Collectors.toList());
+                        try {
+                            Authorizer.checkAnyActionOnStorageVolume(context, storageVolumeName);
+                        } catch (AccessDeniedException e) {
+                            return false;
+                        }
+                        return true;
+                    }).collect(Collectors.toList());
             for (String storageVolumeName : storageVolumeNames) {
                 rows.add(Lists.newArrayList(storageVolumeName));
             }

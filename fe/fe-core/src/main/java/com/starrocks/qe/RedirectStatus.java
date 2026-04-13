@@ -225,6 +225,7 @@ import com.starrocks.sql.ast.ShowTriggersStmt;
 import com.starrocks.sql.ast.ShowUserPropertyStmt;
 import com.starrocks.sql.ast.ShowUserStmt;
 import com.starrocks.sql.ast.ShowVariablesStmt;
+import com.starrocks.sql.ast.ShowVersionsStmt;
 import com.starrocks.sql.ast.ShowWarningStmt;
 import com.starrocks.sql.ast.ShowWhiteListStmt;
 import com.starrocks.sql.ast.StatementBase;
@@ -502,6 +503,15 @@ public class RedirectStatus {
 
         @Override
         public RedirectStatus visitShowTabletStatement(ShowTabletStmt statement, Void context) {
+            if (ConnectContext.get().getSessionVariable().getForwardToLeader()) {
+                return RedirectStatus.FORWARD_NO_SYNC;
+            } else {
+                return RedirectStatus.NO_FORWARD;
+            }
+        }
+
+        @Override
+        public RedirectStatus visitShowVersionsStatement(ShowVersionsStmt statement, Void context) {
             if (ConnectContext.get().getSessionVariable().getForwardToLeader()) {
                 return RedirectStatus.FORWARD_NO_SYNC;
             } else {
